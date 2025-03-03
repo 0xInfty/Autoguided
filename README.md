@@ -7,18 +7,22 @@ Synthetic Curation as Implicit Distillation
 
 1. Create and activate a Python environment, using commands such as...
 
-    ```
+    ```bash
     conda create -n SCID python
     conda activate SCID
     ```
 
 2. Install all required packages using the installation script
     
-    ```yes | . install.sh```
+    ```bash
+    yes | . install.sh
+    ```
 
 3. Verify you have GPU support, by running...
 
-    ```python -c "import torch; print([torch.cuda.get_device_name(i) for i in range(torch.cuda.device_count())])"```
+    ```bash
+    python -c "import torch; print([torch.cuda.get_device_name(i) for i in range(torch.cuda.device_count())])"
+    ```
 
 ### Managing directories
 
