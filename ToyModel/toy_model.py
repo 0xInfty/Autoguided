@@ -1,9 +1,9 @@
-# Copyright (c) 2024, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-#
-# This work is licensed under a Creative Commons
+# This work was originally licensed under a Creative Commons
 # Attribution-NonCommercial-ShareAlike 4.0 International License.
-# You should have received a copy of the license along with this
-# work. If not, see http://creativecommons.org/licenses/by-nc-sa/4.0/
+# Original code can be found at: https://github.com/NVlabs/edm2/blob/main/toy_example.py 
+#
+# Original copyright disclaimer:
+# Copyright (c) 2024, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 
 """2D toy example from the paper "Guiding a Diffusion Model with a Bad Version of Itself"."""
 
