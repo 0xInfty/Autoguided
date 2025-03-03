@@ -18,8 +18,12 @@ import click
 import tqdm
 import dnnlib
 from torch_utils import persistence
+import pyvdirs.dirs as dirs
 
 warnings.filterwarnings('ignore', 'You are using `torch.load` with `weights_only=False`')
+
+PRETRAINED_HOME = os.path.join(dirs.DATA_HOME, "ToyExample")
+if not os.path.isdir(PRETRAINED_HOME): os.mkdir(PRETRAINED_HOME)
 
 #----------------------------------------------------------------------------
 # Multivariate mixture of Gaussians. Allows efficient evaluation of the
@@ -433,10 +437,10 @@ def plot(net, gnet, guidance, save, device=torch.device('cuda')):
     """Visualize sampling distributions with and without guidance."""
     print('Loading models...')
     if isinstance(net, str):
-        with dnnlib.util.open_url(net) as f:
+        with dnnlib.util.open_url(net, cache_dir=PRETRAINED_HOME) as f:
             net = pickle.load(f).to(device)
     if isinstance(gnet, str):
-        with dnnlib.util.open_url(gnet) as f:
+        with dnnlib.util.open_url(gnet, cache_dir=PRETRAINED_HOME) as f:
             gnet = pickle.load(f).to(device)
 
     # Initialize plot.
