@@ -1,6 +1,5 @@
-# This work was originally licensed under a Creative Commons
-# Attribution-NonCommercial-ShareAlike 4.0 International License.
-# Original code can be found at: https://github.com/NVlabs/edm2/blob/main/toy_example.py 
+# This is a commented copy from code found at "EDM2 and Autoguidance" by Tero Karras et al
+# https://github.com/NVlabs/edm2/blob/main/toy_example.py licensed under CC BY-NC-SA 4.0
 #
 # Original copyright disclaimer:
 # Copyright (c) 2024, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
