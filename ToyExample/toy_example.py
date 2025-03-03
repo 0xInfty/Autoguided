@@ -418,6 +418,7 @@ def cmdline():
 def train(outdir, cls, layers, dim, viz):
     """Train a 2D toy model with the given parameters."""
     if outdir is not None:
+        outdir = os.path.join(dirs.MODELS_HOME, outdir)
         print(f'Will save snapshots to {outdir}')
     pkl_pattern = f'{outdir}/iter%04d.pkl' if outdir is not None else None
     viz_iter = 32 if viz else None
@@ -480,7 +481,8 @@ def plot(net, gnet, guidance, save, device=torch.device('cuda')):
 
     # Save or display.
     if save is not None:
-        print(f'Saving to {save}')
+        print(f'Saving to {save} inside of results home folder')
+        save = os.path.join(dirs.RESULTS_HOME, save)
         if os.path.dirname(save):
             os.makedirs(os.path.dirname(save), exist_ok=True)
         plt.savefig(save, dpi=80)
