@@ -34,4 +34,4 @@ Part of the code was originally marked with the following disclaimer: "Copyright
 
 ### Acknowledgments
 
-We thank T. Karras et al for sharing their ["Guiding a diffusion model with a bad version of itself"](https://arxiv.org/abs/2406.02507) research and ["EDM2 and Autoguidance"](https://github.com/NVlabs/edm2/blob/main/toy_example.py) code, licensed under CC BY-NC-SA 4.0.
+We thank T. Karras et al for sharing their ["Guiding a diffusion model with a bad version of itself"](https://arxiv.org/abs/2406.02507) research and ["EDM2 and Autoguidance"](https://github.com/NVlabs/edm2) code, licensed under CC BY-NC-SA 4.0.
