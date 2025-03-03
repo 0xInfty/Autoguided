@@ -110,7 +110,7 @@ def gt(classes='A', device=torch.device('cpu'), seed=2, origin=np.array([0.0030,
 
         # Represent the current branch as a sequence of Gaussian components.
         for t in np.linspace(0.07, 0.93, num=8):
-            c = dnnlib.EasyDict()
+            c = dnnlib.util.EasyDict()
             c.cls = cls
             c.phi = dist * (0.5 ** depth)
             c.mu = (pos + dir * dist * t) * scale
