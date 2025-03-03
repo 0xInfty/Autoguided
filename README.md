@@ -4,17 +4,65 @@ Synthetic Curation as Implicit Distillation
 ## Getting Started
 
 ### Installation
-1. Create a Python environment, using a command such as...
 
-    ```conda create -n scid python```
+1. Create and activate a Python environment, using commands such as...
 
-2. Install PyTorch, using a command from the [official website](https://pytorch.org/get-started/locally/) such as...
+    ```
+    conda create -n SCID python
+    conda activate SCID
+    ```
+
+2. Install all required packages using the installation script
     
-    ```pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118```
+    ```yes | . install.sh```
 
 3. Verify you have GPU support, by running...
 
     ```python -c "import torch; print([torch.cuda.get_device_name(i) for i in range(torch.cuda.device_count())])"```
+
+### Managing directories
+
+PyVDirs can manage your directories in such a way that allows you to work from multiple PCs without modifying the code at all.
+
+For PyVDirs to work, you will need to create a new entry inside the `dirs.json` index. This can be done automatically, just by importing the module:
+
+```python
+import pyvdirs.dirs as dirs
+```
+
+The new entry should look like...
+
+```json
+ "your-PC-user-identifier": 
+    {"system_name": "UKN", 
+     "system_home": "path/to/code/FilteringNSD", 
+     "data_home": "path/to/code/FilteringNSD/data", 
+     "models_home": "path/to/code/FilteringNSD/models", 
+     "results_home": "path/to/code/FilteringNSD/results"}, 
+```
+
+Following this index...
+- Any datasets and pre-trained models will be stored inside `data_home`
+- Any training model checkpoints will be stored inside `models_home`
+- Any results will be stored inside `results_home`
+
+You can manually open the file and change the `system_name` attribute to create your own nickname, to know which one is your entry. You can also manually modify each of the other path variables.
+
+### Running the toy model
+
+This repository contains a working adaptation of the toy model from Karras et al's ["Guiding a diffusion model with a bad version of itself"](https://arxiv.org/abs/2406.02507).
+
+Pre-trained toy models can be automatically downloaded and tested running...
+
+```
+python ToyExample/toy_example.py plot
+```
+
+New toy models can be trained and visualized running...
+
+```
+python ToyExample/toy_example.py train
+```
 
 ## Additional information
 
