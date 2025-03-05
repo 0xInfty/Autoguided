@@ -273,6 +273,7 @@ def do_train(
     P_mean=-2.3, P_std=1.5, sigma_data=0.5, lr_ref=1e-2, lr_iter=512, ema_std=0.010,
     pkl_pattern=None, pkl_iter=256, viz_iter=32,
     device=torch.device('cuda'),
+    acid=False, acid_n=16, acid_f=0.8, acid_diff=True,
 ):
     import training.phema
     torch.manual_seed(seed)
@@ -301,18 +302,35 @@ def do_train(
             do_plot(ema, elems={'samples'}, device=device)
             plt.gcf().canvas.flush_events()
 
-        # Execute one training iteration.
+        # Run forward-pass
         opt.param_groups[0]['lr'] = lr_ref / np.sqrt(max(iter_idx / lr_iter, 1))
         opt.zero_grad()
         sigma = (torch.randn(batch_size, device=device) * P_std + P_mean).exp()
-        samples = gt(classes, device).sample(batch_size, sigma)
+        samples = gt(classes, device).sample(batch_size, sigma) #Q: Why do they redefine the Gaussian mixture distribution twice on each iteration?
         gt_scores = gt(classes, device).score(samples, sigma)
         net_scores = net.score(samples, sigma, graph=True)
-        loss = (sigma ** 2) * ((gt_scores - net_scores) ** 2).mean(-1)
+        if acid: ema_scores = ema.score(samples, sigma, graph=True)
+
+        # Calculate teacher and student loss
+        net_loss = (sigma ** 2) * ((gt_scores - net_scores) ** 2).mean(-1)
+        if acid: ema_loss = (sigma ** 2) * ((gt_scores - ema_scores) ** 2).mean(-1)
+
+        # Calculate overall loss
+        if acid:
+            indices = jointly_sample_batch(net_loss, ema_loss, 
+                                        n=acid_n, filter_ratio=acid_f,
+                                        learnability=acid_diff)
+            loss = net_loss[indices] # Use indices of the ACID mini-batch
+        else:
+            loss = net_loss
+
+        # Backpropagate either on the full batch or only on ACID mini-batch
         loss.mean().backward()
+
+        # Update learner parameters
         opt.step()
 
-        # Update EMA.
+        # Update reference EMA parameters
         beta = training.phema.power_function_beta(std=ema_std, t_next=iter_idx+1, t_delta=1)
         for p_net, p_ema in zip(net.parameters(), ema.parameters()):
             p_ema.lerp_(p_net.detach(), 1 - beta)
@@ -474,8 +492,12 @@ def cmdline():
 @click.option('--cls',      help='Target classes', metavar='A|B|AB',    type=str, default='A', show_default=True)
 @click.option('--layers',   help='Number of layers', metavar='INT',     type=int, default=4, show_default=True)
 @click.option('--dim',      help='Hidden dimension', metavar='INT',     type=int, default=64, show_default=True)
+@click.option('--acid',     help='Use ACID batch selection?', metavar='BOOL', type=bool, default=False, show_default=True)
+@click.option('--f',        help='ACID filter ratio', metavar='FLOAT',  type=float, default=0.8, show_default=True)
+@click.option('--n',        help='ACID chunk size', metavar='INT',      type=int, default=16, show_default=True)
+@click.option('--diff',     help='Use ACID learnability score?', metavar='BOOL', type=bool, default=True, show_default=True)
 @click.option('--viz',      help='Visualize progress?', metavar='BOOL', type=bool, default=True, show_default=True)
-def train(outdir, cls, layers, dim, viz):
+def train(outdir, cls, layers, dim, viz, acid, n, f, diff):
     """Train a 2D toy model with the given parameters."""
     if outdir is not None:
         outdir = os.path.join(dirs.MODELS_HOME, outdir)
@@ -483,7 +505,8 @@ def train(outdir, cls, layers, dim, viz):
     pkl_pattern = f'{outdir}/iter%04d.pkl' if outdir is not None else None
     viz_iter = 32 if viz else None
     print('Training...')
-    do_train(pkl_pattern=pkl_pattern, classes=cls, num_layers=layers, hidden_dim=dim, viz_iter=viz_iter)
+    do_train(pkl_pattern=pkl_pattern, classes=cls, num_layers=layers, hidden_dim=dim, viz_iter=viz_iter,
+            acid=acid, acid_n=n, acid_f=f, acid_diff=diff)
     print('Done.')
 
 #----------------------------------------------------------------------------
