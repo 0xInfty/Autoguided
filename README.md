@@ -68,6 +68,16 @@ New toy models can be trained and visualized running...
 python ToyExample/toy_example.py train
 ```
 
+### Training the toy model with ACID
+
+This repository now contains an implementation of ACID as described by Udandarao, Parthasarathy et al in ["Active Data Curation Effectively Distills Large-Scale Multimodal Models"](https://arxiv.org/pdf/2411.18674). The joint batch selection function has been adapted from Evans, Parthasarathy et al's ["Guiding a diffusion model with a bad version of itself"](https://arxiv.org/abs/2406.17711).
+
+A toy model can be trained using ACID batch selection running...
+
+```
+python ToyExample/toy_example.py train --acid
+```
+
 ## Additional information
 
 ### Authors
@@ -82,7 +92,11 @@ python ToyExample/toy_example.py train
 
 All material, including source code and pre-trained models, is licensed under the [Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International License](http://creativecommons.org/licenses/by-nc-sa/4.0/).
 
-Part of the code was originally marked with the following disclaimer: "Copyright (c) 2024, NVIDIA CORPORATION & AFFILIATES. All rights reserved". Those files have kept this disclaimer and a history of changes can be extracted using Git's version control tools.
+Code adapted from Karras' repository was originally under the same [CC BY-NC-SA 4.0](http://creativecommons.org/licenses/by-nc-sa/4.0/) license. That code was originally marked with the following copyright disclaimer: _"Copyright (c) 2024, NVIDIA CORPORATION & AFFILIATES. All rights reserved"_. The disclaimer has been kept in all those files.
+
+Another part of the code is an implementation described by Evans, Parthasarathy et al in a publication under [CC BY 4.0 license](https://creativecommons.org/licenses/by/4.0/).
+
+A history of changes for all code can be extracted using Git's version control tools.
 
 ### Acknowledgments
 
