@@ -220,7 +220,7 @@ def jointly_sample_batch(learner_loss, ref_loss, n=16, filter_ratio=0.8, learnab
     """
 	
     # Define size of super-batch
-    B = int(learner_loss.size) # Size B of a super-batch
+    B = int(learner_loss.numel()) # Size B of a super-batch
 
     # Each mini-batch of size b will be split in n chunks
     b_over_n = int(B * (1 - filter_ratio) / n) # Size b/n of each mini-batch chunk
@@ -229,11 +229,12 @@ def jointly_sample_batch(learner_loss, ref_loss, n=16, filter_ratio=0.8, learnab
     learner_loss = learner_loss.reshape((B,1))
     ref_loss = ref_loss.reshape((1,B))
     scores = learner_loss - ref_loss if learnability else - ref_loss  # Shape (B,B)
+    device = scores.get_device()
     # Rows use different learner loss ==> i is the learner/student's index
     # Columns use different reference loss ==> j is the reference/teacher's index
     
     # Extract basic score for each element of the super-batch
-    logits_ii = np.diag(scores) # Elements from the diagonal of the scores matrix
+    logits_ii = torch.diag(scores) # Elements from the diagonal of the scores matrix
     #Q: Is this associated to the probability of picking learner i and ref j?
     
     # Draw the first mini-batch chunk using a uniform probability distribution
@@ -241,14 +242,15 @@ def jointly_sample_batch(learner_loss, ref_loss, n=16, filter_ratio=0.8, learnab
 
     # Sample all the rest of the mini-batch chunks
     for _ in range(n - 1):
-        is_sampled = np.eye(B)[indices].sum(axis=0) # Binary mask of selected samples (B,)
+        # Get a binary mask that indicates which samples have been selected so far
+        is_sampled = torch.eye(B).to(device)[indices].sum(axis=0) # (B,)
         
         # Mask scores to only keep learner rows k that have already been sampled
-        logits_kj = (scores * is_sampled.reshape(B, 1)).sum(axis=0) # Sum over columns (B,)
+        logits_kj = (scores * is_sampled.view(B, 1)).sum(axis=0) # Sum over columns (B,)
         #Q: Associated to prob of picking learner i and an ref k that was already selected?
 
         # Mask scores to only keep ref columns k that have already been sampled
-        logits_ik = (scores * is_sampled.reshape(1, B)).sum(axis=1) # Sum over rows (B,)
+        logits_ik = (scores * is_sampled.view(1, B)).sum(axis=1) # Sum over rows (B,)
         #Q: Associated to prob of picking learner i and an ref k that was already selected?
         
         # Get conditional scores given past samples
@@ -257,8 +259,10 @@ def jointly_sample_batch(learner_loss, ref_loss, n=16, filter_ratio=0.8, learnab
         #Q: Why subtract that value, instead of setting all these to 0?
 
         # Sample new mini-batch chunk using the conditional probability distribution
-        new_indices = np.random.choice(np.arange(B), b_over_n, 
-                                       p=np.exp(logits), replace=False)
+        probabilities = np.exp(logits.detach().cpu().numpy())
+        probabilities = probabilities / sum(probabilities)
+        new_indices = np.random.choice(np.arange(B), b_over_n, replace=False,
+                                       p=probabilities)
 
         # Expand the array of sampled indices
         indices = np.concatenate((indices, new_indices))
@@ -273,10 +277,15 @@ def do_train(
     P_mean=-2.3, P_std=1.5, sigma_data=0.5, lr_ref=1e-2, lr_iter=512, ema_std=0.010,
     pkl_pattern=None, pkl_iter=256, viz_iter=32,
     device=torch.device('cuda'),
-    acid=False, acid_n=16, acid_f=0.8, acid_diff=True,
+    acid=False, acid_n=16, acid_f=0.8, acid_diff=True, viz_save=True,
 ):
     import training.phema
     torch.manual_seed(seed)
+    np.random.seed(seed)
+    plotting_checkpoints = viz_iter is not None
+    saving_checkpoints = pkl_pattern is not None
+    saving_checkpoint_plots = plotting_checkpoints and saving_checkpoints and viz_save
+    if saving_checkpoints: plt_pattern = pkl_pattern[:-4]+".jpg"
 
     # Initialize model.
     net = ToyModel(num_layers=num_layers, hidden_dim=hidden_dim, sigma_data=sigma_data).to(device).train().requires_grad_(True)
@@ -295,12 +304,6 @@ def do_train(
 
     # Training loop.
     for iter_idx in tqdm.tqdm(range(total_iter)):
-
-        # Visualize current sample distribution.
-        if viz_iter is not None and iter_idx % viz_iter == 0:
-            for x in plt.gca().lines: x.remove()
-            do_plot(ema, elems={'samples'}, device=device)
-            plt.gcf().canvas.flush_events()
 
         # Run forward-pass
         opt.param_groups[0]['lr'] = lr_ref / np.sqrt(max(iter_idx / lr_iter, 1))
@@ -335,13 +338,22 @@ def do_train(
         for p_net, p_ema in zip(net.parameters(), ema.parameters()):
             p_ema.lerp_(p_net.detach(), 1 - beta)
 
+        # Visualize resulting sample distribution.
+        if plotting_checkpoints and iter_idx % viz_iter == 0:
+            for x in plt.gca().lines: x.remove()
+            do_plot(ema, elems={'samples'}, device=device)
+            plt.gcf().canvas.flush_events()
+
         # Save model snapshot.
-        if pkl_pattern is not None and (iter_idx + 1) % pkl_iter == 0:
+        if saving_checkpoints and (iter_idx + 1) % pkl_iter == 0:
             pkl_path = pkl_pattern % (iter_idx + 1)
             if os.path.dirname(pkl_path):
                 os.makedirs(os.path.dirname(pkl_path), exist_ok=True)
             with open(pkl_path, 'wb') as f:
                 pickle.dump(copy.deepcopy(ema).cpu(), f)
+            if saving_checkpoint_plots:
+                plt_path = plt_pattern % (iter_idx + 1)
+                plt.savefig(plt_path)
 
 #----------------------------------------------------------------------------
 # Simulate the EDM sampling ODE for the given set of initial sample points.
@@ -492,11 +504,13 @@ def cmdline():
 @click.option('--cls',    help='Target classes', metavar='A|B|AB',    type=str, default='A', show_default=True)
 @click.option('--layers', help='Number of layers', metavar='INT',     type=int, default=4, show_default=True)
 @click.option('--dim',    help='Hidden dimension', metavar='INT',     type=int, default=64, show_default=True)
-@click.option('--acid',   help='Use ACID batch selection?', metavar='BOOL', 
+@click.option('--acid/--no-acid',   
+                          help='Use ACID batch selection?', metavar='BOOL', 
                                                                       type=bool, default=False, show_default=True)
 @click.option('--f',      help='ACID filter ratio', metavar='FLOAT',  type=float, default=0.8, show_default=True)
 @click.option('--n',      help='ACID chunk size', metavar='INT',      type=int, default=16, show_default=True)
-@click.option('--diff',   help='Use ACID learnability score?', metavar='BOOL', 
+@click.option('--diff/--no-diff',   
+                          help='Use ACID learnability score?', metavar='BOOL', 
                                                                       type=bool, default=True, show_default=True)
 @click.option('--viz',    help='Visualize progress?', metavar='BOOL', type=bool, default=True, show_default=True)
 def train(outdir, cls, layers, dim, viz, acid, n, f, diff):
