@@ -488,15 +488,17 @@ def cmdline():
 # 'train' subcommand.
 
 @cmdline.command()
-@click.option('--outdir',   help='Output directory', metavar='DIR',     type=str, default=None)
-@click.option('--cls',      help='Target classes', metavar='A|B|AB',    type=str, default='A', show_default=True)
-@click.option('--layers',   help='Number of layers', metavar='INT',     type=int, default=4, show_default=True)
-@click.option('--dim',      help='Hidden dimension', metavar='INT',     type=int, default=64, show_default=True)
-@click.option('--acid',     help='Use ACID batch selection?', metavar='BOOL', type=bool, default=False, show_default=True)
-@click.option('--f',        help='ACID filter ratio', metavar='FLOAT',  type=float, default=0.8, show_default=True)
-@click.option('--n',        help='ACID chunk size', metavar='INT',      type=int, default=16, show_default=True)
-@click.option('--diff',     help='Use ACID learnability score?', metavar='BOOL', type=bool, default=True, show_default=True)
-@click.option('--viz',      help='Visualize progress?', metavar='BOOL', type=bool, default=True, show_default=True)
+@click.option('--outdir', help='Output directory', metavar='DIR',     type=str, default=None)
+@click.option('--cls',    help='Target classes', metavar='A|B|AB',    type=str, default='A', show_default=True)
+@click.option('--layers', help='Number of layers', metavar='INT',     type=int, default=4, show_default=True)
+@click.option('--dim',    help='Hidden dimension', metavar='INT',     type=int, default=64, show_default=True)
+@click.option('--acid',   help='Use ACID batch selection?', metavar='BOOL', 
+                                                                      type=bool, default=False, show_default=True)
+@click.option('--f',      help='ACID filter ratio', metavar='FLOAT',  type=float, default=0.8, show_default=True)
+@click.option('--n',      help='ACID chunk size', metavar='INT',      type=int, default=16, show_default=True)
+@click.option('--diff',   help='Use ACID learnability score?', metavar='BOOL', 
+                                                                      type=bool, default=True, show_default=True)
+@click.option('--viz',    help='Visualize progress?', metavar='BOOL', type=bool, default=True, show_default=True)
 def train(outdir, cls, layers, dim, viz, acid, n, f, diff):
     """Train a 2D toy model with the given parameters."""
     if outdir is not None:
