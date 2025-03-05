@@ -208,6 +208,34 @@ class ToyModel(torch.nn.Module):
         return score
 
 #----------------------------------------------------------------------------
+# JEST & ACID's joint sampling batch selection method
+
+def jointly_sample_batch(learner_loss, ref_loss, n_chunks=16, filter_ratio=0.8, method="learnability"):
+    """Joint sampling batch selection method used in JEST and ACID
+
+    Copied pseudo-code from Evans & Parthasarathy et al's publication titled 
+    "Data curation via joint example selection further accelerates multimodal learning"
+    (Google DeepMind, London, UK, 2024)
+    Available at https://arxiv.org/abs/2406.17711 under CC BY licence
+    """
+    scores = learner_loss - ref_loss if method == "learnability" else - ref_loss 
+    n_images = scores.shape[0] # scores.shape = [B, B]
+    n_draws = int(n_images * (1 - filter_ratio) / n_chunks) # Size of each chunk.
+    logits_ii = np.diag(scores) # Self-similarity scores.
+    inds = np.random.choice(n_images, n_draws, replace=False)
+
+    # Sample first chunk.
+    for _ in range(n_chunks - 1):
+        is_sampled = np.eye(n_images)[inds].sum(axis=0) # Binary indicator of current samples [n_images,].
+        logits_ij = (scores * is_sampled.reshape(n_images, 1)).sum(axis=0) # Negative terms ij [n_images,].
+        logits_ji = (scores * is_sampled.reshape(1, n_images)).sum(axis=1) # Negative terms ji [n_images,].
+        logits = logits_ii + logits_ij + logits_ji # Conditional learnability given past samples.
+        logits = logits - is_sampled * 1e8 # Avoid sampling with replacement.
+        new_inds = np.random.choice(n_images, n_draws, p=np.exp(logits), replace=False)
+        inds = np.concatenate((inds, new_inds)) # Expand the array of indices sampled.
+    return inds # Gather and return subset indices.
+
+#----------------------------------------------------------------------------
 # Train a 2D toy model with the given parameters.
 
 def do_train(
@@ -320,6 +348,8 @@ def do_plot(
             for i in range(1, len(samples)):
                 ok[i] = (samples[i] - samples[:i][ok[:i]]).square().sum(-1).sqrt().min() >= sample_distance
             samples = samples[ok]
+    # print("> Samples shape", samples.shape)
+    # print("> First few samples", samples[:10])
 
     # Run sampler.
     if any(x.startswith(y) for x in elems for y in ['samples', 'trajectories']):
