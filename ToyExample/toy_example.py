@@ -210,30 +210,60 @@ class ToyModel(torch.nn.Module):
 #----------------------------------------------------------------------------
 # JEST & ACID's joint sampling batch selection method
 
-def jointly_sample_batch(learner_loss, ref_loss, n_chunks=16, filter_ratio=0.8, method="learnability"):
+def jointly_sample_batch(learner_loss, ref_loss, n=16, filter_ratio=0.8, learnability=True):
     """Joint sampling batch selection method used in JEST and ACID
 
-    Copied pseudo-code from Evans & Parthasarathy et al's publication titled 
+    Adapted from Evans & Parthasarathy et al's publication titled 
     "Data curation via joint example selection further accelerates multimodal learning"
     (Google DeepMind, London, UK, 2024)
     Available at https://arxiv.org/abs/2406.17711 under CC BY licence
     """
-    scores = learner_loss - ref_loss if method == "learnability" else - ref_loss 
-    n_images = scores.shape[0] # scores.shape = [B, B]
-    n_draws = int(n_images * (1 - filter_ratio) / n_chunks) # Size of each chunk.
-    logits_ii = np.diag(scores) # Self-similarity scores.
-    inds = np.random.choice(n_images, n_draws, replace=False)
+	
+    # Define size of super-batch
+    B = int(learner_loss.size) # Size B of a super-batch
 
-    # Sample first chunk.
-    for _ in range(n_chunks - 1):
-        is_sampled = np.eye(n_images)[inds].sum(axis=0) # Binary indicator of current samples [n_images,].
-        logits_ij = (scores * is_sampled.reshape(n_images, 1)).sum(axis=0) # Negative terms ij [n_images,].
-        logits_ji = (scores * is_sampled.reshape(1, n_images)).sum(axis=1) # Negative terms ji [n_images,].
-        logits = logits_ii + logits_ij + logits_ji # Conditional learnability given past samples.
-        logits = logits - is_sampled * 1e8 # Avoid sampling with replacement.
-        new_inds = np.random.choice(n_images, n_draws, p=np.exp(logits), replace=False)
-        inds = np.concatenate((inds, new_inds)) # Expand the array of indices sampled.
-    return inds # Gather and return subset indices.
+    # Each mini-batch of size b will be split in n chunks
+    b_over_n = int(B * (1 - filter_ratio) / n) # Size b/n of each mini-batch chunk
+
+    # Construct the scores matrix
+    learner_loss = learner_loss.reshape((B,1))
+    ref_loss = ref_loss.reshape((1,B))
+    scores = learner_loss - ref_loss if learnability else - ref_loss  # Shape (B,B)
+    # Rows use different learner loss ==> i is the learner/student's index
+    # Columns use different reference loss ==> j is the reference/teacher's index
+    
+    # Extract basic score for each element of the super-batch
+    logits_ii = np.diag(scores) # Elements from the diagonal of the scores matrix
+    #Q: Is this associated to the probability of picking learner i and ref j?
+    
+    # Draw the first mini-batch chunk using a uniform probability distribution
+    indices = np.random.choice(B, b_over_n, replace=False)
+
+    # Sample all the rest of the mini-batch chunks
+    for _ in range(n - 1):
+        is_sampled = np.eye(B)[indices].sum(axis=0) # Binary mask of selected samples (B,)
+        
+        # Mask scores to only keep learner rows k that have already been sampled
+        logits_kj = (scores * is_sampled.reshape(B, 1)).sum(axis=0) # Sum over columns (B,)
+        #Q: Associated to prob of picking learner i and an ref k that was already selected?
+
+        # Mask scores to only keep ref columns k that have already been sampled
+        logits_ik = (scores * is_sampled.reshape(1, B)).sum(axis=1) # Sum over rows (B,)
+        #Q: Associated to prob of picking learner i and an ref k that was already selected?
+        
+        # Get conditional scores given past samples
+        logits = logits_ii + logits_kj + logits_ik
+        logits = logits - is_sampled * 1e8 # Avoid sampling with replacement
+        #Q: Why subtract that value, instead of setting all these to 0?
+
+        # Sample new mini-batch chunk using the conditional probability distribution
+        new_indices = np.random.choice(np.arange(B), b_over_n, 
+                                       p=np.exp(logits), replace=False)
+
+        # Expand the array of sampled indices
+        indices = np.concatenate((indices, new_indices))
+
+    return indices # Gather the n chunks of size b/n and return mini-batch of size b
 
 #----------------------------------------------------------------------------
 # Train a 2D toy model with the given parameters.
