@@ -4,7 +4,11 @@
 # Original copyright disclaimer:
 # Copyright (c) 2024, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 
-"""2D toy example from the paper "Guiding a Diffusion Model with a Bad Version of Itself"."""
+"""Auto-guidance 2D toy example that can be run with ACID data selection"""
+
+import pyvdirs.dirs as dirs
+import sys
+sys.path.insert(0, dirs.SYSTEM_HOME)
 
 import os
 import copy
@@ -16,14 +20,16 @@ import torch
 import matplotlib.pyplot as plt
 import click
 import tqdm
+
 import dnnlib
 from torch_utils import persistence
-import pyvdirs.dirs as dirs
-
-warnings.filterwarnings('ignore', 'You are using `torch.load` with `weights_only=False`')
+import training.phema
+import logs
 
 PRETRAINED_HOME = os.path.join(dirs.DATA_HOME, "ToyExample")
 if not os.path.isdir(PRETRAINED_HOME): os.mkdir(PRETRAINED_HOME)
+
+log = logs.create_logger()
 
 #----------------------------------------------------------------------------
 # Multivariate mixture of Gaussians. Allows efficient evaluation of the
@@ -98,7 +104,8 @@ class GaussianMixture(torch.nn.Module):
 
 @functools.lru_cache(None)
 def gt(classes='A', device=torch.device('cpu'), seed=2, origin=np.array([0.0030, 0.0325]), scale=np.array([1.3136, 1.3844])):
-    rnd = np.random.RandomState(seed)
+    if seed is not None: 
+        rnd = np.random.RandomState(seed)
     comps = []
 
     # Recursive function to generate a given branch of the distribution.
@@ -259,7 +266,10 @@ def jointly_sample_batch(learner_loss, ref_loss, n=16, filter_ratio=0.8, learnab
         #Q: Why subtract that value, instead of setting all these to 0?
 
         # Sample new mini-batch chunk using the conditional probability distribution
+        log.debug("Logits = %s", logits)
         probabilities = np.exp(logits.detach().cpu().numpy())
+        log.debug("Probabilites = %s", probabilities)
+        log.debug("Sum of Probabilites = %s", sum(probabilities))
         probabilities = probabilities / sum(probabilities)
         new_indices = np.random.choice(np.arange(B), b_over_n, replace=False,
                                        p=probabilities)
@@ -277,11 +287,14 @@ def do_train(
     P_mean=-2.3, P_std=1.5, sigma_data=0.5, lr_ref=1e-2, lr_iter=512, ema_std=0.010,
     pkl_pattern=None, pkl_iter=256, viz_iter=32,
     device=torch.device('cuda'),
-    acid=False, acid_n=16, acid_f=0.8, acid_diff=True, viz_save=True,
+    acid=False, acid_n=16, acid_f=0.8, acid_diff=True, viz_save=True, verbose=0,
 ):
-    import training.phema
-    torch.manual_seed(seed)
-    np.random.seed(seed)
+    
+    if seed is not None:
+        print("Seed", seed)
+        torch.manual_seed(seed)
+        np.random.seed(seed)
+    logs.set_log_level([logs.WARNING, logs.INFO, logs.DEBUG][verbose], log)
     plotting_checkpoints = viz_iter is not None
     saving_checkpoints = pkl_pattern is not None
     saving_checkpoint_plots = plotting_checkpoints and saving_checkpoints and viz_save
@@ -320,7 +333,7 @@ def do_train(
 
         # Calculate overall loss
         if acid:
-            indices = jointly_sample_batch(net_loss, ema_loss, 
+            indices = jointly_sample_batch(ema_loss, net_loss, #ema_loss, 
                                         n=acid_n, filter_ratio=acid_f,
                                         learnability=acid_diff)
             loss = net_loss[indices] # Use indices of the ACID mini-batch
@@ -328,6 +341,7 @@ def do_train(
             loss = net_loss
 
         # Backpropagate either on the full batch or only on ACID mini-batch
+        log.info("Average Learner Loss = %s", loss.mean())
         loss.mean().backward()
 
         # Update learner parameters
@@ -400,9 +414,13 @@ def do_plot(
     num_samples=1<<13, seed=1, sample_distance=0, sigma_max=5,
     device=torch.device('cuda'),
 ):
+    if seed is not None: 
+        generator = torch.Generator(device).manual_seed(seed)
+    else: generator = torch.Generator(device)
+    
     # Generate initial samples.
     if any(x.startswith(y) for x in elems for y in ['samples', 'trajectories', 'scores']):
-        samples = gt('A', device).sample(num_samples, sigma_max, generator=torch.Generator(device).manual_seed(seed))
+        samples = gt('A', device).sample(num_samples, sigma_max, generator=generator)
         if sample_distance > 0:
             ok = torch.ones(len(samples), dtype=torch.bool, device=device)
             for i in range(1, len(samples)):
@@ -512,8 +530,10 @@ def cmdline():
 @click.option('--diff/--no-diff',   
                           help='Use ACID learnability score?', metavar='BOOL', 
                                                                       type=bool, default=True, show_default=True)
+@click.option('--seed',   help='Random seed', metavar='FLOAT',        type=int, default=None, show_default=True)
+@click.option('--verbose',   help='Verbosity', metavar='INT', type=int, default=0, show_default=True)
 @click.option('--viz',    help='Visualize progress?', metavar='BOOL', type=bool, default=True, show_default=True)
-def train(outdir, cls, layers, dim, viz, acid, n, f, diff):
+def train(outdir, cls, layers, dim, viz, acid, n, f, diff, seed, verbose):
     """Train a 2D toy model with the given parameters."""
     if outdir is not None:
         outdir = os.path.join(dirs.MODELS_HOME, outdir)
@@ -522,7 +542,7 @@ def train(outdir, cls, layers, dim, viz, acid, n, f, diff):
     viz_iter = 32 if viz else None
     print('Training...')
     do_train(pkl_pattern=pkl_pattern, classes=cls, num_layers=layers, hidden_dim=dim, viz_iter=viz_iter,
-            acid=acid, acid_n=n, acid_f=f, acid_diff=diff)
+            acid=acid, acid_n=n, acid_f=f, acid_diff=diff, seed=seed, verbose=verbose)
     print('Done.')
 
 #----------------------------------------------------------------------------
