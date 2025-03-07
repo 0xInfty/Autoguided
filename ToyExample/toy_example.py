@@ -287,14 +287,24 @@ def do_train(
     P_mean=-2.3, P_std=1.5, sigma_data=0.5, lr_ref=1e-2, lr_iter=512, ema_std=0.010,
     pkl_pattern=None, pkl_iter=256, viz_iter=32,
     device=torch.device('cuda'),
-    acid=False, acid_n=16, acid_f=0.8, acid_diff=True, viz_save=True, verbose=0,
+    acid=False, acid_n=16, acid_f=0.8, acid_diff=True, 
+    viz_save=True, verbosity=0, log_filename=None,
 ):
-    
+    # Set random seed, if specified
     if seed is not None:
         print("Seed", seed)
         torch.manual_seed(seed)
         np.random.seed(seed)
-    logs.set_log_level([logs.WARNING, logs.INFO, logs.DEBUG][verbose], log)
+
+    # Set up the logger
+    log_level = logs.get_log_level(verbosity)
+    logging_to_file = log_filename is not None
+    if logging_to_file:
+        logs.set_log_file(log, log_filename)
+        logs.set_log_format(log, color=False)
+    logs.set_log_level(log_level, log)
+
+    # Basic configuration
     plotting_checkpoints = viz_iter is not None
     saving_checkpoints = pkl_pattern is not None
     saving_checkpoint_plots = plotting_checkpoints and saving_checkpoints and viz_save
@@ -316,7 +326,10 @@ def do_train(
         plt.gcf().canvas.flush_events()
 
     # Training loop.
-    for iter_idx in tqdm.tqdm(range(total_iter)):
+    # for iter_idx in tqdm.tqdm(range(total_iter), file=open(os.devnull, 'w')):
+    progress_bar = tqdm.tqdm(range(total_iter))
+    for iter_idx in progress_bar:
+        if logging_to_file: log.info("Iteration = %i | %s", iter_idx, str(progress_bar))
 
         # Run forward-pass
         opt.param_groups[0]['lr'] = lr_ref / np.sqrt(max(iter_idx / lr_iter, 1))
@@ -525,16 +538,23 @@ def cmdline():
 @click.option('--acid/--no-acid',   
                           help='Use ACID batch selection?', metavar='BOOL', 
                                                                       type=bool, default=False, show_default=True)
-@click.option('--f',      help='ACID filter ratio', metavar='FLOAT',  type=float, default=0.8, show_default=True)
+@click.option('--filt',   help='ACID filter ratio', metavar='FLOAT',  type=float, default=0.8, show_default=True)
 @click.option('--n',      help='ACID chunk size', metavar='INT',      type=int, default=16, show_default=True)
 @click.option('--diff/--no-diff',   
                           help='Use ACID learnability score?', metavar='BOOL', 
                                                                       type=bool, default=True, show_default=True)
 @click.option('--seed',   help='Random seed', metavar='FLOAT',        type=int, default=None, show_default=True)
-@click.option('--verbose',   help='Verbosity', metavar='INT', type=int, default=0, show_default=True)
+@click.option('--verbose/--no-verbose', help='Whether to log information messages or not', metavar='BOOL', 
+                                                                      type=bool, default=False, show_default=True)
+@click.option('--debug/--no-debug', help='Whether to log debug messages or not', metavar='BOOL', 
+                                                                      type=bool, default=False, show_default=True)
+@click.option('--log', help='Log filename', metavar='DIR',            type=str, default=None)
 @click.option('--viz',    help='Visualize progress?', metavar='BOOL', type=bool, default=True, show_default=True)
-def train(outdir, cls, layers, dim, viz, acid, n, f, diff, seed, verbose):
+def train(outdir, cls, layers, dim, viz, acid, n, filt, diff, seed, verbose, debug, log):
     """Train a 2D toy model with the given parameters."""
+    if debug: verbosity = 2
+    elif verbose: verbosity = 1
+    else: verbosity = 0
     if outdir is not None:
         outdir = os.path.join(dirs.MODELS_HOME, outdir)
         print(f'Will save snapshots to {outdir}')
@@ -542,7 +562,7 @@ def train(outdir, cls, layers, dim, viz, acid, n, f, diff, seed, verbose):
     viz_iter = 32 if viz else None
     print('Training...')
     do_train(pkl_pattern=pkl_pattern, classes=cls, num_layers=layers, hidden_dim=dim, viz_iter=viz_iter,
-            acid=acid, acid_n=n, acid_f=f, acid_diff=diff, seed=seed, verbose=verbose)
+            acid=acid, acid_n=n, acid_f=filt, acid_diff=diff, seed=seed, verbosity=verbosity, log_filename=log)
     print('Done.')
 
 #----------------------------------------------------------------------------
