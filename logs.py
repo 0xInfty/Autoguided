@@ -1,5 +1,6 @@
 import logging
 from colorlog import ColoredFormatter
+import functools
 
 DEBUG = logging.DEBUG
 INFO = logging.INFO
@@ -39,8 +40,7 @@ def set_log_format(logger, color=False):
         for stream in logger.handlers:
             stream.setFormatter(formatter)
 
-def create_logger(log_level=logging.WARNING, filename=None):
-    log = logging.getLogger('pythonConfig')
+def configure_logger(log, log_level=logging.WARNING, filename=None):
     if filename is not None:
         log.addHandler( logging.FileHandler(filename) )
         set_log_format(log)
@@ -48,4 +48,22 @@ def create_logger(log_level=logging.WARNING, filename=None):
         log.addHandler( logging.StreamHandler() )
         set_log_format(log, color=True)
     set_log_level(log_level, log)
+
+def create_logger(name, log_level=logging.WARNING, filename=None):
+    log = logging.getLogger(name)
+    configure_logger(log, log_level, filename)
     return log
+
+def errors(function):
+    @functools.wraps(function)
+    def wrapper(*args, **kwargs):
+        log = logging.getLogger("errors")
+        try:
+            return function(*args, **kwargs)
+        except Exception as e:
+            if any([isinstance(handler, logging.FileHandler) for handler in log.handlers]):
+                log.critical("Interrupted execution\n%s", e, exc_info=True)
+            else:
+                log.critical("Interrupted execution")
+            raise
+    return wrapper

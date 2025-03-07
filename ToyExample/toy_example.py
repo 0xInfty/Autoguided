@@ -29,7 +29,7 @@ import logs
 PRETRAINED_HOME = os.path.join(dirs.DATA_HOME, "ToyExample")
 if not os.path.isdir(PRETRAINED_HOME): os.mkdir(PRETRAINED_HOME)
 
-log = logs.create_logger()
+log = logs.create_logger("errors")
 
 #----------------------------------------------------------------------------
 # Multivariate mixture of Gaussians. Allows efficient evaluation of the
@@ -282,6 +282,7 @@ def jointly_sample_batch(learner_loss, ref_loss, n=16, filter_ratio=0.8, learnab
 #----------------------------------------------------------------------------
 # Train a 2D toy model with the given parameters.
 
+@logs.errors
 def do_train(
     classes='A', num_layers=4, hidden_dim=64, batch_size=4<<10, total_iter=4<<10, seed=0,
     P_mean=-2.3, P_std=1.5, sigma_data=0.5, lr_ref=1e-2, lr_iter=512, ema_std=0.010,
@@ -290,11 +291,6 @@ def do_train(
     acid=False, acid_n=16, acid_f=0.8, acid_diff=True, 
     viz_save=True, verbosity=0, log_filename=None,
 ):
-    # Set random seed, if specified
-    if seed is not None:
-        print("Seed", seed)
-        torch.manual_seed(seed)
-        np.random.seed(seed)
 
     # Set up the logger
     log_level = logs.get_log_level(verbosity)
@@ -304,11 +300,21 @@ def do_train(
         logs.set_log_format(log, color=False)
     logs.set_log_level(log_level, log)
 
+    # Set random seed, if specified
+    if seed is not None:
+        log.info("Seed %s", seed)
+        torch.manual_seed(seed)
+        np.random.seed(seed)
+
     # Basic configuration
     plotting_checkpoints = viz_iter is not None
     saving_checkpoints = pkl_pattern is not None
     saving_checkpoint_plots = plotting_checkpoints and saving_checkpoints and viz_save
-    if saving_checkpoints: plt_pattern = pkl_pattern[:-4]+".jpg"
+    if saving_checkpoints:
+        log.warning(f'Will save checkpoints to {os.path.split(pkl_pattern)[0]}')
+    if saving_checkpoint_plots: 
+        plt_pattern = pkl_pattern[:-4]+".jpg"
+        log.warning(f'Will save snapshots to {os.path.split(plt_pattern)[0]}')
 
     # Initialize model.
     net = ToyModel(num_layers=num_layers, hidden_dim=hidden_dim, sigma_data=sigma_data).to(device).train().requires_grad_(True)
@@ -439,8 +445,8 @@ def do_plot(
             for i in range(1, len(samples)):
                 ok[i] = (samples[i] - samples[:i][ok[:i]]).square().sum(-1).sqrt().min() >= sample_distance
             samples = samples[ok]
-    # print("> Samples shape", samples.shape)
-    # print("> First few samples", samples[:10])
+        log.info("Plot samples shape %s", samples.shape)
+        log.debug("First few samples %s", samples[:10])
 
     # Run sampler.
     if any(x.startswith(y) for x in elems for y in ['samples', 'trajectories']):
@@ -548,22 +554,21 @@ def cmdline():
                                                                       type=bool, default=False, show_default=True)
 @click.option('--debug/--no-debug', help='Whether to log debug messages or not', metavar='BOOL', 
                                                                       type=bool, default=False, show_default=True)
-@click.option('--log', help='Log filename', metavar='DIR',            type=str, default=None)
+@click.option('--logging', help='Log filename', metavar='DIR',        type=str, default=None)
 @click.option('--viz',    help='Visualize progress?', metavar='BOOL', type=bool, default=True, show_default=True)
-def train(outdir, cls, layers, dim, viz, acid, n, filt, diff, seed, verbose, debug, log):
+def train(outdir, cls, layers, dim, viz, acid, n, filt, diff, seed, verbose, debug, logging):
     """Train a 2D toy model with the given parameters."""
     if debug: verbosity = 2
     elif verbose: verbosity = 1
     else: verbosity = 0
     if outdir is not None:
         outdir = os.path.join(dirs.MODELS_HOME, outdir)
-        print(f'Will save snapshots to {outdir}')
     pkl_pattern = f'{outdir}/iter%04d.pkl' if outdir is not None else None
     viz_iter = 32 if viz else None
-    print('Training...')
+    log.info('Training...')
     do_train(pkl_pattern=pkl_pattern, classes=cls, num_layers=layers, hidden_dim=dim, viz_iter=viz_iter,
-            acid=acid, acid_n=n, acid_f=filt, acid_diff=diff, seed=seed, verbosity=verbosity, log_filename=log)
-    print('Done.')
+            acid=acid, acid_n=n, acid_f=filt, acid_diff=diff, seed=seed, verbosity=verbosity, log_filename=logging)
+    log.info('Done.')
 
 #----------------------------------------------------------------------------
 # 'plot' subcommand.
@@ -575,7 +580,7 @@ def train(outdir, cls, layers, dim, viz, acid, n, filt, diff, seed, verbose, deb
 @click.option('--save',     help='Save figure, do not display', metavar='PNG|PDF',              type=str, default=None)
 def plot(net, gnet, guidance, save, device=torch.device('cuda')):
     """Visualize sampling distributions with and without guidance."""
-    print('Loading models...')
+    log.info('Loading models...')
     if isinstance(net, str):
         with dnnlib.util.open_url(net, cache_dir=PRETRAINED_HOME) as f:
             net = pickle.load(f).to(device)
@@ -584,7 +589,7 @@ def plot(net, gnet, guidance, save, device=torch.device('cuda')):
             gnet = pickle.load(f).to(device)
 
     # Initialize plot.
-    print('Drawing plots...')
+    log.info('Drawing plots...')
     plt.rcParams['font.size'] = 28
     plt.figure(figsize=[48, 25], dpi=40, tight_layout=True)
     fig1_kwargs = dict(view_x=0.30, view_y=0.30, view_size=1.2, num_samples=1<<14, device=device)
@@ -620,15 +625,15 @@ def plot(net, gnet, guidance, save, device=torch.device('cuda')):
 
     # Save or display.
     if save is not None:
-        print(f'Saving to {save} inside of results home folder')
+        log.info('Saving to %s inside of results home folder', save)
         save = os.path.join(dirs.RESULTS_HOME, save)
         if os.path.dirname(save):
             os.makedirs(os.path.dirname(save), exist_ok=True)
         plt.savefig(save, dpi=80)
     else:
-        print('Displaying...')
+        log.info('Displaying...')
         plt.show()
-    print('Done.')
+    log.info('Done.')
 
 #----------------------------------------------------------------------------
 
