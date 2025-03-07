@@ -346,7 +346,7 @@ def do_train(
 
         # Calculate overall loss
         if acid:
-            indices = jointly_sample_batch(ema_loss, net_loss, #ema_loss, 
+            indices = jointly_sample_batch(net_loss, ema_loss, 
                                         n=acid_n, filter_ratio=acid_f,
                                         learnability=acid_diff)
             loss = net_loss[indices] # Use indices of the ACID mini-batch
