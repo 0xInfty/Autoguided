@@ -311,6 +311,7 @@ def extract_loss_from_log(log_path):
     plt.ylabel("Average Loss")
     plt.grid()
     plt.legend()
+    plt.tight_layout()
 
     plt_filename = log_path.replace(".txt",".png").replace("log", "plot")
     plt.savefig(os.path.join(os.path.split(log_path)[0], plt_filename))
@@ -352,6 +353,7 @@ def do_train(
         if not os.path.isdir(os.path.split(pkl_pattern)[0]):
             os.makedirs(os.path.split(pkl_pattern)[0])
         log.warning(f'Will save checkpoints to {os.path.split(pkl_pattern)[0]}')
+        pkl_pattern_learner = pkl_pattern[:-4]+"learner.pkl"
         plt_pattern = pkl_pattern[:-4]+".jpg"
         if saving_checkpoint_plots:
             log.warning(f'Will save snapshots to {os.path.split(plt_pattern)[0]}')
@@ -458,6 +460,21 @@ def do_train(
     ema_test_loss = (sigma_max ** 2) * ((gt_test_scores - ema_test_scores) ** 2).mean(-1)
     log.warning("Average Test Learner Loss = %s", float(net_test_loss.mean()))
     log.warning("Average Test Reference Loss = %s", float(ema_test_loss.mean()))
+
+    # Save and visualize last iteration
+    if saving_checkpoints:
+        pkl_path = pkl_pattern % (iter_idx + 1)
+        with open(pkl_path, 'wb') as f:
+            pickle.dump(copy.deepcopy(ema).cpu(), f)
+        pkl_path_learner = pkl_pattern_learner % (iter_idx + 1)
+        with open(pkl_path_learner, 'wb') as f:
+            pickle.dump(copy.deepcopy(ema).cpu(), f)
+        for x in plt.gca().lines: x.remove()
+        do_plot(ema, elems={'samples'}, sigma_max=sigma_max, device=device)
+        plt.gcf().canvas.flush_events()
+        if saving_checkpoint_plots:
+            plt_path = plt_pattern % (iter_idx + 1)
+            plt.savefig(plt_path)
 
     if logging_to_file and verbosity>=1: extract_loss_from_log(log_filename)
 
