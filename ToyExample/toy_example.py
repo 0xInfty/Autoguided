@@ -15,11 +15,13 @@ import copy
 import pickle
 import warnings
 import functools
+import builtins
 import numpy as np
 import torch
 import matplotlib.pyplot as plt
 import click
 import tqdm
+import pyvtools.text as vtext
 
 import dnnlib
 from torch_utils import persistence
@@ -280,6 +282,40 @@ def jointly_sample_batch(learner_loss, ref_loss, n=16, filter_ratio=0.8, learnab
     return indices # Gather the n chunks of size b/n and return mini-batch of size b
 
 #----------------------------------------------------------------------------
+# Custom helper functions
+
+def extract_loss_from_log(log_path):
+
+    learner_loss = []
+    ref_loss = []
+    mini_learner_loss = []
+    learner_val_loss = []
+    ref_val_loss = []
+    with builtins.open(log_path, "r") as f:
+        for line in f:
+            if "Average Learner Loss" in line: mini_learner_loss.append(vtext.find_numbers(line)[-1])
+            elif "Average Super-Batch Learner Loss" in line: learner_loss.append(vtext.find_numbers(line)[-1])
+            elif "Average Super-Batch Reference Loss" in line: ref_loss.append(vtext.find_numbers(line)[-1])
+            elif "Average Validation Learner Loss" in line: learner_val_loss.append(vtext.find_numbers(line)[-1])
+            elif "Average Validation Reference Loss" in line: ref_val_loss.append(vtext.find_numbers(line)[-1])
+
+    plt.figure()
+    if len(ref_loss)>0: 
+        plt.plot(ref_loss, "C3", label="Ref", alpha=0.8, linewidth=2)
+        plt.plot(learner_loss, "k", label="Learner", alpha=1, linewidth=0.5)
+    plt.plot(mini_learner_loss, "C0", label="Training", alpha=0.8)
+    if len(ref_val_loss)>0: 
+        plt.plot(ref_val_loss, "C2", label="Ref Validation", alpha=0.8, linewidth=2)
+        plt.plot(learner_val_loss, "k:", label="Learner Validation", alpha=1, linewidth=1)
+    plt.xlabel("Epoch")
+    plt.ylabel("Average Loss")
+    plt.grid()
+    plt.legend()
+
+    plt_filename = log_path.replace(".txt",".png").replace("log", "plot")
+    plt.savefig(os.path.join(os.path.split(log_path)[0], plt_filename))
+
+#----------------------------------------------------------------------------
 # Train a 2D toy model with the given parameters.
 
 @logs.errors
@@ -288,6 +324,8 @@ def do_train(
     P_mean=-2.3, P_std=1.5, sigma_data=0.5, lr_ref=1e-2, lr_iter=512, ema_std=0.010,
     pkl_pattern=None, pkl_iter=256, viz_iter=32,
     device=torch.device('cuda'),
+    validation=False, val_batch_size=4<<7, sigma_max=5,
+    test_batch_size=4<<8,
     acid=False, acid_n=16, acid_f=0.8, acid_diff=True, 
     viz_save=True, verbosity=0, log_filename=None,
 ):
@@ -311,10 +349,12 @@ def do_train(
     saving_checkpoints = pkl_pattern is not None
     saving_checkpoint_plots = plotting_checkpoints and saving_checkpoints and viz_save
     if saving_checkpoints:
+        if not os.path.isdir(os.path.split(pkl_pattern)[0]):
+            os.makedirs(os.path.split(pkl_pattern)[0])
         log.warning(f'Will save checkpoints to {os.path.split(pkl_pattern)[0]}')
-    if saving_checkpoint_plots: 
         plt_pattern = pkl_pattern[:-4]+".jpg"
-        log.warning(f'Will save snapshots to {os.path.split(plt_pattern)[0]}')
+        if saving_checkpoint_plots:
+            log.warning(f'Will save snapshots to {os.path.split(plt_pattern)[0]}')
 
     # Initialize model.
     net = ToyModel(num_layers=num_layers, hidden_dim=hidden_dim, sigma_data=sigma_data).to(device).train().requires_grad_(True)
@@ -330,9 +370,11 @@ def do_train(
         plt.figure(figsize=[12, 12], dpi=75)
         do_plot(ema, elems={'gt_uncond', 'gt_outline'}, device=device)
         plt.gcf().canvas.flush_events()
+        if saving_checkpoint_plots:
+            plt_path = plt_pattern % 0
+            plt.savefig(plt_path)
 
     # Training loop.
-    # for iter_idx in tqdm.tqdm(range(total_iter), file=open(os.devnull, 'w')):
     progress_bar = tqdm.tqdm(range(total_iter))
     for iter_idx in progress_bar:
         if logging_to_file: log.info("Iteration = %i | %s", iter_idx, str(progress_bar))
@@ -360,7 +402,9 @@ def do_train(
             loss = net_loss
 
         # Backpropagate either on the full batch or only on ACID mini-batch
-        log.info("Average Learner Loss = %s", loss.mean())
+        log.info("Average Super-Batch Learner Loss = %s", float(net_loss.mean()))
+        if acid: log.info("Average Super-Batch Reference Loss = %s", float(ema_loss.mean()))
+        log.info("Average Learner Loss = %s", float(loss.mean()))
         loss.mean().backward()
 
         # Update learner parameters
@@ -371,22 +415,51 @@ def do_train(
         for p_net, p_ema in zip(net.parameters(), ema.parameters()):
             p_ema.lerp_(p_net.detach(), 1 - beta)
 
+        # Evaluate loss function on validation batch
+        if validation:
+            val_samples = gt(classes, device).sample(val_batch_size, sigma_max)
+
+            # Evaluate scores
+            gt_val_scores = gt(classes, device).score(val_samples, sigma_max)
+            net_val_scores = net.score(val_samples, sigma_max, graph=True)
+            ema_val_scores = ema.score(val_samples, sigma_max, graph=True)
+
+            # Evaluate loss
+            net_val_loss = (sigma_max ** 2) * ((gt_val_scores - net_val_scores) ** 2).mean(-1)
+            ema_val_loss = (sigma_max ** 2) * ((gt_val_scores - ema_val_scores) ** 2).mean(-1)
+            log.info("Average Validation Learner Loss = %s", float(net_val_loss.mean()))
+            log.info("Average Validation Reference Loss = %s", float(ema_val_loss.mean()))
+
         # Visualize resulting sample distribution.
         if plotting_checkpoints and iter_idx % viz_iter == 0:
             for x in plt.gca().lines: x.remove()
-            do_plot(ema, elems={'samples'}, device=device)
+            do_plot(ema, elems={'samples'}, sigma_max=sigma_max, device=device)
             plt.gcf().canvas.flush_events()
 
         # Save model snapshot.
         if saving_checkpoints and (iter_idx + 1) % pkl_iter == 0:
             pkl_path = pkl_pattern % (iter_idx + 1)
-            if os.path.dirname(pkl_path):
-                os.makedirs(os.path.dirname(pkl_path), exist_ok=True)
             with open(pkl_path, 'wb') as f:
                 pickle.dump(copy.deepcopy(ema).cpu(), f)
             if saving_checkpoint_plots:
                 plt_path = plt_pattern % (iter_idx + 1)
                 plt.savefig(plt_path)
+    
+    # Evaluate loss function on test data
+    test_samples = gt(classes, device).sample(test_batch_size, sigma_max)
+
+    # Evaluate scores
+    gt_test_scores = gt(classes, device).score(test_samples, sigma_max)
+    net_test_scores = net.score(test_samples, sigma_max, graph=True)
+    ema_test_scores = ema.score(test_samples, sigma_max, graph=True)
+
+    # Evaluate loss
+    net_test_loss = (sigma_max ** 2) * ((gt_test_scores - net_test_scores) ** 2).mean(-1)
+    ema_test_loss = (sigma_max ** 2) * ((gt_test_scores - ema_test_scores) ** 2).mean(-1)
+    log.warning("Average Test Learner Loss = %s", float(net_test_loss.mean()))
+    log.warning("Average Test Reference Loss = %s", float(ema_test_loss.mean()))
+
+    if logging_to_file and verbosity>=1: extract_loss_from_log(log_filename)
 
 #----------------------------------------------------------------------------
 # Simulate the EDM sampling ODE for the given set of initial sample points.
@@ -541,6 +614,8 @@ def cmdline():
 @click.option('--cls',    help='Target classes', metavar='A|B|AB',    type=str, default='A', show_default=True)
 @click.option('--layers', help='Number of layers', metavar='INT',     type=int, default=4, show_default=True)
 @click.option('--dim',    help='Hidden dimension', metavar='INT',     type=int, default=64, show_default=True)
+@click.option('--val/--no-val', help='Use validation?', metavar='BOOL', 
+                                                                      type=bool, default=True, show_default=True)
 @click.option('--acid/--no-acid',   
                           help='Use ACID batch selection?', metavar='BOOL', 
                                                                       type=bool, default=False, show_default=True)
@@ -555,8 +630,9 @@ def cmdline():
 @click.option('--debug/--no-debug', help='Whether to log debug messages or not', metavar='BOOL', 
                                                                       type=bool, default=False, show_default=True)
 @click.option('--logging', help='Log filename', metavar='DIR',        type=str, default=None)
-@click.option('--viz',    help='Visualize progress?', metavar='BOOL', type=bool, default=True, show_default=True)
-def train(outdir, cls, layers, dim, viz, acid, n, filt, diff, seed, verbose, debug, logging):
+@click.option('--viz/--no-viz', help='Visualize progress?', metavar='BOOL', 
+                                                                      type=bool, default=True, show_default=True)
+def train(outdir, cls, layers, dim, viz, val, acid, n, filt, diff, seed, verbose, debug, logging):
     """Train a 2D toy model with the given parameters."""
     if debug: verbosity = 2
     elif verbose: verbosity = 1
@@ -567,7 +643,8 @@ def train(outdir, cls, layers, dim, viz, acid, n, filt, diff, seed, verbose, deb
     viz_iter = 32 if viz else None
     log.info('Training...')
     do_train(pkl_pattern=pkl_pattern, classes=cls, num_layers=layers, hidden_dim=dim, viz_iter=viz_iter,
-            acid=acid, acid_n=n, acid_f=filt, acid_diff=diff, seed=seed, verbosity=verbosity, log_filename=logging)
+             validation=val, acid=acid, acid_n=n, acid_f=filt, acid_diff=diff,
+             seed=seed, verbosity=verbosity, log_filename=logging)
     log.info('Done.')
 
 #----------------------------------------------------------------------------

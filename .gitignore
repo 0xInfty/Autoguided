@@ -1,3 +1,7 @@
+# Custom
+train.sh
+Backup*
+
 # Custom, needed for pyvdirs
 dirs.json
 models/
