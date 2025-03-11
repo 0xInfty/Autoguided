@@ -414,21 +414,30 @@ def do_train(
         samples = gt(classes, device).sample(batch_size, sigma) #Q: Why do they redefine the Gaussian mixture distribution twice on each iteration?
         gt_scores = gt(classes, device).score(samples, sigma)
         net_scores = net.score(samples, sigma, graph=True)
-        if acid: ema_scores = ema.score(samples, sigma, graph=True)
-
-        # Calculate teacher and student loss
+        
+        # Get a bad version reference model every a certain number of iterations
+        if acid and iter_idx >= acid_min and (iter_idx+1) % acid_iter == 0:
+            bad = copy.deepcopy(net).eval().requires_grad_(False)
+            log.warning("Updated ACID Bad Version model")
+        
+        # Calculate learner loss
         net_loss = (sigma ** 2) * ((gt_scores - net_scores) ** 2).mean(-1)
-        if acid: ema_loss = (sigma ** 2) * ((gt_scores - ema_scores) ** 2).mean(-1)
 
-        # Calculate overall loss
-        if acid:
-            indices = jointly_sample_batch(net_loss, ema_loss, 
+        # Use ACID scores, if specified, to pick a batch out of the super-batch
+        if acid and iter_idx >= acid_min + acid_delay:
+
+            # Calculate bad version loss
+            bad_scores = bad.score(samples, sigma, graph=True)
+            bad_loss = (sigma ** 2) * ((gt_scores - bad_scores) ** 2).mean(-1)
+
+            # Calculate overall loss
+            indices = jointly_sample_batch(bad_loss, net_loss,
                                            n=acid_n, filter_ratio=acid_f,
                                            learnability=acid_diff)
             loss = net_loss[indices] # Use indices of the ACID mini-batch
-            log.warning("Using ACID")
+            log.warning("Using ACID Bad Version")
             log.info("Average Super-Batch Learner Loss = %s", float(net_loss.mean()))
-            log.info("Average Super-Batch Reference Loss = %s", float(ema_loss.mean()))
+            log.info("Average Super-Batch Reference Loss = %s", float(bad_loss.mean()))
 
         else:
             loss = net_loss
