@@ -343,7 +343,7 @@ def do_train(
     device=torch.device('cuda'),
     validation=False, val_batch_size=4<<7, sigma_max=5,
     testing=False, test_batch_size=4<<8,
-    acid=False, acid_min=512, acid_delay=128, acid_iter=8, acid_n=16, acid_f=0.8, acid_diff=True, 
+    acid=False, acid_n=16, acid_f=0.8, acid_diff=True, 
     viz_save=True, verbosity=0, log_filename=None,
 ):
 
@@ -364,9 +364,6 @@ def do_train(
     # Log ACID parameters
     log.info("ACID = %s", acid)
     if acid:
-        log.info("ACID's Min Iteration = %s", acid_min)
-        log.info("ACID's Iteration Delay = %s", acid_delay)
-        log.info("ACID's Iteration Period = %s", acid_iter)
         log.info("ACID's Number of Chunks = %s", acid_n)
         log.info("ACID's Filter Ratio = %s", acid_f)
         log.info("ACID's Learnability = %s", acid_diff)
