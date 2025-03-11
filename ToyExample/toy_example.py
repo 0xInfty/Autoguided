@@ -338,7 +338,7 @@ def extract_loss_from_log(log_path, plotting=True):
 def do_train(
     classes='A', num_layers=4, hidden_dim=64, batch_size=4<<10, total_iter=4<<10, seed=0,
     P_mean=-2.3, P_std=1.5, sigma_data=0.5, lr_ref=1e-2, lr_iter=512, ema_std=0.010,
-    # guidance=3,
+    guidance=3,
     pkl_pattern=None, pkl_iter=256, viz_iter=32,
     device=torch.device('cuda'),
     validation=False, val_batch_size=4<<7, sigma_max=5,
@@ -359,6 +359,7 @@ def do_train(
     if seed is not None:
         log.info("Seed = %s", seed)
         torch.manual_seed(seed)
+        generator = torch.Generator(device).manual_seed(seed)
         np.random.seed(seed)
     
     # Log ACID parameters
@@ -444,8 +445,7 @@ def do_train(
 
         # Evaluate loss function on validation batch
         if validation:
-            val_samples = gt(classes, device).sample(val_batch_size, sigma_max)
-            # val_output_samples = do_sample(net=ema, x_init=val_samples, guidance=guidance, gnet=(bad or None), sigma_max=sigma_max)
+            val_samples = gt(classes, device).sample(val_batch_size, sigma_max, generator=generator)
 
             # Evaluate scores
             gt_val_scores = gt(classes, device).score(val_samples, sigma_max)
@@ -457,6 +457,16 @@ def do_train(
             ema_val_loss = (sigma_max ** 2) * ((gt_val_scores - ema_val_scores) ** 2).mean(-1)
             log.info("Average Validation Learner Loss = %s", float(net_val_loss.mean()))
             log.info("Average Validation Reference Loss = %s", float(ema_val_loss.mean()))
+
+            # Create full samples using net for guidance
+            val_output_samples = do_sample(net=ema, x_init=val_samples, guidance=guidance, 
+                                           gnet=net, sigma_max=sigma_max)[-1]
+            val_output_samples_0 = do_sample(net=ema, x_init=val_samples, guidance=0, 
+                                             gnet=net, sigma_max=sigma_max)[-1]
+            log.info("Average Validation MSE = %s", 
+                     float(torch.sqrt(((val_output_samples - val_output_samples_0) ** 2).sum(-1)).mean()))
+            #Q: Should I be using a different network instead? 
+            #   Maybe run once for a certain number of iterations and load that model for this instead
 
         # Visualize resulting sample distribution.
         if plotting_checkpoints and iter_idx % viz_iter == 0:
@@ -475,7 +485,7 @@ def do_train(
     
     if testing:
         # Evaluate loss function on test data
-        test_samples = gt(classes, device).sample(test_batch_size, sigma_max)
+        test_samples = gt(classes, device).sample(test_batch_size, sigma_max, generator=generator)
 
         # Evaluate scores
         gt_test_scores = gt(classes, device).score(test_samples, sigma_max)
@@ -487,6 +497,14 @@ def do_train(
         ema_test_loss = (sigma_max ** 2) * ((gt_test_scores - ema_test_scores) ** 2).mean(-1)
         log.warning("Average Test Learner Loss = %s", float(net_test_loss.mean()))
         log.warning("Average Test Reference Loss = %s", float(ema_test_loss.mean()))
+
+        # Create full samples using net for guidance
+        test_output_samples = do_sample(net=ema, x_init=test_samples, guidance=guidance, 
+                                        gnet=net, sigma_max=sigma_max)[-1]
+        test_output_samples_0 = do_sample(net=ema, x_init=test_samples, guidance=0, 
+                                          gnet=net, sigma_max=sigma_max)[-1]
+        log.info("Average Test MSE = %s", 
+                float(torch.sqrt(((test_output_samples - test_output_samples_0) ** 2).sum(-1)).mean()))
 
     # Save and visualize last iteration
     if saving_checkpoints:
