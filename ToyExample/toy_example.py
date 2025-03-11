@@ -284,7 +284,7 @@ def jointly_sample_batch(learner_loss, ref_loss, n=16, filter_ratio=0.8, learnab
 #----------------------------------------------------------------------------
 # Custom helper functions
 
-def extract_loss_from_log(log_path):
+def extract_loss_from_log(log_path, plotting=True):
 
     learner_loss = []
     ref_loss = []
@@ -298,23 +298,38 @@ def extract_loss_from_log(log_path):
             elif "Average Super-Batch Reference Loss" in line: ref_loss.append(vtext.find_numbers(line)[-1])
             elif "Average Validation Learner Loss" in line: learner_val_loss.append(vtext.find_numbers(line)[-1])
             elif "Average Validation Reference Loss" in line: ref_val_loss.append(vtext.find_numbers(line)[-1])
+            elif "Average Test Learner Loss" in line: learner_test_loss = vtext.find_numbers(line)[-1]
+            elif "Average Test Reference Loss" in line: ref_test_loss = vtext.find_numbers(line)[-1]
+    
+    results = {"learner_loss": learner_loss,
+               "ref_loss": ref_loss,
+               "mini_learner_loss": mini_learner_loss,
+               "learner_val_loss": learner_val_loss,
+               "ref_val_loss": ref_val_loss}
+    try:
+        results["learner_test_loss"] = learner_test_loss
+        results["ref_test_loss"] = ref_test_loss
+    except UnboundLocalError: pass
 
-    plt.figure()
-    if len(ref_loss)>0: 
-        plt.plot(ref_loss, "C3", label="Ref", alpha=0.8, linewidth=2)
-        plt.plot(learner_loss, "k", label="Learner", alpha=1, linewidth=0.5)
-    plt.plot(mini_learner_loss, "C0", label="Training", alpha=0.8)
-    if len(ref_val_loss)>0: 
-        plt.plot(ref_val_loss, "C2", label="Ref Validation", alpha=0.8, linewidth=2)
-        plt.plot(learner_val_loss, "k:", label="Learner Validation", alpha=1, linewidth=1)
-    plt.xlabel("Epoch")
-    plt.ylabel("Average Loss")
-    plt.grid()
-    plt.legend()
-    plt.tight_layout()
+    if plotting:
+        plt.figure()
+        if len(ref_loss)>0: 
+            plt.plot(ref_loss, "C3", label="Ref", alpha=0.8, linewidth=2)
+            plt.plot(learner_loss, "k", label="Learner", alpha=1, linewidth=0.5)
+        plt.plot(mini_learner_loss, "C0", label="Training", alpha=0.8)
+        if len(ref_val_loss)>0: 
+            plt.plot(ref_val_loss, "C2", label="Ref Validation", alpha=0.8, linewidth=2)
+            plt.plot(learner_val_loss, "k:", label="Learner Validation", alpha=1, linewidth=1)
+        plt.xlabel("Epoch")
+        plt.ylabel("Average Loss")
+        plt.grid()
+        plt.legend()
+        plt.tight_layout()
 
-    plt_filename = log_path.replace(".txt",".png").replace("log", "plot")
-    plt.savefig(os.path.join(os.path.split(log_path)[0], plt_filename))
+        plt_filename = log_path.replace(".txt",".png").replace("log", "plot")
+        plt.savefig(os.path.join(os.path.split(log_path)[0], plt_filename))
+    
+    return results
 
 #----------------------------------------------------------------------------
 # Train a 2D toy model with the given parameters.
@@ -323,11 +338,12 @@ def extract_loss_from_log(log_path):
 def do_train(
     classes='A', num_layers=4, hidden_dim=64, batch_size=4<<10, total_iter=4<<10, seed=0,
     P_mean=-2.3, P_std=1.5, sigma_data=0.5, lr_ref=1e-2, lr_iter=512, ema_std=0.010,
+    # guidance=3,
     pkl_pattern=None, pkl_iter=256, viz_iter=32,
     device=torch.device('cuda'),
     validation=False, val_batch_size=4<<7, sigma_max=5,
-    test_batch_size=4<<8,
-    acid=False, acid_n=16, acid_f=0.8, acid_diff=True, 
+    testing=False, test_batch_size=4<<8,
+    acid=False, acid_min=512, acid_delay=128, acid_iter=8, acid_n=16, acid_f=0.8, acid_diff=True, 
     viz_save=True, verbosity=0, log_filename=None,
 ):
 
@@ -341,9 +357,19 @@ def do_train(
 
     # Set random seed, if specified
     if seed is not None:
-        log.info("Seed %s", seed)
+        log.info("Seed = %s", seed)
         torch.manual_seed(seed)
         np.random.seed(seed)
+    
+    # Log ACID parameters
+    log.info("ACID = %s", acid)
+    if acid:
+        log.info("ACID's Min Iteration = %s", acid_min)
+        log.info("ACID's Iteration Delay = %s", acid_delay)
+        log.info("ACID's Iteration Period = %s", acid_iter)
+        log.info("ACID's Number of Chunks = %s", acid_n)
+        log.info("ACID's Filter Ratio = %s", acid_f)
+        log.info("ACID's Learnability = %s", acid_diff)
 
     # Basic configuration
     plotting_checkpoints = viz_iter is not None
@@ -397,15 +423,17 @@ def do_train(
         # Calculate overall loss
         if acid:
             indices = jointly_sample_batch(net_loss, ema_loss, 
-                                        n=acid_n, filter_ratio=acid_f,
-                                        learnability=acid_diff)
+                                           n=acid_n, filter_ratio=acid_f,
+                                           learnability=acid_diff)
             loss = net_loss[indices] # Use indices of the ACID mini-batch
+            log.warning("Using ACID")
+            log.info("Average Super-Batch Learner Loss = %s", float(net_loss.mean()))
+            log.info("Average Super-Batch Reference Loss = %s", float(ema_loss.mean()))
+
         else:
             loss = net_loss
 
         # Backpropagate either on the full batch or only on ACID mini-batch
-        log.info("Average Super-Batch Learner Loss = %s", float(net_loss.mean()))
-        if acid: log.info("Average Super-Batch Reference Loss = %s", float(ema_loss.mean()))
         log.info("Average Learner Loss = %s", float(loss.mean()))
         loss.mean().backward()
 
@@ -420,6 +448,7 @@ def do_train(
         # Evaluate loss function on validation batch
         if validation:
             val_samples = gt(classes, device).sample(val_batch_size, sigma_max)
+            # val_output_samples = do_sample(net=ema, x_init=val_samples, guidance=guidance, gnet=(bad or None), sigma_max=sigma_max)
 
             # Evaluate scores
             gt_val_scores = gt(classes, device).score(val_samples, sigma_max)
@@ -447,19 +476,20 @@ def do_train(
                 plt_path = plt_pattern % (iter_idx + 1)
                 plt.savefig(plt_path)
     
-    # Evaluate loss function on test data
-    test_samples = gt(classes, device).sample(test_batch_size, sigma_max)
+    if testing:
+        # Evaluate loss function on test data
+        test_samples = gt(classes, device).sample(test_batch_size, sigma_max)
 
-    # Evaluate scores
-    gt_test_scores = gt(classes, device).score(test_samples, sigma_max)
-    net_test_scores = net.score(test_samples, sigma_max, graph=True)
-    ema_test_scores = ema.score(test_samples, sigma_max, graph=True)
+        # Evaluate scores
+        gt_test_scores = gt(classes, device).score(test_samples, sigma_max)
+        net_test_scores = net.score(test_samples, sigma_max, graph=True)
+        ema_test_scores = ema.score(test_samples, sigma_max, graph=True)
 
-    # Evaluate loss
-    net_test_loss = (sigma_max ** 2) * ((gt_test_scores - net_test_scores) ** 2).mean(-1)
-    ema_test_loss = (sigma_max ** 2) * ((gt_test_scores - ema_test_scores) ** 2).mean(-1)
-    log.warning("Average Test Learner Loss = %s", float(net_test_loss.mean()))
-    log.warning("Average Test Reference Loss = %s", float(ema_test_loss.mean()))
+        # Evaluate loss
+        net_test_loss = (sigma_max ** 2) * ((gt_test_scores - net_test_scores) ** 2).mean(-1)
+        ema_test_loss = (sigma_max ** 2) * ((gt_test_scores - ema_test_scores) ** 2).mean(-1)
+        log.warning("Average Test Learner Loss = %s", float(net_test_loss.mean()))
+        log.warning("Average Test Reference Loss = %s", float(ema_test_loss.mean()))
 
     # Save and visualize last iteration
     if saving_checkpoints:
@@ -476,7 +506,7 @@ def do_train(
             plt_path = plt_pattern % (iter_idx + 1)
             plt.savefig(plt_path)
 
-    if logging_to_file and verbosity>=1: extract_loss_from_log(log_filename)
+    if logging_to_file and verbosity>=1: extract_loss_from_log(log_filename);
 
 #----------------------------------------------------------------------------
 # Simulate the EDM sampling ODE for the given set of initial sample points.
@@ -535,8 +565,6 @@ def do_plot(
             for i in range(1, len(samples)):
                 ok[i] = (samples[i] - samples[:i][ok[:i]]).square().sum(-1).sqrt().min() >= sample_distance
             samples = samples[ok]
-        log.info("Plot samples shape %s", samples.shape)
-        log.debug("First few samples %s", samples[:10])
 
     # Run sampler.
     if any(x.startswith(y) for x in elems for y in ['samples', 'trajectories']):
@@ -633,6 +661,7 @@ def cmdline():
 @click.option('--dim',    help='Hidden dimension', metavar='INT',     type=int, default=64, show_default=True)
 @click.option('--val/--no-val', help='Use validation?', metavar='BOOL', 
                                                                       type=bool, default=True, show_default=True)
+@click.option('--test/--no-test', help='Run test?', metavar='BOOL',   type=bool, default=True, show_default=True)
 @click.option('--acid/--no-acid',   
                           help='Use ACID batch selection?', metavar='BOOL', 
                                                                       type=bool, default=False, show_default=True)
@@ -649,7 +678,7 @@ def cmdline():
 @click.option('--logging', help='Log filename', metavar='DIR',        type=str, default=None)
 @click.option('--viz/--no-viz', help='Visualize progress?', metavar='BOOL', 
                                                                       type=bool, default=True, show_default=True)
-def train(outdir, cls, layers, dim, viz, val, acid, n, filt, diff, seed, verbose, debug, logging):
+def train(outdir, cls, layers, dim, viz, val, test, acid, n, filt, diff, seed, verbose, debug, logging):
     """Train a 2D toy model with the given parameters."""
     if debug: verbosity = 2
     elif verbose: verbosity = 1
@@ -660,7 +689,7 @@ def train(outdir, cls, layers, dim, viz, val, acid, n, filt, diff, seed, verbose
     viz_iter = 32 if viz else None
     log.info('Training...')
     do_train(pkl_pattern=pkl_pattern, classes=cls, num_layers=layers, hidden_dim=dim, viz_iter=viz_iter,
-             validation=val, acid=acid, acid_n=n, acid_f=filt, acid_diff=diff,
+             validation=val, testing=test, acid=acid, acid_n=n, acid_f=filt, acid_diff=diff,
              seed=seed, verbosity=verbosity, log_filename=logging)
     log.info('Done.')
 
