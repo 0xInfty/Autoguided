@@ -291,6 +291,7 @@ def extract_loss_from_log(log_path, plotting=True):
     mini_learner_loss = []
     learner_val_loss = []
     ref_val_loss = []
+    mse_val_loss = []
     with builtins.open(log_path, "r") as f:
         for line in f:
             if "Average Learner Loss" in line: mini_learner_loss.append(vtext.find_numbers(line)[-1])
@@ -298,6 +299,7 @@ def extract_loss_from_log(log_path, plotting=True):
             elif "Average Super-Batch Reference Loss" in line: ref_loss.append(vtext.find_numbers(line)[-1])
             elif "Average Validation Learner Loss" in line: learner_val_loss.append(vtext.find_numbers(line)[-1])
             elif "Average Validation Reference Loss" in line: ref_val_loss.append(vtext.find_numbers(line)[-1])
+            elif "Average Validation L2 Distance" in line: mse_val_loss.append(vtext.find_numbers(line)[-1])
             elif "Average Test Learner Loss" in line: learner_test_loss = vtext.find_numbers(line)[-1]
             elif "Average Test Reference Loss" in line: ref_test_loss = vtext.find_numbers(line)[-1]
     
@@ -305,25 +307,43 @@ def extract_loss_from_log(log_path, plotting=True):
                "ref_loss": ref_loss,
                "mini_learner_loss": mini_learner_loss,
                "learner_val_loss": learner_val_loss,
-               "ref_val_loss": ref_val_loss}
+               "ref_val_loss": ref_val_loss,
+               "mse_val_loss": mse_val_loss}
     try:
         results["learner_test_loss"] = learner_test_loss
         results["ref_test_loss"] = ref_test_loss
     except UnboundLocalError: pass
 
     if plotting:
-        plt.figure()
+        if len(ref_val_loss)>0 or len(mse_val_loss)>0: 
+            _, axes = plt.subplots(nrows=2, gridspec_kw=dict(hspace=0))
+            axes = [*axes, axes[-1].twinx()]
+        else:
+            _, ax = plt.subplots()
+            axes = [*ax, ax, ax.twinx()]
+        lines_up, lines_down = [], []
         if len(ref_loss)>0: 
-            plt.plot(ref_loss, "C3", label="Ref", alpha=0.8, linewidth=2)
-            plt.plot(learner_loss, "k", label="Learner", alpha=1, linewidth=0.5)
-        plt.plot(mini_learner_loss, "C0", label="Training", alpha=0.8)
+            l1, = axes[0].plot(ref_loss, "C3", label="Ref Loss", alpha=0.8, linewidth=2)
+            l2, = axes[0].plot(learner_loss, "k", label="Learner Loss", alpha=1, linewidth=0.5)
+            lines_up += [l1, l2]
+        l3, = axes[0].plot(mini_learner_loss, "C0", label="Training Loss", alpha=0.8)
+        lines_up.append(l3)
         if len(ref_val_loss)>0: 
-            plt.plot(ref_val_loss, "C2", label="Ref Validation", alpha=0.8, linewidth=2)
-            plt.plot(learner_val_loss, "k:", label="Learner Validation", alpha=1, linewidth=1)
-        plt.xlabel("Epoch")
-        plt.ylabel("Average Loss")
-        plt.grid()
-        plt.legend()
+            l4, = axes[1].plot(ref_val_loss, "C2", label="Ref Validation Loss", alpha=0.8, linewidth=2)
+            l5, = axes[1].plot(learner_val_loss, "k:", label="Learner Validation Loss", alpha=1, linewidth=1)
+            l6, = axes[2].plot(mse_val_loss, "m", label="L2 Validation Metric", alpha=0.6, linewidth=2)
+            lines_down = [l4, l5, l6]
+        axes[1].set_xlabel("Epoch")
+        axes[0].set_ylabel("Average Training Loss")
+        axes[1].set_ylabel("Average Validation Loss")
+        if "Average" in axes[2].get_ylabel():
+            axes[2].set_ylabel(axes[2].get_ylabel() + "& L2 Distance")
+        else:
+            axes[2].set_ylabel("Average Validation L2 Distance")
+        axes[0].grid()
+        axes[1].grid()
+        axes[0].legend(lines_up, [l.get_label() for l in lines_up])
+        axes[1].legend(lines_down, [l.get_label() for l in lines_down])
         plt.tight_layout()
 
         plt_filename = log_path.replace(".txt",".png").replace("log", "plot")
@@ -443,8 +463,10 @@ def do_train(
         for p_net, p_ema in zip(net.parameters(), ema.parameters()):
             p_ema.lerp_(p_net.detach(), 1 - beta)
 
-        # Evaluate loss function on validation batch
+        # Evaluate L2 metric on validation batch
         if validation:
+
+            # Sample from Gaussian distribution
             val_samples = gt(classes, device).sample(val_batch_size, sigma_max, generator=generator)
 
             # Evaluate scores
@@ -459,14 +481,10 @@ def do_train(
             log.info("Average Validation Reference Loss = %s", float(ema_val_loss.mean()))
 
             # Create full samples using net for guidance
-            val_output_samples = do_sample(net=ema, x_init=val_samples, guidance=guidance, 
-                                           gnet=net, sigma_max=sigma_max)[-1]
-            val_output_samples_0 = do_sample(net=ema, x_init=val_samples, guidance=0, 
-                                             gnet=net, sigma_max=sigma_max)[-1]
-            log.info("Average Validation MSE = %s", 
-                     float(torch.sqrt(((val_output_samples - val_output_samples_0) ** 2).sum(-1)).mean()))
-            #Q: Should I be using a different network instead? 
-            #   Maybe run once for a certain number of iterations and load that model for this instead
+            ema_val_outputs = do_sample(net=ema, x_init=val_samples, guidance=0, sigma_max=sigma_max)[-1]
+            gt_val_outputs = do_sample(net=gt(classes, device), x_init=val_samples, guidance=0, sigma_max=sigma_max)[-1]
+            log.info("Average Validation L2 Distance = %s", 
+                     float(torch.sqrt(((ema_val_outputs - gt_val_outputs) ** 2).sum(-1)).mean()))
 
         # Visualize resulting sample distribution.
         if plotting_checkpoints and iter_idx % viz_iter == 0:
@@ -483,8 +501,10 @@ def do_train(
                 plt_path = plt_pattern % (iter_idx + 1)
                 plt.savefig(plt_path)
     
+    # Evaluate L2 metric on test data
     if testing:
-        # Evaluate loss function on test data
+        
+        # Sample from Gaussian distribution
         test_samples = gt(classes, device).sample(test_batch_size, sigma_max, generator=generator)
 
         # Evaluate scores
@@ -499,12 +519,10 @@ def do_train(
         log.warning("Average Test Reference Loss = %s", float(ema_test_loss.mean()))
 
         # Create full samples using net for guidance
-        test_output_samples = do_sample(net=ema, x_init=test_samples, guidance=guidance, 
-                                        gnet=net, sigma_max=sigma_max)[-1]
-        test_output_samples_0 = do_sample(net=ema, x_init=test_samples, guidance=0, 
-                                          gnet=net, sigma_max=sigma_max)[-1]
-        log.info("Average Test MSE = %s", 
-                float(torch.sqrt(((test_output_samples - test_output_samples_0) ** 2).sum(-1)).mean()))
+        ema_test_outputs = do_sample(net=ema, x_init=test_samples, guidance=0, sigma_max=sigma_max)[-1]
+        gt_test_outputs = do_sample(net=gt(classes, device), x_init=test_samples, guidance=0, sigma_max=sigma_max)[-1]
+        log.info("Average Validation L2 Distance = %s", 
+                 float(torch.sqrt(((ema_test_outputs - gt_test_outputs) ** 2).sum(-1)).mean()))
 
     # Save and visualize last iteration
     if saving_checkpoints:
