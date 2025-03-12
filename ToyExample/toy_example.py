@@ -291,7 +291,8 @@ def extract_loss_from_log(log_path, plotting=True):
     mini_learner_loss = []
     learner_val_loss = []
     ref_val_loss = []
-    mse_val_loss = []
+    l2_val_metric = []
+    guided_L2_val_metric = []
     with builtins.open(log_path, "r") as f:
         for line in f:
             if "Average Learner Loss" in line: mini_learner_loss.append(vtext.find_numbers(line)[-1])
@@ -299,23 +300,29 @@ def extract_loss_from_log(log_path, plotting=True):
             elif "Average Super-Batch Reference Loss" in line: ref_loss.append(vtext.find_numbers(line)[-1])
             elif "Average Validation Learner Loss" in line: learner_val_loss.append(vtext.find_numbers(line)[-1])
             elif "Average Validation Reference Loss" in line: ref_val_loss.append(vtext.find_numbers(line)[-1])
-            elif "Average Validation L2 Distance" in line: mse_val_loss.append(vtext.find_numbers(line)[-1])
+            elif "Average Validation L2 Distance With Guidance" in line: guided_L2_val_metric.append(vtext.find_numbers(line)[-1])
+            elif "Average Validation L2 Distance" in line: l2_val_metric.append(vtext.find_numbers(line)[-1])
             elif "Average Test Learner Loss" in line: learner_test_loss = vtext.find_numbers(line)[-1]
             elif "Average Test Reference Loss" in line: ref_test_loss = vtext.find_numbers(line)[-1]
+            elif "Average Test L2 Distance With Guidance" in line: guided_L2_test_metric = vtext.find_numbers(line)[-1]
+            elif "Average Test L2 Distance" in line: l2_test_metric = vtext.find_numbers(line)[-1]
     
     results = {"learner_loss": learner_loss,
                "ref_loss": ref_loss,
                "mini_learner_loss": mini_learner_loss,
                "learner_val_loss": learner_val_loss,
                "ref_val_loss": ref_val_loss,
-               "mse_val_loss": mse_val_loss}
+               "l2_val_metric": l2_val_metric,
+               "guided_L2_val_metric": guided_L2_val_metric}
     try:
         results["learner_test_loss"] = learner_test_loss
         results["ref_test_loss"] = ref_test_loss
+        results["l2_test_metric"] = l2_test_metric
+        results["guided_L2_test_metric"] = guided_L2_test_metric
     except UnboundLocalError: pass
 
     if plotting:
-        if len(ref_val_loss)>0 or len(mse_val_loss)>0: 
+        if len(ref_val_loss)>0 or len(l2_val_metric)>0: 
             _, axes = plt.subplots(nrows=2, gridspec_kw=dict(hspace=0))
             axes = [*axes, axes[-1].twinx()]
         else:
@@ -331,8 +338,9 @@ def extract_loss_from_log(log_path, plotting=True):
         if len(ref_val_loss)>0: 
             l4, = axes[1].plot(ref_val_loss, "C2", label="Ref Validation Loss", alpha=0.8, linewidth=2)
             l5, = axes[1].plot(learner_val_loss, "k:", label="Learner Validation Loss", alpha=1, linewidth=1)
-            l6, = axes[2].plot(mse_val_loss, "m", label="L2 Validation Metric", alpha=0.6, linewidth=2)
-            lines_down = [l4, l5, l6]
+            l6, = axes[2].plot(l2_val_metric, "m", label="L2 Validation Metric", alpha=0.6, linewidth=2)
+            l7, = axes[2].plot(guided_L2_val_metric, "b:", label="Guided L2 Validation Metric", alpha=1, linewidth=1)
+            lines_down = [l4, l5, l6, l7]
         axes[1].set_xlabel("Epoch")
         axes[0].set_ylabel("Average Training Loss")
         axes[1].set_ylabel("Average Validation Loss")
@@ -414,6 +422,13 @@ def do_train(
             with builtins.open(guide_path, "rb") as f:
                 guide = pickle.load(f).to(device)
             log.warning("Guide model loaded from %s", guide_path)
+            # Set up the logger
+            log_level = logs.get_log_level(verbosity)
+            logging_to_file = log_filename is not None
+            if logging_to_file:
+                logs.set_log_file(log, log_filename)
+                logs.set_log_format(log, color=False)
+            logs.set_log_level(log_level, log)
         else:
             raise ValueError("No guide model checkpoint path specified")
     if guidance and acid:
@@ -500,7 +515,11 @@ def do_train(
             gt_val_outputs = do_sample(net=gt(classes, device), x_init=val_samples, guidance=0, sigma_max=sigma_max)[-1]
             log.info("Average Validation L2 Distance = %s", 
                      float(torch.sqrt(((ema_val_outputs - gt_val_outputs) ** 2).sum(-1)).mean()))
-
+            if guidance:
+                guided_val_outputs = do_sample(net=ema, x_init=val_samples, guidance=3, gnet=guide, sigma_max=sigma_max)[-1]
+                log.info("Average Validation L2 Distance With Guidance = %s", 
+                         float(torch.sqrt(((guided_val_outputs - gt_val_outputs) ** 2).sum(-1)).mean()))
+                
         # Visualize resulting sample distribution.
         if plotting_checkpoints and iter_idx % viz_iter == 0:
             for x in plt.gca().lines: x.remove()
@@ -537,7 +556,11 @@ def do_train(
         ema_test_outputs = do_sample(net=ema, x_init=test_samples, guidance=0, sigma_max=sigma_max)[-1]
         gt_test_outputs = do_sample(net=gt(classes, device), x_init=test_samples, guidance=0, sigma_max=sigma_max)[-1]
         log.info("Average Test L2 Distance = %s", 
-                 float(torch.sqrt(((ema_test_outputs - gt_test_outputs) ** 2).sum(-1)).mean()))
+                 float(torch.sqrt(((ema_test_outputs - gt_test_outputs) ** 2).sum(-1)).mean()))        
+        if guidance:
+            guided_test_outputs = do_sample(net=ema, x_init=test_samples, guidance=3, gnet=guide, sigma_max=sigma_max)[-1]
+            log.info("Average Test L2 Distance With Guidance = %s", 
+                        float(torch.sqrt(((guided_test_outputs - gt_val_outputs) ** 2).sum(-1)).mean()))
 
     # Save and visualize last iteration
     if saving_checkpoints:
