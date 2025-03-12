@@ -521,7 +521,7 @@ def do_train(
         # Create full samples using net for guidance
         ema_test_outputs = do_sample(net=ema, x_init=test_samples, guidance=0, sigma_max=sigma_max)[-1]
         gt_test_outputs = do_sample(net=gt(classes, device), x_init=test_samples, guidance=0, sigma_max=sigma_max)[-1]
-        log.info("Average Validation L2 Distance = %s", 
+        log.info("Average Test L2 Distance = %s", 
                  float(torch.sqrt(((ema_test_outputs - gt_test_outputs) ** 2).sum(-1)).mean()))
 
     # Save and visualize last iteration
