@@ -358,13 +358,14 @@ def extract_loss_from_log(log_path, plotting=True):
 def do_train(
     classes='A', num_layers=4, hidden_dim=64, batch_size=4<<10, total_iter=4<<10, seed=0,
     P_mean=-2.3, P_std=1.5, sigma_data=0.5, lr_ref=1e-2, lr_iter=512, ema_std=0.010,
-    guidance=3,
-    pkl_pattern=None, pkl_iter=256, viz_iter=32,
-    device=torch.device('cuda'),
+    guidance=False, guidance_weight=3, guide_path=None,
     validation=False, val_batch_size=4<<7, sigma_max=5,
     testing=False, test_batch_size=4<<8,
     acid=False, acid_n=16, acid_f=0.8, acid_diff=True, 
-    viz_save=True, verbosity=0, log_filename=None,
+    device=torch.device('cuda'),
+    pkl_pattern=None, pkl_iter=256, 
+    viz_iter=32, viz_save=True, 
+    verbosity=0, log_filename=None,
 ):
 
     # Set up the logger
@@ -402,10 +403,25 @@ def do_train(
         if saving_checkpoint_plots:
             log.warning(f'Will save snapshots to {os.path.split(plt_pattern)[0]}')
 
-    # Initialize model.
+    # Initialize models
     net = ToyModel(num_layers=num_layers, hidden_dim=hidden_dim, sigma_data=sigma_data).to(device).train().requires_grad_(True)
     ema = copy.deepcopy(net).eval().requires_grad_(False)
     opt = torch.optim.Adam(net.parameters(), betas=(0.9, 0.99))
+    log.info("Guidance = %s", guidance)
+    if guidance:
+        log.info("Guidance weight = %s", guidance_weight)
+        if guide_path is not None:
+            with builtins.open(guide_path, "rb") as f:
+                guide = pickle.load(f).to(device)
+            log.warning("Guide model loaded from %s", guide_path)
+        else:
+            raise ValueError("No guide model checkpoint path specified")
+    if guidance and acid:
+        ref = guide
+        log.warning("Guide model assigned as ACID reference")
+    elif acid: 
+        ref = ema
+        log.warning("EMA assigned as ACID reference")
 
     # Initialize plot.
     if viz_iter is not None:
@@ -432,22 +448,21 @@ def do_train(
         samples = gt(classes, device).sample(batch_size, sigma) #Q: Why do they redefine the Gaussian mixture distribution twice on each iteration?
         gt_scores = gt(classes, device).score(samples, sigma)
         net_scores = net.score(samples, sigma, graph=True)
-        if acid: ema_scores = ema.score(samples, sigma, graph=True)
+        if acid: ref_scores = ref.score(samples, sigma, graph=True)
 
         # Calculate teacher and student loss
         net_loss = (sigma ** 2) * ((gt_scores - net_scores) ** 2).mean(-1)
-        if acid: ema_loss = (sigma ** 2) * ((gt_scores - ema_scores) ** 2).mean(-1)
+        if acid: ref_loss = (sigma ** 2) * ((gt_scores - ref_scores) ** 2).mean(-1)
 
         # Calculate overall loss
         if acid:
-            indices = jointly_sample_batch(net_loss, ema_loss, 
+            indices = jointly_sample_batch(net_loss, ref_loss, 
                                            n=acid_n, filter_ratio=acid_f,
                                            learnability=acid_diff)
             loss = net_loss[indices] # Use indices of the ACID mini-batch
             log.warning("Using ACID")
             log.info("Average Super-Batch Learner Loss = %s", float(net_loss.mean()))
-            log.info("Average Super-Batch Reference Loss = %s", float(ema_loss.mean()))
-
+            log.info("Average Super-Batch Reference Loss = %s", float(ref_loss.mean()))
         else:
             loss = net_loss
 
@@ -692,9 +707,15 @@ def cmdline():
 @click.option('--cls',    help='Target classes', metavar='A|B|AB',    type=str, default='A', show_default=True)
 @click.option('--layers', help='Number of layers', metavar='INT',     type=int, default=4, show_default=True)
 @click.option('--dim',    help='Hidden dimension', metavar='INT',     type=int, default=64, show_default=True)
+@click.option('--total-iter', help='Number of training iterations', metavar='INT', 
+                                                                      type=int, default=4096, show_default=True)
 @click.option('--val/--no-val', help='Use validation?', metavar='BOOL', 
                                                                       type=bool, default=True, show_default=True)
 @click.option('--test/--no-test', help='Run test?', metavar='BOOL',   type=bool, default=True, show_default=True)
+@click.option('--guidance/--no-guidance', help='Use auto-guidance?', metavar='BOOL', 
+                                                                      type=bool, default=False, show_default=True)
+@click.option('--guide-path', help='Use auto-guidance?', metavar='PATH', 
+                                                                      type=str, default=None, show_default=True)
 @click.option('--acid/--no-acid',   
                           help='Use ACID batch selection?', metavar='BOOL', 
                                                                       type=bool, default=False, show_default=True)
@@ -711,19 +732,26 @@ def cmdline():
 @click.option('--logging', help='Log filename', metavar='DIR',        type=str, default=None)
 @click.option('--viz/--no-viz', help='Visualize progress?', metavar='BOOL', 
                                                                       type=bool, default=True, show_default=True)
-def train(outdir, cls, layers, dim, viz, val, test, acid, n, filt, diff, seed, verbose, debug, logging):
+def train(outdir, cls, layers, dim, total_iter, val, test, viz, 
+          guidance, guide_path, acid, n, filt, diff, seed, verbose, debug, logging):
     """Train a 2D toy model with the given parameters."""
     if debug: verbosity = 2
     elif verbose: verbosity = 1
     else: verbosity = 0
     if outdir is not None:
         outdir = os.path.join(dirs.MODELS_HOME, outdir)
+    if guide_path is not None:
+        guide_path = os.path.join(dirs.MODELS_HOME, guide_path)
     pkl_pattern = f'{outdir}/iter%04d.pkl' if outdir is not None else None
     viz_iter = 32 if viz else None
     log.info('Training...')
-    do_train(pkl_pattern=pkl_pattern, classes=cls, num_layers=layers, hidden_dim=dim, viz_iter=viz_iter,
-             validation=val, testing=test, acid=acid, acid_n=n, acid_f=filt, acid_diff=diff,
-             seed=seed, verbosity=verbosity, log_filename=logging)
+    do_train(classes=cls, num_layers=layers, hidden_dim=dim, total_iter=total_iter, seed=seed, 
+             validation=val, testing=test, 
+             guidance=guidance, guide_path=guide_path, 
+             acid=acid, acid_n=n, acid_f=filt, acid_diff=diff,
+             pkl_pattern=pkl_pattern, 
+             viz_iter=viz_iter,
+             verbosity=verbosity, log_filename=logging)
     log.info('Done.')
 
 #----------------------------------------------------------------------------
