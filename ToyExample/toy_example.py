@@ -377,12 +377,15 @@ def do_train(
 ):
 
     # Set up the logger
-    log_level = logs.get_log_level(verbosity)
+    def set_up_logger(verbosity, log_filename=None):
+        log_level = logs.get_log_level(verbosity)
+        logging_to_file = log_filename is not None
+        if logging_to_file:
+            logs.set_log_file(log, log_filename)
+            logs.set_log_format(log, color=False)
+        logs.set_log_level(log_level, log)
+    set_up_logger(verbosity, log_filename)
     logging_to_file = log_filename is not None
-    if logging_to_file:
-        logs.set_log_file(log, log_filename)
-        logs.set_log_format(log, color=False)
-    logs.set_log_level(log_level, log)
 
     # Set random seed, if specified
     if seed is not None:
@@ -421,14 +424,8 @@ def do_train(
         if guide_path is not None:
             with builtins.open(guide_path, "rb") as f:
                 guide = pickle.load(f).to(device)
+            set_up_logger(verbosity, log_filename) # No idea why, but builtins.open or pickle.load break the logger's setup
             log.warning("Guide model loaded from %s", guide_path)
-            # Set up the logger
-            log_level = logs.get_log_level(verbosity)
-            logging_to_file = log_filename is not None
-            if logging_to_file:
-                logs.set_log_file(log, log_filename)
-                logs.set_log_format(log, color=False)
-            logs.set_log_level(log_level, log)
         else:
             raise ValueError("No guide model checkpoint path specified")
     if guidance and acid:
@@ -466,18 +463,19 @@ def do_train(
         if acid: ref_scores = ref.score(samples, sigma, graph=True)
 
         # Calculate teacher and student loss
+        # if acid and guidance: net_scores = guide.score(samples, sigma).lerp(net_scores, guidance_weight)
         net_loss = (sigma ** 2) * ((gt_scores - net_scores) ** 2).mean(-1)
         if acid: ref_loss = (sigma ** 2) * ((gt_scores - ref_scores) ** 2).mean(-1)
 
         # Calculate overall loss
         if acid:
+            log.warning("Using ACID")
+            log.info("Average Super-Batch Learner Loss = %s", float(net_loss.mean()))
+            log.info("Average Super-Batch Reference Loss = %s", float(ref_loss.mean()))
             indices = jointly_sample_batch(net_loss, ref_loss, 
                                            n=acid_n, filter_ratio=acid_f,
                                            learnability=acid_diff)
             loss = net_loss[indices] # Use indices of the ACID mini-batch
-            log.warning("Using ACID")
-            log.info("Average Super-Batch Learner Loss = %s", float(net_loss.mean()))
-            log.info("Average Super-Batch Reference Loss = %s", float(ref_loss.mean()))
         else:
             loss = net_loss
 
@@ -613,7 +611,7 @@ def do_sample(net, x_init, guidance=1, gnet=None, num_steps=32, sigma_min=0.002,
         # Record trajectory.
         x_cur = x_next
         trajectory.append(x_cur)
-    return torch.stack(trajectory)
+    return torch.stack(trajectory) # From sigma_max (random noise), to 0 (data distribution)
 
 #----------------------------------------------------------------------------
 # Draw the given set of plot elements using matplotlib.
