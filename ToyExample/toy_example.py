@@ -339,8 +339,10 @@ def extract_loss_from_log(log_path, plotting=True):
             l4, = axes[1].plot(ref_val_loss, "C2", label="Ref Validation Loss", alpha=0.8, linewidth=2)
             l5, = axes[1].plot(learner_val_loss, "k:", label="Learner Validation Loss", alpha=1, linewidth=1)
             l6, = axes[2].plot(l2_val_metric, "m", label="L2 Validation Metric", alpha=0.6, linewidth=2)
+            lines_down += [l4, l5, l6]
+        if len(guided_L2_val_metric)>0:
             l7, = axes[2].plot(guided_L2_val_metric, "b:", label="Guided L2 Validation Metric", alpha=1, linewidth=1)
-            lines_down = [l4, l5, l6, l7]
+            lines_down.append(l7)
         axes[1].set_xlabel("Epoch")
         axes[0].set_ylabel("Average Training Loss")
         axes[1].set_ylabel("Average Validation Loss")
@@ -460,7 +462,7 @@ def do_train(
         samples = gt(classes, device).sample(batch_size, sigma) #Q: Why do they redefine the Gaussian mixture distribution twice on each iteration?
         gt_scores = gt(classes, device).score(samples, sigma)
         net_scores = net.score(samples, sigma, graph=True)
-        if acid: ref_scores = ref.score(samples, sigma, graph=True)
+        if acid: ref_scores = ref.score(samples, sigma)
 
         # Calculate teacher and student loss
         # if acid and guidance: net_scores = guide.score(samples, sigma).lerp(net_scores, guidance_weight)
@@ -499,8 +501,8 @@ def do_train(
 
             # Evaluate scores
             gt_val_scores = gt(classes, device).score(val_samples, sigma_max)
-            net_val_scores = net.score(val_samples, sigma_max, graph=True)
-            ema_val_scores = ema.score(val_samples, sigma_max, graph=True)
+            net_val_scores = net.score(val_samples, sigma_max)
+            ema_val_scores = ema.score(val_samples, sigma_max)
 
             # Evaluate loss
             net_val_loss = (sigma_max ** 2) * ((gt_val_scores - net_val_scores) ** 2).mean(-1)
@@ -514,7 +516,8 @@ def do_train(
             log.info("Average Validation L2 Distance = %s", 
                      float(torch.sqrt(((ema_val_outputs - gt_val_outputs) ** 2).sum(-1)).mean()))
             if guidance:
-                guided_val_outputs = do_sample(net=ema, x_init=val_samples, guidance=3, gnet=guide, sigma_max=sigma_max)[-1]
+                guided_val_outputs = do_sample(net=ema, x_init=val_samples, 
+                                               guidance=guidance_weight, gnet=guide, sigma_max=sigma_max)[-1]
                 log.info("Average Validation L2 Distance With Guidance = %s", 
                          float(torch.sqrt(((guided_val_outputs - gt_val_outputs) ** 2).sum(-1)).mean()))
                 
@@ -541,8 +544,8 @@ def do_train(
 
         # Evaluate scores
         gt_test_scores = gt(classes, device).score(test_samples, sigma_max)
-        net_test_scores = net.score(test_samples, sigma_max, graph=True)
-        ema_test_scores = ema.score(test_samples, sigma_max, graph=True)
+        net_test_scores = net.score(test_samples, sigma_max)
+        ema_test_scores = ema.score(test_samples, sigma_max)
 
         # Evaluate loss
         net_test_loss = (sigma_max ** 2) * ((gt_test_scores - net_test_scores) ** 2).mean(-1)
@@ -556,7 +559,8 @@ def do_train(
         log.info("Average Test L2 Distance = %s", 
                  float(torch.sqrt(((ema_test_outputs - gt_test_outputs) ** 2).sum(-1)).mean()))        
         if guidance:
-            guided_test_outputs = do_sample(net=ema, x_init=test_samples, guidance=3, gnet=guide, sigma_max=sigma_max)[-1]
+            guided_test_outputs = do_sample(net=ema, x_init=test_samples, 
+                                            guidance=guidance_weight, gnet=guide, sigma_max=sigma_max)[-1]
             log.info("Average Test L2 Distance With Guidance = %s", 
                         float(torch.sqrt(((guided_test_outputs - gt_val_outputs) ** 2).sum(-1)).mean()))
 
