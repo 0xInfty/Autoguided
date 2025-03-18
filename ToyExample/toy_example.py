@@ -286,7 +286,7 @@ def jointly_sample_batch(learner_loss, ref_loss, n=16, filter_ratio=0.8,
 #----------------------------------------------------------------------------
 # Custom helper functions
 
-def extract_loss_from_log(log_path, plotting=True):
+def extract_results_from_log(log_path):
 
     super_learner_loss = []
     super_ref_loss = []
@@ -358,60 +358,69 @@ def extract_loss_from_log(log_path, plotting=True):
         except UnboundLocalError: pass
     except UnboundLocalError: pass
 
-    if plotting:
-        if len(ref_val_loss)>0 or len(L2_val_metric)>0: 
-            _, axes = plt.subplots(nrows=2, gridspec_kw=dict(hspace=0))
-            axes = [*axes, axes[-1].twinx()]
-        else:
-            _, ax = plt.subplots()
-            axes = [*ax, ax, ax.twinx()]
-        lines_up, lines_down = [], []
-        l1, = axes[0].plot(learner_loss, "C0", label="Training Loss", alpha=0.8, linewidth=2)
+    return results
+
+def plot_loss(loss_dict, fig_path=None):
+
+    if fig_path is not None:
+        fig_path_base, fig_extension = os.path.splitext(fig_path)
+
+    super_learner_loss = loss_dict["super_learner_loss"]
+    super_ref_loss = loss_dict["super_ref_loss"]
+    learner_loss = loss_dict["learner_loss"]
+    learner_val_loss = loss_dict["learner_val_loss"]
+    ema_val_loss = loss_dict["ema_val_loss"]
+    guide_val_loss = loss_dict["guide_val_loss"]
+    ref_val_loss = loss_dict["ref_val_loss"]
+    ema_L2_val_metric = loss_dict["ema_L2_val_metric"]
+    ema_guided_L2_val_metric = loss_dict["ema_guided_L2_val_metric"]
+    L2_val_metric = loss_dict["L2_val_metric"]
+    guided_L2_val_metric = loss_dict["guided_L2_val_metric"]
+
+    # Basic plot
+    def plot_training_loss():
+        fig, axes = plt.subplots(nrows=2, gridspec_kw=dict(hspace=0))
+        axes[0].plot(learner_loss, "C0", label="Training Loss", alpha=0.8, linewidth=2)
         if len(super_ref_loss)>0: 
-            l2, = axes[0].plot(super_ref_loss, "C3", label="ACID Ref Loss", alpha=1, linewidth=1)
-            l3, = axes[0].plot(super_learner_loss, "k", label="ACID Learner Loss", alpha=1, linewidth=0.5)
-            lines_up += [l2, l3]
-        lines_up.append(l1)
-        if len(learner_val_loss)>0:
-            if len(ref_val_loss)>0:
-                l4, = axes[1].plot(ref_val_loss, "C3", label="Ref Val Loss", alpha=1, linewidth=1)
-                lines_down.append(l4)
-            l5, = axes[1].plot(learner_val_loss, "k", label="Learner Val Loss", alpha=1.0, linewidth=0.5)
-            lines_down.append(l5)
-            l6, = axes[1].plot(ema_val_loss, color="m", label="EMA Val Loss", alpha=0.5, linewidth=2)
-            lines_down.append(l6)
-            if len(guide_val_loss)>0:
-                l7, = axes[1].plot(guide_val_loss, color="c", label="Guide Val Loss", alpha=0.8, linewidth=1)
-                lines_down.append(l7)
-            l8, = axes[2].plot(ema_L2_val_metric, "--", color="navy", label="EMA L2 Val Metric", alpha=1, linewidth=1)
-            lines_down.append(l8)
-            if len(ema_guided_L2_val_metric)>0:
-                l9, = axes[2].plot(ema_guided_L2_val_metric, "--", color="deeppink", label="Guided EMA L2 Val Metric", alpha=1, linewidth=1)
-                lines_down.append(l9)
-            if len(L2_val_metric)>0:
-                l8_2, = axes[2].plot(L2_val_metric, "-", color="blue", label="Learner L2 Val Metric", alpha=0.5, linewidth=3)
-                lines_down.append(l8_2)
-            if len(guided_L2_val_metric)>0:
-                l9_2, = axes[2].plot(guided_L2_val_metric, "-", color="mediumvioletred", label="Guided Learner L2 Val Metric", 
-                                     alpha=0.5, linewidth=3)
-                lines_down.append(l9_2)
+            axes[0].plot(super_ref_loss, "C3", label="ACID Ref Loss", alpha=1, linewidth=1)
+            axes[0].plot(super_learner_loss, "k", label="ACID Learner Loss", alpha=1, linewidth=0.5)
         axes[1].set_xlabel("Epoch")
         axes[0].set_ylabel("Average Training Loss")
-        axes[1].set_ylabel("Average Validation Loss")
-        if "Average" in axes[2].get_ylabel():
-            axes[2].set_ylabel(axes[2].get_ylabel() + "& L2 Distance")
-        else:
-            axes[2].set_ylabel("Average Validation L2 Distance")
-        axes[0].grid()
-        axes[1].grid()
-        axes[0].legend(lines_up, [l.get_label() for l in lines_up])
-        axes[1].legend(lines_down, [l.get_label() for l in lines_down])
-        plt.tight_layout()
-
-        plt_filename = log_path.replace(".txt",".png").replace("log", "plot")
-        plt.savefig(os.path.join(os.path.split(log_path)[0], plt_filename))
+        axes[0].legend()
+        for ax in axes: ax.grid()
+        return fig, axes
     
-    return results
+    # First, plot validation loss values
+    fig_1, axes_1 = plot_training_loss()
+    if len(learner_val_loss)>0:
+        if len(ref_val_loss)>0:
+            axes_1[1].plot(ref_val_loss, "C3", label="Ref Val Loss", alpha=1, linewidth=0.5)
+        axes_1[1].plot(learner_val_loss, "k", label="Learner Val Loss", alpha=1.0, linewidth=0.5)
+        axes_1[1].plot(ema_val_loss, color="m", label="EMA Val Loss", alpha=0.35, linewidth=3)
+        if len(guide_val_loss)>0:
+            axes_1[1].plot(guide_val_loss, color="r", label="Guide Val Loss", alpha=0.25, linewidth=2)
+    axes_1[1].set_ylabel("Average Validation Loss")
+    axes_1[1].legend()
+    plt.tight_layout()
+    plt.savefig(fig_path_base+"_1"+fig_extension)
+        
+    # Then, plot validation loss values
+    fig_2, axes_2 = plot_training_loss()
+    if len(learner_val_loss)>0:
+        axes_2[1].plot(ema_L2_val_metric, "-.", color="navy", label="EMA L2 Val Metric", alpha=1, linewidth=1)
+        if len(L2_val_metric)>0:
+            axes_2[1].plot(L2_val_metric, "-", color="blue", label="Learner L2 Val Metric", alpha=0.35, linewidth=3)
+        if len(ema_guided_L2_val_metric)>0:
+            axes_2[1].plot(ema_guided_L2_val_metric, "--", color="deeppink", label="Guided EMA L2 Val Metric", alpha=1, linewidth=1)
+        if len(guided_L2_val_metric)>0:
+            axes_2[1].plot(guided_L2_val_metric, "-", color="mediumvioletred", label="Guided Learner L2 Val Metric", 
+                           alpha=0.35, linewidth=3)
+    axes_2[1].set_ylabel("Average Validation L2 Distance")
+    axes_2[1].legend()
+    plt.tight_layout()
+    plt.savefig(fig_path_base+"_2"+fig_extension)
+    
+    return fig_1, fig_2
 
 #----------------------------------------------------------------------------
 # Train a 2D toy model with the given parameters.
@@ -687,7 +696,7 @@ def do_train(
             plt_path = plt_pattern % (iter_idx + 1)
             plt.savefig(plt_path)
 
-    if logging_to_file and verbosity>=1: extract_loss_from_log(log_filename);
+    if logging_to_file and verbosity>=1: extract_results_from_log(log_filename);
 
 #----------------------------------------------------------------------------
 # Simulate the EDM sampling ODE for the given set of initial sample points.
