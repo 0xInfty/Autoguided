@@ -644,7 +644,7 @@ def do_train(
         if guidance: 
             guide_test_loss = (test_sigma ** 2) * ((gt_test_scores - guide_test_scores) ** 2).mean(-1)
             log.warning("Average Test Guide Loss = %s", float(guide_test_loss.mean()))
-            if acid: log.info("Average Test ACID Reference Loss = %s", float(guide_test_loss.mean()))
+            if acid: log.warning("Average Test ACID Reference Loss = %s", float(guide_test_loss.mean()))
         elif acid:
             log.warning("Average Test ACID Reference Loss = %s", float(ema_val_loss.mean()))
 
