@@ -301,15 +301,14 @@ def do_train(
 ):
 
     # Set up the logger
+    logging_to_file = log_filename is not None
     def set_up_logger(verbosity, log_filename=None):
         log_level = logs.get_log_level(verbosity)
-        logging_to_file = log_filename is not None
         if logging_to_file:
             logs.set_log_file(log, log_filename)
             logs.set_log_format(log, color=False)
         logs.set_log_level(log_level, log)
     set_up_logger(verbosity, log_filename)
-    logging_to_file = log_filename is not None
 
     # Set random seed, if specified
     if seed is not None:
@@ -440,20 +439,17 @@ def do_train(
                 generator=generator, device=device)
 
             # Log validation loss
-            log.warning("Average Validation Learner Loss = %s", val_results["learner_loss"])
-            log.warning("Average Validation EMA Loss = %s", val_results["ema_loss"])
-            if guidance: 
-                log.warning("Average Validation Guide Loss = %s", val_results["guide_loss"])
-            if acid: 
-                log.warning("Average Validation ACID Reference Loss = %s", val_results["ref_loss"])
+            log.info("Average Validation Learner Loss = %s", val_results["learner_loss"])
+            log.info("Average Validation EMA Loss = %s", val_results["ema_loss"])
+            if guidance: log.info("Average Validation Guide Loss = %s", val_results["guide_loss"])
+            if acid: log.info("Average Validation ACID Reference Loss = %s", val_results["ref_loss"])
 
             # Log validation L2 metric
-            log.warning("Average Validation EMA L2 Distance = %s", val_results["ema_L2_metric"])
+            log.info("Average Validation Learner L2 Distance = %s", val_results["learner_L2_metric"])
+            log.info("Average Validation EMA L2 Distance = %s", val_results["ema_L2_metric"])
             if guidance:
-                log.warning("Average Validation Guided EMA L2 Distance = %s", val_results["ema_guided_L2_metric"])
-            log.warning("Average Validation Learner L2 Distance = %s", val_results["learner_L2_metric"])
-            if guidance:
-                log.warning("Average Validation Guided Learner L2 Distance = %s", val_results["learner_guided_L2_metric"])
+                log.info("Average Validation Guided Learner L2 Distance = %s", val_results["learner_guided_L2_metric"])
+                log.info("Average Validation Guided EMA L2 Distance = %s", val_results["ema_guided_L2_metric"])
 
         # Visualize resulting sample distribution.
         if plotting_checkpoints and iter_idx % viz_iter == 0:
@@ -481,18 +477,15 @@ def do_train(
         # Log test loss
         log.warning("Average Test Learner Loss = %s", test_results["learner_loss"])
         log.warning("Average Test EMA Loss = %s", test_results["ema_loss"])
-        if guidance: 
-            log.warning("Average Test Guide Loss = %s", test_results["guide_loss"])
-        if acid: 
-            log.warning("Average Test ACID Reference Loss = %s", test_results["ref_loss"])
+        if guidance: log.warning("Average Test Guide Loss = %s", test_results["guide_loss"])
+        if acid: log.warning("Average Test ACID Reference Loss = %s", test_results["ref_loss"])
 
         # Log test L2 metric
+        log.warning("Average Test Learner L2 Distance = %s", test_results["learner_L2_metric"])
         log.warning("Average Test EMA L2 Distance = %s", test_results["ema_L2_metric"])
         if guidance:
-            log.warning("Average Test Guided EMA L2 Distance = %s", test_results["ema_guided_L2_metric"])
-        log.warning("Average Test Learner L2 Distance = %s", test_results["learner_L2_metric"])
-        if guidance:
             log.warning("Average Test Guided Learner L2 Distance = %s", test_results["learner_guided_L2_metric"])
+            log.warning("Average Test Guided EMA L2 Distance = %s", test_results["ema_guided_L2_metric"])
 
     # Save and visualize last iteration
     if saving_checkpoints:
@@ -501,7 +494,7 @@ def do_train(
             pickle.dump(copy.deepcopy(ema).cpu(), f)
         pkl_path_learner = pkl_pattern_learner % (iter_idx + 1)
         with open(pkl_path_learner, 'wb') as f:
-            pickle.dump(copy.deepcopy(ema).cpu(), f)
+            pickle.dump(copy.deepcopy(net).cpu(), f)
         for x in plt.gca().lines: x.remove()
         do_plot(ema, elems={'samples'}, sigma_max=sigma_max, device=device)
         plt.gcf().canvas.flush_events()
@@ -731,18 +724,17 @@ def do_test(net_path, ema_path=None, guide_path=None, acid=False,
             guidance_weight=3,
             seed=None, generator=None,
             device=torch.device('cuda'),
-            verbosity=0, log_filename=None):
+            log_filename=None):
 
     # Set up the logger
-    def set_up_logger(verbosity, log_filename=None):
-        log_level = logs.get_log_level(verbosity)
-        logging_to_file = log_filename is not None
+    logging_to_file = log_filename is not None
+    def set_up_logger(log_filename=None):
+        log_level = logs.get_log_level(1)
         if logging_to_file:
             logs.set_log_file(log, log_filename)
             logs.set_log_format(log, color=False)
         logs.set_log_level(log_level, log)
-    set_up_logger(verbosity, log_filename)
-    logging_to_file = log_filename is not None
+    set_up_logger(log_filename)
     
     # Set random seed, if specified
     if generator is None and seed is not None:
@@ -757,7 +749,7 @@ def do_test(net_path, ema_path=None, guide_path=None, acid=False,
         ema = pickle.load(f).to(device)
     with builtins.open(guide_path, "rb") as f:
         guide = pickle.load(f).to(device)
-    if logging_to_file: set_up_logger(verbosity, log_filename)
+    if logging_to_file: set_up_logger(log_filename)
     log.warning("Model loaded from %s", net_path)
     log.warning("EMA model loaded from %s", ema_path)
     log.warning("Guide model loaded from %s", guide_path)
@@ -766,6 +758,28 @@ def do_test(net_path, ema_path=None, guide_path=None, acid=False,
     elif acid: 
         ref = ema; log.warning("EMA assigned as ACID reference")
     else: ref = None
+
+    # Run test
+    results = run_test(net, ema, guide, ref, 
+        classes=classes, P_mean=P_mean, P_std=P_std, sigma_max=sigma_max,
+        batch_size=batch_size,
+        guidance_weight=guidance_weight,
+        generator=generator,
+        device=device)
+
+    # Log test loss
+    log.info("Average Test Learner Loss = %s", results["learner_loss"])
+    log.info("Average Test EMA Loss = %s", results["ema_loss"])
+    try: log.info("Average Test Guide Loss = %s", results["guide_loss"])
+    except UnboundLocalError: pass
+
+    # Log test L2 metric
+    log.info("Average Test EMA L2 Distance = %s", results["ema_L2_metric"])
+    try: log.info("Average Test Guided EMA L2 Distance = %s", results["ema_guided_L2_metric"])
+    except UnboundLocalError: pass
+    log.info("Average Test Learner L2 Distance = %s", results["learner_L2_metric"])
+    try: log.info("Average Test Guided Learner L2 Distance = %s", results["learner_guided_L2_metric"])
+    except UnboundLocalError: pass
 
     return run_test(net, ema, guide, ref, 
                     classes=classes, P_mean=P_mean, P_std=P_std, sigma_max=sigma_max,
@@ -976,6 +990,33 @@ def train(outdir, cls, layers, dim, total_iter, val, test, viz,
              viz_iter=viz_iter,
              verbosity=verbosity, log_filename=logging)
     log.info('Done.')
+
+#----------------------------------------------------------------------------
+# 'test' subcommand.
+
+@cmdline.command()
+@click.option('--net-path', 
+    help="Local path to the network's last checkpoint", metavar='PATH', type=str)
+@click.option('--ema-path', 
+    help="Local path to the EMA's last checkpoint", metavar='PATH', type=str, default=None, show_default=True)
+@click.option('--guide-path', 
+    help="Local path to the guide's checkpoint", metavar='PATH', type=str, default=None, show_default=True)
+@click.option('--acid/--no-acid',   
+    help='Was this trained using ACID batch selection?', metavar='BOOL', type=bool, default=False, show_default=True)
+@click.option('--seed', help='Random seed', metavar='FLOAT', type=int, default=None, show_default=True)
+@click.option('--logging', 
+    help='Log filepath', metavar='DIR', type=str, default=None)
+def test(net_path, ema_path, guide_path, acid, seed, logging):
+    """Test a given model on a fresh batch of test data"""
+
+    net_path = os.path.join(dirs.MODELS_HOME, net_path)
+    if ema_path is not None:
+        ema_path = os.path.join(dirs.MODELS_HOME, ema_path)
+    if guide_path is not None:
+        guide_path = os.path.join(dirs.MODELS_HOME, guide_path)
+
+    do_test(net_path, ema_path=ema_path, guide_path=guide_path, acid=acid, 
+            seed=seed, log_filename=logging)
 
 #----------------------------------------------------------------------------
 # 'plot' subcommand.
