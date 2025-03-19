@@ -504,7 +504,7 @@ def do_train(
         gt_test_scores = gt(classes, device).score(test_samples, test_sigma)
         net_test_scores = net.score(test_samples, test_sigma)
         ema_test_scores = ema.score(test_samples, test_sigma)
-        if guidance: guide_test_scores = ema.score(test_samples, test_sigma)
+        if guidance: guide_test_scores = guide.score(test_samples, test_sigma)
 
         # Evaluate loss
         net_test_loss = (test_sigma ** 2) * ((gt_test_scores - net_test_scores) ** 2).mean(-1)
@@ -516,7 +516,7 @@ def do_train(
             log.warning("Average Test Guide Loss = %s", float(guide_test_loss.mean()))
             if acid: log.warning("Average Test ACID Reference Loss = %s", float(guide_test_loss.mean()))
         elif acid:
-            log.warning("Average Test ACID Reference Loss = %s", float(ema_val_loss.mean()))
+            log.warning("Average Test ACID Reference Loss = %s", float(ema_test_loss.mean()))
 
         # Sample from pure Gaussian noise
         test_samples = gt(classes, device).sample(test_batch_size, sigma_max, generator=generator)
@@ -537,7 +537,7 @@ def do_train(
         log.warning("Average Test Learner L2 Distance = %s", 
                     float(torch.sqrt(((test_outputs - gt_test_outputs) ** 2).sum(-1)).mean()))        
         if guidance:
-            guided_test_outputs = do_sample(net=ema, x_init=test_samples, 
+            guided_test_outputs = do_sample(net=net, x_init=test_samples, 
                                             guidance=guidance_weight, gnet=guide, sigma_max=sigma_max)[-1]
             log.warning("Average Test Guided Learner L2 Distance = %s", 
                         float(torch.sqrt(((guided_test_outputs - gt_test_outputs) ** 2).sum(-1)).mean()))
@@ -697,6 +697,82 @@ def plot_loss(loss_dict, fig_path=None):
     plt.savefig(fig_path_base+"_2"+fig_extension)
     
     return fig_1, fig_2
+
+#----------------------------------------------------------------------------
+# Run test
+
+def do_test(net, ema=None, guide=None, ref=None, 
+            classes='A', P_mean=-2.3, P_std=1.5, sigma_max=5,
+            test_batch_size=4<<8, 
+            guidance_weight=3,
+            seed=None,
+            device=torch.device('cuda')):
+
+    # Set random seed, if specified
+    if seed is not None:
+        torch.manual_seed(seed)
+        generator = torch.Generator(device).manual_seed(seed)
+        np.random.seed(seed)
+    else: generator = None
+    
+    # Basic configuration
+    test_ema = ema is not None
+    test_guide = guide is not None
+    test_ref = ref is not None
+    results = {}
+
+    # Sample as in training
+    test_sigma = (torch.randn(test_batch_size, device=device) * P_std + P_mean).exp()
+    test_samples = gt(classes, device).sample(test_batch_size, test_sigma, generator=generator)
+
+    # Evaluate scores
+    gt_test_scores = gt(classes, device).score(test_samples, test_sigma)
+    net_test_scores = net.score(test_samples, test_sigma)
+    if test_ema: ema_test_scores = ema.score(test_samples, test_sigma)
+    if test_guide: guide_test_scores = guide.score(test_samples, test_sigma)
+    if test_ref and not test_guide and not test_ema:
+        ref_test_scores = ref.score(test_samples, test_sigma)
+
+    # Evaluate loss
+    net_test_loss = (test_sigma ** 2) * ((gt_test_scores - net_test_scores) ** 2).mean(-1)
+    results["learner_test_loss"] = float(net_test_loss.mean())
+    if test_ema:
+        ema_test_loss = (test_sigma ** 2) * ((gt_test_scores - ema_test_scores) ** 2).mean(-1)
+        results["ema_test_loss"] = float(ema_test_loss.mean())
+    if test_guide: 
+        guide_test_loss = (test_sigma ** 2) * ((gt_test_scores - guide_test_scores) ** 2).mean(-1)
+        results["guide_test_loss"] = float(guide_test_loss.mean())
+    if test_ref and test_guide: 
+        results["ref_test_loss"] = results["guide_test_loss"]
+    elif test_ref and test_ema:
+        log.warning("Average Test ACID Reference Loss = %s", float(ema_test_loss.mean()))
+        results["ref_test_loss"] = results["ema_test_loss"]
+    elif test_ref:
+        ref_test_loss = (test_sigma ** 2) * ((gt_test_scores - ref_test_scores) ** 2).mean(-1)
+        results["ref_test_loss"] = float(ref_test_loss.mean())
+
+    # Sample from pure Gaussian noise
+    test_samples = gt(classes, device).sample(test_batch_size, sigma_max, generator=generator)
+
+    # Create full EMA samples using net for guidance
+    gt_test_outputs = do_sample(net=gt(classes, device), x_init=test_samples, guidance=0, sigma_max=sigma_max)[-1]
+    if test_ema:
+        ema_test_outputs = do_sample(net=ema, x_init=test_samples, guidance=0, sigma_max=sigma_max)[-1]
+        results["ema_L2_test_metric"] = float(torch.sqrt(((ema_test_outputs - gt_test_outputs) ** 2).sum(-1)).mean())
+    if test_ema and test_guide:
+        guided_test_outputs = do_sample(net=ema, x_init=test_samples, 
+                                        guidance=guidance_weight, gnet=guide, sigma_max=sigma_max)[-1]
+        results["ema_guided_L2_test_metric"] = float(torch.sqrt(((guided_test_outputs - gt_test_outputs) ** 2).sum(-1)).mean()))
+
+    # Create full learner samples using net for guidance
+    test_outputs = do_sample(net=net, x_init=test_samples, guidance=0, sigma_max=sigma_max)[-1]
+    results["L2_test_metric"] = float(torch.sqrt(((test_outputs - gt_test_outputs) ** 2).sum(-1)).mean())
+    if test_guide:
+        guided_test_outputs = do_sample(net=net, x_init=test_samples, 
+                                        guidance=guidance_weight, gnet=guide, sigma_max=sigma_max)[-1]
+        results["guided_L2_test_metric"] = float(torch.sqrt(((guided_test_outputs - gt_test_outputs) ** 2).sum(-1)).mean())
+    
+    return results
 
 #----------------------------------------------------------------------------
 # Simulate the EDM sampling ODE for the given set of initial sample points.
