@@ -409,8 +409,8 @@ def do_train(
                 log.info("Average Super-Batch Learner Loss = %s", float(net_loss.mean()))
                 log.info("Average Super-Batch Reference Loss = %s", float(ref_loss.mean()))
                 indices = jointly_sample_batch(net_loss, ref_loss, 
-                                               n=acid_n, filter_ratio=acid_f,
-                                               learnability=acid_diff, inverted=acid_inverted)
+                    n=acid_n, filter_ratio=acid_f,
+                    learnability=acid_diff, inverted=acid_inverted)
                 loss = net_loss[indices] # Use indices of the ACID mini-batch
             except ValueError:
                 log.warning("ACID has crashed, so it has been deactivated")
@@ -433,11 +433,11 @@ def do_train(
 
         # Evaluate average loss and L2 metric on validation batch
         if validation:
-            val_results = do_test(net, ema, guide, ref,
-                                  classes=classes, P_mean=P_mean, P_std=P_std, sigma_max=sigma_max,
-                                  batch_size=val_batch_size, 
-                                  guidance_weight=guidance_weight,
-                                  generator=generator, device=device)
+            val_results = run_test(net, ema, guide, ref,
+                classes=classes, P_mean=P_mean, P_std=P_std, sigma_max=sigma_max,
+                batch_size=val_batch_size, 
+                guidance_weight=guidance_weight,
+                generator=generator, device=device)
 
             # Log validation loss
             log.warning("Average Validation Learner Loss = %s", val_results["learner_loss"])
@@ -472,11 +472,11 @@ def do_train(
     
     # Evaluate average loss and L2 metric on test data
     if testing:
-        test_results = do_test(net, ema, guide, ref,
-                               classes=classes, P_mean=P_mean, P_std=P_std, sigma_max=sigma_max,
-                               batch_size=test_batch_size, 
-                               guidance_weight=guidance_weight,
-                               generator=generator, device=device)
+        test_results = run_test(net, ema, guide, ref,
+            classes=classes, P_mean=P_mean, P_std=P_std, sigma_max=sigma_max,
+            batch_size=test_batch_size, 
+            guidance_weight=guidance_weight,
+            generator=generator, device=device)
 
         # Log test loss
         log.warning("Average Test Learner Loss = %s", test_results["learner_loss"])
@@ -509,7 +509,11 @@ def do_train(
             plt_path = plt_pattern % (iter_idx + 1)
             plt.savefig(plt_path)
 
-    if logging_to_file and verbosity>=1: extract_results_from_log(log_filename);
+    if logging_to_file and verbosity>=1: 
+        results = extract_results_from_log(log_filename)
+        if saving_checkpoint_plots and logging_to_file: 
+            loss_plt_path = log_filename.replace("log", "plot").replace(".txt", ".png")
+            plot_loss(results, loss_plt_path);
 
 #----------------------------------------------------------------------------
 # Custom helper functions
@@ -653,18 +657,12 @@ def plot_loss(loss_dict, fig_path=None):
 #----------------------------------------------------------------------------
 # Run test
 
-def do_test(net, ema=None, guide=None, ref=None, 
-            classes='A', P_mean=-2.3, P_std=1.5, sigma_max=5,
-            batch_size=4<<8,
-            guidance_weight=3,
-            seed=None, generator=None,
-            device=torch.device('cuda')):
-
-    # Set random seed, if specified
-    if generator is None and seed is not None:
-        torch.manual_seed(seed)
-        generator = torch.Generator(device).manual_seed(seed)
-        np.random.seed(seed)
+def run_test(net, ema=None, guide=None, ref=None, 
+             classes='A', P_mean=-2.3, P_std=1.5, sigma_max=5,
+             batch_size=4<<8,
+             guidance_weight=3,
+             generator=None,
+             device=torch.device('cuda')):
     
     # Basic configuration
     test_ema = ema is not None
@@ -723,6 +721,58 @@ def do_test(net, ema=None, guide=None, ref=None,
         results["learner_guided_L2_metric"] = float(torch.sqrt(((guided_test_outputs - gt_test_outputs) ** 2).sum(-1)).mean())
     
     return results
+
+#----------------------------------------------------------------------------
+# To run test outside of training, loading the models first
+
+def do_test(net_path, ema_path=None, guide_path=None, acid=False, 
+            classes='A', P_mean=-2.3, P_std=1.5, sigma_max=5,
+            batch_size=4<<8,
+            guidance_weight=3,
+            seed=None, generator=None,
+            device=torch.device('cuda'),
+            verbosity=0, log_filename=None):
+
+    # Set up the logger
+    def set_up_logger(verbosity, log_filename=None):
+        log_level = logs.get_log_level(verbosity)
+        logging_to_file = log_filename is not None
+        if logging_to_file:
+            logs.set_log_file(log, log_filename)
+            logs.set_log_format(log, color=False)
+        logs.set_log_level(log_level, log)
+    set_up_logger(verbosity, log_filename)
+    logging_to_file = log_filename is not None
+    
+    # Set random seed, if specified
+    if generator is None and seed is not None:
+        torch.manual_seed(seed)
+        generator = torch.Generator(device).manual_seed(seed)
+        np.random.seed(seed)
+    
+    # Load models
+    with builtins.open(net_path, "rb") as f:
+        net = pickle.load(f).to(device)
+    with builtins.open(ema_path, "rb") as f:
+        ema = pickle.load(f).to(device)
+    with builtins.open(guide_path, "rb") as f:
+        guide = pickle.load(f).to(device)
+    if logging_to_file: set_up_logger(verbosity, log_filename)
+    log.warning("Model loaded from %s", net_path)
+    log.warning("EMA model loaded from %s", ema_path)
+    log.warning("Guide model loaded from %s", guide_path)
+    if acid and guide_path is not None:
+        ref = guide; log.warning("Guide model assigned as ACID reference")
+    elif acid: 
+        ref = ema; log.warning("EMA assigned as ACID reference")
+    else: ref = None
+
+    return run_test(net, ema, guide, ref, 
+                    classes=classes, P_mean=P_mean, P_std=P_std, sigma_max=sigma_max,
+                    batch_size=batch_size,
+                    guidance_weight=guidance_weight,
+                    generator=generator,
+                    device=device)
 
 #----------------------------------------------------------------------------
 # Simulate the EDM sampling ODE for the given set of initial sample points.
