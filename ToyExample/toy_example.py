@@ -432,7 +432,7 @@ def do_train(
 
         # Evaluate average loss and L2 metric on validation batch
         if validation:
-            val_results = run_test(net, ema, guide, ref,
+            val_results = run_test(net, ema, guide, ref, acid=run_acid,
                 classes=classes, P_mean=P_mean, P_std=P_std, sigma_max=sigma_max,
                 batch_size=val_batch_size, 
                 guidance_weight=guidance_weight,
@@ -442,7 +442,7 @@ def do_train(
             log.info("Average Validation Learner Loss = %s", val_results["learner_loss"])
             log.info("Average Validation EMA Loss = %s", val_results["ema_loss"])
             if guidance: log.info("Average Validation Guide Loss = %s", val_results["guide_loss"])
-            if acid: log.info("Average Validation ACID Reference Loss = %s", val_results["ref_loss"])
+            if run_acid: log.info("Average Validation ACID Reference Loss = %s", val_results["ref_loss"])
 
             # Log validation L2 metric
             log.info("Average Validation Learner L2 Distance = %s", val_results["learner_L2_metric"])
@@ -468,7 +468,7 @@ def do_train(
     
     # Evaluate average loss and L2 metric on test data
     if testing:
-        test_results = run_test(net, ema, guide, ref,
+        test_results = run_test(net, ema, guide, ref, acid=acid,
             classes=classes, P_mean=P_mean, P_std=P_std, sigma_max=sigma_max,
             batch_size=test_batch_size, 
             guidance_weight=guidance_weight,
@@ -650,7 +650,7 @@ def plot_loss(loss_dict, fig_path=None):
 #----------------------------------------------------------------------------
 # Run test
 
-def run_test(net, ema=None, guide=None, ref=None, 
+def run_test(net, ema=None, guide=None, ref=None, acid=False,
              classes='A', P_mean=-2.3, P_std=1.5, sigma_max=5,
              batch_size=4<<8,
              guidance_weight=3,
@@ -660,7 +660,8 @@ def run_test(net, ema=None, guide=None, ref=None,
     # Basic configuration
     test_ema = ema is not None
     test_guide = guide is not None
-    test_ref = ref is not None
+    if acid: test_ref = ref is not None
+    else: test_ref = False
     results = {}
 
     # Sample as in training
@@ -684,13 +685,14 @@ def run_test(net, ema=None, guide=None, ref=None,
     if test_guide: 
         guide_test_loss = (test_sigma ** 2) * ((gt_test_scores - guide_test_scores) ** 2).mean(-1)
         results["guide_loss"] = float(guide_test_loss.mean())
-    if test_ref and test_guide: 
-        results["ref_loss"] = results["guide_loss"]
-    elif test_ref and test_ema:
-        results["ref_loss"] = results["ema_loss"]
-    elif test_ref:
-        ref_test_loss = (test_sigma ** 2) * ((gt_test_scores - ref_test_scores) ** 2).mean(-1)
-        results["ref_loss"] = float(ref_test_loss.mean())
+    if test_ref:
+        if test_guide: 
+            results["ref_loss"] = results["guide_loss"]
+        elif test_ema:
+            results["ref_loss"] = results["ema_loss"]
+        else:
+            ref_test_loss = (test_sigma ** 2) * ((gt_test_scores - ref_test_scores) ** 2).mean(-1)
+            results["ref_loss"] = float(ref_test_loss.mean())
 
     # Sample from pure Gaussian noise
     test_samples = gt(classes, device).sample(batch_size, sigma_max, generator=generator)
@@ -760,7 +762,7 @@ def do_test(net_path, ema_path=None, guide_path=None, acid=False,
     else: ref = None
 
     # Run test
-    results = run_test(net, ema, guide, ref, 
+    results = run_test(net, ema, guide, ref, acid=acid,
         classes=classes, P_mean=P_mean, P_std=P_std, sigma_max=sigma_max,
         batch_size=batch_size,
         guidance_weight=guidance_weight,
@@ -781,12 +783,7 @@ def do_test(net_path, ema_path=None, guide_path=None, acid=False,
     try: log.info("Average Test Guided Learner L2 Distance = %s", results["learner_guided_L2_metric"])
     except UnboundLocalError: pass
 
-    return run_test(net, ema, guide, ref, 
-                    classes=classes, P_mean=P_mean, P_std=P_std, sigma_max=sigma_max,
-                    batch_size=batch_size,
-                    guidance_weight=guidance_weight,
-                    generator=generator,
-                    device=device)
+    return results
 
 #----------------------------------------------------------------------------
 # Simulate the EDM sampling ODE for the given set of initial sample points.
