@@ -395,19 +395,23 @@ def do_train(
         gt_scores = gt(classes, device).score(samples, sigma)
         net_scores = net.score(samples, sigma, graph=True)
         if run_acid: ref_scores = ref.score(samples, sigma)
+        if guide_interpolation: interpol_scores = guide.score(samples, sigma).lerp(net_scores, guidance_weight)
 
         # Calculate teacher and student loss
-        # if acid and guidance: net_scores = guide.score(samples, sigma).lerp(net_scores, guidance_weight)
         net_loss = (sigma ** 2) * ((gt_scores - net_scores) ** 2).mean(-1)
-        if acid: ref_loss = (sigma ** 2) * ((gt_scores - ref_scores) ** 2).mean(-1)
+        if run_acid: 
+            ref_loss = (sigma ** 2) * ((gt_scores - ref_scores) ** 2).mean(-1)
+            if guide_interpolation: 
+                acid_loss = (sigma ** 2) * ((gt_scores - interpol_scores) ** 2).mean(-1)
+            else: acid_loss = net_loss
 
         # Calculate overall loss
         if run_acid:
             try:
                 log.warning("Using ACID")
-                log.info("Average Super-Batch Learner Loss = %s", float(net_loss.mean()))
+                log.info("Average Super-Batch Learner Loss = %s", float(acid_loss.mean()))
                 log.info("Average Super-Batch Reference Loss = %s", float(ref_loss.mean()))
-                indices = jointly_sample_batch(net_loss, ref_loss, 
+                indices = jointly_sample_batch(acid_loss, ref_loss, 
                     n=acid_n, filter_ratio=acid_f,
                     learnability=acid_diff, inverted=acid_inverted)
                 loss = net_loss[indices] # Use indices of the ACID mini-batch
