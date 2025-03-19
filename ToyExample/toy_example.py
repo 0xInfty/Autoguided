@@ -451,9 +451,9 @@ def do_train(
             log.warning("Average Validation EMA L2 Distance = %s", val_results["ema_L2_metric"])
             if guidance:
                 log.warning("Average Validation Guided EMA L2 Distance = %s", val_results["ema_guided_L2_metric"])
-            log.warning("Average Validation Learner L2 Distance = %s", val_results["L2_metric"])
+            log.warning("Average Validation Learner L2 Distance = %s", val_results["learner_L2_metric"])
             if guidance:
-                log.warning("Average Validation Guided Learner L2 Distance = %s", val_results["guided_L2_metric"])
+                log.warning("Average Validation Guided Learner L2 Distance = %s", val_results["learner_guided_L2_metric"])
 
         # Visualize resulting sample distribution.
         if plotting_checkpoints and iter_idx % viz_iter == 0:
@@ -490,9 +490,9 @@ def do_train(
         log.warning("Average Test EMA L2 Distance = %s", test_results["ema_L2_metric"])
         if guidance:
             log.warning("Average Test Guided EMA L2 Distance = %s", test_results["ema_guided_L2_metric"])
-        log.warning("Average Test Learner L2 Distance = %s", test_results["L2_metric"])
+        log.warning("Average Test Learner L2 Distance = %s", test_results["learner_L2_metric"])
         if guidance:
-            log.warning("Average Test Guided Learner L2 Distance = %s", test_results["guided_L2_metric"])
+            log.warning("Average Test Guided Learner L2 Distance = %s", test_results["learner_guided_L2_metric"])
 
     # Save and visualize last iteration
     if saving_checkpoints:
@@ -716,11 +716,11 @@ def do_test(net, ema=None, guide=None, ref=None,
 
     # Create full learner samples using net for guidance
     test_outputs = do_sample(net=net, x_init=test_samples, guidance=0, sigma_max=sigma_max)[-1]
-    results["L2_metric"] = float(torch.sqrt(((test_outputs - gt_test_outputs) ** 2).sum(-1)).mean())
+    results["learner_L2_metric"] = float(torch.sqrt(((test_outputs - gt_test_outputs) ** 2).sum(-1)).mean())
     if test_guide:
         guided_test_outputs = do_sample(net=net, x_init=test_samples, 
                                         guidance=guidance_weight, gnet=guide, sigma_max=sigma_max)[-1]
-        results["guided_L2_metric"] = float(torch.sqrt(((guided_test_outputs - gt_test_outputs) ** 2).sum(-1)).mean())
+        results["learner_guided_L2_metric"] = float(torch.sqrt(((guided_test_outputs - gt_test_outputs) ** 2).sum(-1)).mean())
     
     return results
 
