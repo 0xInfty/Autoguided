@@ -271,6 +271,7 @@ def jointly_sample_batch(learner_loss, ref_loss, n=16, filter_ratio=0.8,
 
         # Sample new mini-batch chunk using the conditional probability distribution
         log.debug("Logits = %s", logits)
+        logits = logits - max(logits)
         probabilities = np.exp(logits.detach().cpu().numpy())
         log.debug("Probabilites = %s", probabilities)
         log.debug("Sum of Probabilites = %s", sum(probabilities))
