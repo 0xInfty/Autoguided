@@ -415,7 +415,7 @@ def do_train(
                 indices = jointly_sample_batch(acid_loss, ref_loss, 
                     n=acid_n, filter_ratio=acid_f,
                     learnability=acid_diff, inverted=acid_inverted)
-                loss = net_loss[indices] # Use indices of the ACID mini-batch
+                loss = acid_loss[indices] # Use indices of the ACID mini-batch
             except ValueError:
                 log.warning("ACID has crashed, so it has been deactivated")
                 loss = net_loss
@@ -859,7 +859,7 @@ def do_plot(
     plt.xlim(float(gridx[0]), float(gridx[-1]))
     plt.ylim(float(gridy[0]), float(gridy[-1]))
     plt.gca().set_aspect('equal')
-    plt.gca().set_axis_off()
+    # plt.gca().set_axis_off()
 
     # Plot helper functions.
     def contours(values, levels, colors=None, cmap=None, alpha=1, linecolors='black', linealpha=1, linewidth=2.5):
@@ -871,7 +871,7 @@ def do_plot(
     def arrows(pos, dir, color='black', alpha=1):
         plt.quiver(*pos.cpu().numpy().T, *dir.cpu().numpy().T * arrow_len, scale=0.6, width=5e-3, headwidth=4, headlength=3, headaxislength=2.5, capstyle='round', color=color, alpha=alpha)
     def points(pos, color='black', alpha=1, size=30):
-        plt.plot(*pos.cpu().numpy().T, '.', markerfacecolor='black', markeredgecolor='none', color=color, alpha=alpha, markersize=size)
+        plt.plot(*pos.cpu().numpy().T, '.', markerfacecolor=color, markeredgecolor='none', color=color, alpha=alpha, markersize=size)
 
     # Draw requested plot elements.
     if 'p_net' in elems:            contours(net.logp(gridxy, sigma_max), levels=np.linspace(-2.5, 2.5, num=20)[1:-1], cmap='Greens', linealpha=0.2)
@@ -888,6 +888,8 @@ def do_plot(
     if 'samples' in elems:          points(trajectories[-1], size=15, alpha=0.25)
     if 'samples_before' in elems:   points(samples)
     if 'samples_after' in elems:    points(trajectories[-1])
+    if 'samples_before_small' in elems: points(samples, alpha=0.5, size=15, color="m")
+    if 'trajectories_small' in elems: lines(trajectories.transpose(0, 1), alpha=0.3, color="lightgrey")
 
 #----------------------------------------------------------------------------
 # Main command line.
