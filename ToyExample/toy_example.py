@@ -220,7 +220,7 @@ class ToyModel(torch.nn.Module):
 # JEST & ACID's joint sampling batch selection method
 
 def jointly_sample_batch(learner_loss, ref_loss, n=16, filter_ratio=0.8, 
-                         learnability=True, inverted=False):
+                         learnability=True, inverted=False, numeric_stability_trick=False):
     """Joint sampling batch selection method used in JEST and ACID
 
     Adapted from Evans & Parthasarathy et al's publication titled 
@@ -271,7 +271,7 @@ def jointly_sample_batch(learner_loss, ref_loss, n=16, filter_ratio=0.8,
 
         # Sample new mini-batch chunk using the conditional probability distribution
         log.debug("Logits = %s", logits)
-        logits = logits - max(logits)
+        if numeric_stability_trick: logits = logits - max(logits)
         probabilities = np.exp(logits.detach().cpu().numpy())
         log.debug("Probabilites = %s", probabilities)
         log.debug("Sum of Probabilites = %s", sum(probabilities))
@@ -293,8 +293,8 @@ def do_train(
     P_mean=-2.3, P_std=1.5, sigma_data=0.5, lr_ref=1e-2, lr_iter=512, ema_std=0.010,
     guidance=False, guidance_weight=3, guide_path=None, guide_interpolation=False,
     validation=False, val_batch_size=4<<7, sigma_max=5,
-    testing=False, test_batch_size=4<<8,
-    acid=False, acid_n=16, acid_f=0.8, acid_diff=True, acid_inverted=False,
+    testing=False, n_test_samples=4<<8, test_batch_size=4<<8,
+    acid=False, acid_n=16, acid_f=0.8, acid_diff=True, acid_inverted=False, acid_stability_trick=False,
     device=torch.device('cuda'),
     pkl_pattern=None, pkl_iter=256, 
     viz_iter=32, viz_save=True, 
@@ -318,14 +318,26 @@ def do_train(
         generator = torch.Generator(device).manual_seed(seed)
         np.random.seed(seed)
     
+    # Log basic parameters
+    log.info("Number of training epochs = %s", total_iter)
+    log.info("Training batch size = %s", batch_size)
+    log.info("Number of training samples = %s", total_iter*batch_size)
+    log.info("Number of validation samples = %s", val_batch_size)
+    log.info("Number of test samples = %s", n_test_samples)
+    log.info("Test batch size = %s", test_batch_size)
+
     # Log ACID parameters
     log.info("ACID = %s", acid)
     if acid:
         run_acid = True
         log.info("ACID's Number of Chunks = %s", acid_n)
         log.info("ACID's Filter Ratio = %s", acid_f)
+        acid_b_over_n = int(batch_size * (1 - acid_f) / acid_n) # Size of a mini-batch chunk
+        acid_batch_size = acid_n * acid_b_over_n # Size of a mini-batch
+        log.info("ACID's Mini-Batch Size = %s", acid_batch_size)
         log.info("ACID's Learnability = %s", acid_diff)
         log.info("ACID's Scores Inverted = %s", acid_inverted)
+        log.info("ACID's Numeric Stability Trick = %s", acid_stability_trick)
     else: run_acid = False
     if guidance and guide_interpolation:
         log.warning("Guide interpolation of scores during training")
@@ -414,7 +426,8 @@ def do_train(
                 log.info("Average Super-Batch Reference Loss = %s", float(ref_loss.mean()))
                 indices = jointly_sample_batch(acid_loss, ref_loss, 
                     n=acid_n, filter_ratio=acid_f,
-                    learnability=acid_diff, inverted=acid_inverted)
+                    learnability=acid_diff, inverted=acid_inverted,
+                    numeric_stability_trick=acid_stability_trick)
                 loss = acid_loss[indices] # Use indices of the ACID mini-batch
             except ValueError:
                 log.warning("ACID has crashed, so it has been deactivated")
@@ -439,7 +452,7 @@ def do_train(
         if validation:
             val_results = run_test(net, ema, guide, ref, acid=run_acid,
                 classes=classes, P_mean=P_mean, P_std=P_std, sigma_max=sigma_max,
-                batch_size=val_batch_size, 
+                n_samples=val_batch_size, batch_size=val_batch_size, 
                 guidance_weight=guidance_weight,
                 generator=generator, device=device)
 
@@ -475,7 +488,7 @@ def do_train(
     if testing:
         test_results = run_test(net, ema, guide, ref, acid=acid,
             classes=classes, P_mean=P_mean, P_std=P_std, sigma_max=sigma_max,
-            batch_size=test_batch_size, 
+            n_samples=n_test_samples, batch_size=test_batch_size, 
             guidance_weight=guidance_weight,
             generator=generator, device=device)
 
@@ -657,7 +670,7 @@ def plot_loss(loss_dict, fig_path=None):
 
 def run_test(net, ema=None, guide=None, ref=None, acid=False,
              classes='A', P_mean=-2.3, P_std=1.5, sigma_max=5,
-             batch_size=4<<8,
+             n_samples=4<<8, batch_size=4<<8,
              guidance_weight=3,
              generator=None,
              device=torch.device('cuda')):
@@ -667,59 +680,78 @@ def run_test(net, ema=None, guide=None, ref=None, acid=False,
     test_guide = guide is not None
     if acid: test_ref = ref is not None
     else: test_ref = False
-    results = {}
-
-    # Sample as in training
-    test_sigma = (torch.randn(batch_size, device=device) * P_std + P_mean).exp()
-    test_samples = gt(classes, device).sample(batch_size, test_sigma, generator=generator)
-
-    # Evaluate scores
-    gt_test_scores = gt(classes, device).score(test_samples, test_sigma)
-    net_test_scores = net.score(test_samples, test_sigma)
-    if test_ema: ema_test_scores = ema.score(test_samples, test_sigma)
-    if test_guide: guide_test_scores = guide.score(test_samples, test_sigma)
-    if test_ref and not test_guide and not test_ema:
-        ref_test_scores = ref.score(test_samples, test_sigma)
-
-    # Evaluate loss
-    net_test_loss = (test_sigma ** 2) * ((gt_test_scores - net_test_scores) ** 2).mean(-1)
-    results["learner_loss"] = float(net_test_loss.mean())
-    if test_ema:
-        ema_test_loss = (test_sigma ** 2) * ((gt_test_scores - ema_test_scores) ** 2).mean(-1)
-        results["ema_loss"] = float(ema_test_loss.mean())
-    if test_guide: 
-        guide_test_loss = (test_sigma ** 2) * ((gt_test_scores - guide_test_scores) ** 2).mean(-1)
-        results["guide_loss"] = float(guide_test_loss.mean())
-    if test_ref:
-        if test_guide: 
-            results["ref_loss"] = results["guide_loss"]
-        elif test_ema:
-            results["ref_loss"] = results["ema_loss"]
-        else:
-            ref_test_loss = (test_sigma ** 2) * ((gt_test_scores - ref_test_scores) ** 2).mean(-1)
-            results["ref_loss"] = float(ref_test_loss.mean())
-
-    # Sample from pure Gaussian noise
-    test_samples = gt(classes, device).sample(batch_size, sigma_max, generator=generator)
-
-    # Create full EMA samples using net for guidance
-    gt_test_outputs = do_sample(net=gt(classes, device), x_init=test_samples, guidance=0, sigma_max=sigma_max)[-1]
-    if test_ema:
-        ema_test_outputs = do_sample(net=ema, x_init=test_samples, guidance=0, sigma_max=sigma_max)[-1]
-        results["ema_L2_metric"] = float(torch.sqrt(((ema_test_outputs - gt_test_outputs) ** 2).sum(-1)).mean())
-    if test_ema and test_guide:
-        guided_test_outputs = do_sample(net=ema, x_init=test_samples, 
-                                        guidance=guidance_weight, gnet=guide, sigma_max=sigma_max)[-1]
-        results["ema_guided_L2_metric"] = float(torch.sqrt(((guided_test_outputs - gt_test_outputs) ** 2).sum(-1)).mean())
-
-    # Create full learner samples using net for guidance
-    test_outputs = do_sample(net=net, x_init=test_samples, guidance=0, sigma_max=sigma_max)[-1]
-    results["learner_L2_metric"] = float(torch.sqrt(((test_outputs - gt_test_outputs) ** 2).sum(-1)).mean())
-    if test_guide:
-        guided_test_outputs = do_sample(net=net, x_init=test_samples, 
-                                        guidance=guidance_weight, gnet=guide, sigma_max=sigma_max)[-1]
-        results["learner_guided_L2_metric"] = float(torch.sqrt(((guided_test_outputs - gt_test_outputs) ** 2).sum(-1)).mean())
+    n_epochs = n_samples//batch_size
+    n_remainder = n_samples - n_epochs*batch_size
+    if n_remainder > 0: n_epochs += 1
     
+    results = {"learner_loss":0, "learner_L2_metric":0}
+    if test_ema: 
+        results["ema_loss"] = 0
+        results["ema_L2_metric"] = 0
+    if test_guide: 
+        results["guide_loss"] = 0
+        results["learner_guided_L2_metric"] = 0
+    if test_ema and test_guide: results["ema_guided_L2_metric"] = 0
+    if test_ref: results["ref_loss"] = 0
+
+    progress_bar = tqdm.tqdm(range(n_epochs))
+    for i_epoch in range(n_epochs):
+        log.info("Iteration = %i | %s", i_epoch, str(progress_bar))
+
+        # Number of samples for this batch
+        n_i_samples = min(n_samples - i_epoch*batch_size, batch_size)
+
+        # Sample as in training
+        test_sigma = (torch.randn(n_i_samples, device=device) * P_std + P_mean).exp()
+        test_samples = gt(classes, device).sample(n_i_samples, test_sigma, generator=generator)
+
+        # Evaluate scores
+        gt_test_scores = gt(classes, device).score(test_samples, test_sigma)
+        net_test_scores = net.score(test_samples, test_sigma)
+        if test_ema: ema_test_scores = ema.score(test_samples, test_sigma)
+        if test_guide: guide_test_scores = guide.score(test_samples, test_sigma)
+        if test_ref and not test_guide and not test_ema:
+            ref_test_scores = ref.score(test_samples, test_sigma)
+
+        # Evaluate loss
+        net_test_loss = (test_sigma ** 2) * ((gt_test_scores - net_test_scores) ** 2).mean(-1)
+        results["learner_loss"] += float(net_test_loss.mean())/n_epochs
+        if test_ema:
+            ema_test_loss = (test_sigma ** 2) * ((gt_test_scores - ema_test_scores) ** 2).mean(-1)
+            results["ema_loss"] += float(ema_test_loss.mean())/n_epochs
+        if test_guide: 
+            guide_test_loss = (test_sigma ** 2) * ((gt_test_scores - guide_test_scores) ** 2).mean(-1)
+            results["guide_loss"] += float(guide_test_loss.mean())/n_epochs
+        if test_ref:
+            if test_guide: 
+                results["ref_loss"] += results["guide_loss"]
+            elif test_ema:
+                results["ref_loss"] += results["ema_loss"]
+            else:
+                ref_test_loss = (test_sigma ** 2) * ((gt_test_scores - ref_test_scores) ** 2).mean(-1)
+                results["ref_loss"] += float(ref_test_loss.mean())/n_epochs
+
+        # Sample from pure Gaussian noise
+        test_samples = gt(classes, device).sample(n_i_samples, sigma_max, generator=generator)
+
+        # Create full EMA samples using net for guidance
+        gt_test_outputs = do_sample(net=gt(classes, device), x_init=test_samples, guidance=0, sigma_max=sigma_max)[-1]
+        if test_ema:
+            ema_test_outputs = do_sample(net=ema, x_init=test_samples, guidance=0, sigma_max=sigma_max)[-1]
+            results["ema_L2_metric"] += float(torch.sqrt(((ema_test_outputs - gt_test_outputs) ** 2).sum(-1)).mean())/n_epochs
+        if test_ema and test_guide:
+            guided_test_outputs = do_sample(net=ema, x_init=test_samples, 
+                                            guidance=guidance_weight, gnet=guide, sigma_max=sigma_max)[-1]
+            results["ema_guided_L2_metric"] += float(torch.sqrt(((guided_test_outputs - gt_test_outputs) ** 2).sum(-1)).mean())/n_epochs
+
+        # Create full learner samples using net for guidance
+        test_outputs = do_sample(net=net, x_init=test_samples, guidance=0, sigma_max=sigma_max)[-1]
+        results["learner_L2_metric"] += float(torch.sqrt(((test_outputs - gt_test_outputs) ** 2).sum(-1)).mean())/n_epochs
+        if test_guide:
+            guided_test_outputs = do_sample(net=net, x_init=test_samples, 
+                                            guidance=guidance_weight, gnet=guide, sigma_max=sigma_max)[-1]
+            results["learner_guided_L2_metric"] += float(torch.sqrt(((guided_test_outputs - gt_test_outputs) ** 2).sum(-1)).mean())/n_epochs
+
     return results
 
 #----------------------------------------------------------------------------
@@ -727,7 +759,7 @@ def run_test(net, ema=None, guide=None, ref=None, acid=False,
 
 def do_test(net_path, ema_path=None, guide_path=None, acid=False, 
             classes='A', P_mean=-2.3, P_std=1.5, sigma_max=5,
-            batch_size=4<<8,
+            n_samples=4<<8, batch_size=4<<8,
             guidance_weight=3,
             seed=None, generator=None,
             device=torch.device('cuda'),
@@ -748,18 +780,31 @@ def do_test(net_path, ema_path=None, guide_path=None, acid=False,
         torch.manual_seed(seed)
         generator = torch.Generator(device).manual_seed(seed)
         np.random.seed(seed)
+        log.info("Seed = %s", seed)
+    
+    # Log basic parameters
+    n_epochs = n_samples//batch_size
+    n_remainder = n_samples - n_epochs*batch_size
+    if n_remainder > 0: n_epochs += 1
+    log.info("Number of test epochs = %s", n_epochs)
+    log.info("Test batch size = %s", batch_size)
+    log.info("Number of test samples = %s", n_samples)
     
     # Load models
     with builtins.open(net_path, "rb") as f:
         net = pickle.load(f).to(device)
-    with builtins.open(ema_path, "rb") as f:
-        ema = pickle.load(f).to(device)
-    with builtins.open(guide_path, "rb") as f:
-        guide = pickle.load(f).to(device)
+    if ema_path is not None:
+        with builtins.open(ema_path, "rb") as f:
+            ema = pickle.load(f).to(device)
+    if guide_path is not None:
+        with builtins.open(guide_path, "rb") as f:
+            guide = pickle.load(f).to(device)
     if logging_to_file: set_up_logger(log_filename)
     log.warning("Model loaded from %s", net_path)
-    log.warning("EMA model loaded from %s", ema_path)
-    log.warning("Guide model loaded from %s", guide_path)
+    if ema_path is not None: log.warning("EMA model loaded from %s", ema_path)
+    if guide_path is not None: 
+        log.warning("Guide model loaded from %s", guide_path)
+        log.info("Guidance weight = %s", guidance_weight)
     if acid and guide_path is not None:
         ref = guide; log.warning("Guide model assigned as ACID reference")
     elif acid: 
@@ -769,7 +814,7 @@ def do_test(net_path, ema_path=None, guide_path=None, acid=False,
     # Run test
     results = run_test(net, ema, guide, ref, acid=acid,
         classes=classes, P_mean=P_mean, P_std=P_std, sigma_max=sigma_max,
-        batch_size=batch_size,
+        n_samples=n_samples, batch_size=batch_size,
         guidance_weight=guidance_weight,
         generator=generator,
         device=device)
@@ -1007,10 +1052,11 @@ def train(outdir, cls, layers, dim, total_iter, val, test, viz,
     help="Local path to the guide's checkpoint", metavar='PATH', type=str, default=None, show_default=True)
 @click.option('--acid/--no-acid',   
     help='Was this trained using ACID batch selection?', metavar='BOOL', type=bool, default=False, show_default=True)
+@click.option('--n-samples', help='Number of samples', metavar='INT', type=int, default=4<<8, show_default=True)
 @click.option('--seed', help='Random seed', metavar='FLOAT', type=int, default=None, show_default=True)
 @click.option('--logging', 
     help='Log filepath', metavar='DIR', type=str, default=None)
-def test(net_path, ema_path, guide_path, acid, seed, logging):
+def test(net_path, ema_path, guide_path, acid, n_samples, seed, logging):
     """Test a given model on a fresh batch of test data"""
 
     net_path = os.path.join(dirs.MODELS_HOME, net_path)
@@ -1020,7 +1066,7 @@ def test(net_path, ema_path, guide_path, acid, seed, logging):
         guide_path = os.path.join(dirs.MODELS_HOME, guide_path)
 
     do_test(net_path, ema_path=ema_path, guide_path=guide_path, acid=acid, 
-            seed=seed, log_filename=logging)
+            n_samples=n_samples, seed=seed, log_filename=logging)
 
 #----------------------------------------------------------------------------
 # 'plot' subcommand.
