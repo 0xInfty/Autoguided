@@ -1053,10 +1053,11 @@ def train(outdir, cls, layers, dim, total_iter, val, test, viz,
 @click.option('--acid/--no-acid',   
     help='Was this trained using ACID batch selection?', metavar='BOOL', type=bool, default=False, show_default=True)
 @click.option('--n-samples', help='Number of samples', metavar='INT', type=int, default=4<<8, show_default=True)
+@click.option('--batch-size', help='Batch size', metavar='INT', type=int, default=4<<8, show_default=True)
 @click.option('--seed', help='Random seed', metavar='FLOAT', type=int, default=None, show_default=True)
 @click.option('--logging', 
     help='Log filepath', metavar='DIR', type=str, default=None)
-def test(net_path, ema_path, guide_path, acid, n_samples, seed, logging):
+def test(net_path, ema_path, guide_path, acid, n_samples, batch_size, seed, logging):
     """Test a given model on a fresh batch of test data"""
 
     net_path = os.path.join(dirs.MODELS_HOME, net_path)
@@ -1066,7 +1067,7 @@ def test(net_path, ema_path, guide_path, acid, n_samples, seed, logging):
         guide_path = os.path.join(dirs.MODELS_HOME, guide_path)
 
     do_test(net_path, ema_path=ema_path, guide_path=guide_path, acid=acid, 
-            n_samples=n_samples, seed=seed, log_filename=logging)
+            batch_size=batch_size, n_samples=n_samples, seed=seed, log_filename=logging)
 
 #----------------------------------------------------------------------------
 # 'plot' subcommand.
