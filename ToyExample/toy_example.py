@@ -128,6 +128,7 @@ def gt(classes='A', device=torch.device('cpu'), seed=2, origin=np.array([0.0030,
             c.phi = dist * (0.5 ** depth)
             c.mu = (pos + dir * dist * t) * scale
             c.Sigma = (np.outer(dir, dir) + (np.eye(2) - np.outer(dir, dir)) * (thick ** 2)) * np.outer(size, size)
+            c.depth = depth
             comps.append(c)
 
         # Generate each child branch.
@@ -141,7 +142,8 @@ def gt(classes='A', device=torch.device('cpu'), seed=2, origin=np.array([0.0030,
     # Construct a GaussianMixture object for the selected classes.
     sel = [c for c in comps if c.cls in classes]
     distrib = GaussianMixture([c.phi for c in sel], [c.mu for c in sel], [c.Sigma for c in sel])
-    return distrib.to(device)
+
+    return distrib.to(device), comps
 
 #----------------------------------------------------------------------------
 # Low-level primitives used by ToyModel.
@@ -360,6 +362,7 @@ def do_train(
             log.warning(f'Will save snapshots to {os.path.split(plt_pattern)[0]}')
 
     # Initialize models
+    gtd = gt(classes, device)[0]
     net = ToyModel(num_layers=num_layers, hidden_dim=hidden_dim, sigma_data=sigma_data).to(device).train().requires_grad_(True)
     ema = copy.deepcopy(net).eval().requires_grad_(False)
     opt = torch.optim.Adam(net.parameters(), betas=(0.9, 0.99))
@@ -381,6 +384,8 @@ def do_train(
         ref = ema
         log.warning("EMA assigned as ACID reference")
     else: ref = None
+    # if validation:
+    #     tgtd =  # Trimmed ground truth distribution
 
     # Initialize plot.
     if viz_iter is not None:
@@ -404,8 +409,8 @@ def do_train(
         opt.param_groups[0]['lr'] = lr_ref / np.sqrt(max(iter_idx / lr_iter, 1))
         opt.zero_grad()
         sigma = (torch.randn(batch_size, device=device) * P_std + P_mean).exp()
-        samples = gt(classes, device).sample(batch_size, sigma) #Q: Why do they redefine the Gaussian mixture distribution twice on each iteration?
-        gt_scores = gt(classes, device).score(samples, sigma)
+        samples = gtd.sample(batch_size, sigma)
+        gt_scores = gtd.score(samples, sigma)
         net_scores = net.score(samples, sigma, graph=True)
         if run_acid: ref_scores = ref.score(samples, sigma)
         if guide_interpolation: interpol_scores = guide.score(samples, sigma).lerp(net_scores, guidance_weight)
@@ -673,9 +678,11 @@ def run_test(net, ema=None, guide=None, ref=None, acid=False,
              n_samples=4<<8, batch_size=4<<8,
              guidance_weight=3,
              generator=None,
-             device=torch.device('cuda')):
+             device=torch.device('cuda'),
+             logging=False):
     
     # Basic configuration
+    gtd, gtcomps = gt(classes, device)
     test_ema = ema is not None
     test_guide = guide is not None
     if acid: test_ref = ref is not None
@@ -694,19 +701,20 @@ def run_test(net, ema=None, guide=None, ref=None, acid=False,
     if test_ema and test_guide: results["ema_guided_L2_metric"] = 0
     if test_ref: results["ref_loss"] = 0
 
-    progress_bar = tqdm.tqdm(range(n_epochs))
-    for i_epoch in range(n_epochs):
-        log.info("Iteration = %i | %s", i_epoch, str(progress_bar))
+    if logging: progress_bar = tqdm.tqdm(range(n_epochs))
+    else: progress_bar = range(n_epochs)
+    for i_epoch in progress_bar:
+        if logging: log.info("Iteration = %i | %s", i_epoch, str(progress_bar))
 
         # Number of samples for this batch
         n_i_samples = min(n_samples - i_epoch*batch_size, batch_size)
 
         # Sample as in training
         test_sigma = (torch.randn(n_i_samples, device=device) * P_std + P_mean).exp()
-        test_samples = gt(classes, device).sample(n_i_samples, test_sigma, generator=generator)
+        test_samples = gtd.sample(n_i_samples, test_sigma, generator=generator)
 
         # Evaluate scores
-        gt_test_scores = gt(classes, device).score(test_samples, test_sigma)
+        gt_test_scores = gtd.score(test_samples, test_sigma)
         net_test_scores = net.score(test_samples, test_sigma)
         if test_ema: ema_test_scores = ema.score(test_samples, test_sigma)
         if test_guide: guide_test_scores = guide.score(test_samples, test_sigma)
@@ -732,10 +740,10 @@ def run_test(net, ema=None, guide=None, ref=None, acid=False,
                 results["ref_loss"] += float(ref_test_loss.mean())/n_epochs
 
         # Sample from pure Gaussian noise
-        test_samples = gt(classes, device).sample(n_i_samples, sigma_max, generator=generator)
+        test_samples = gtd.sample(n_i_samples, sigma_max, generator=generator)
 
         # Create full EMA samples using net for guidance
-        gt_test_outputs = do_sample(net=gt(classes, device), x_init=test_samples, guidance=0, sigma_max=sigma_max)[-1]
+        gt_test_outputs = do_sample(net=gtd, x_init=test_samples, guidance=0, sigma_max=sigma_max)[-1]
         if test_ema:
             ema_test_outputs = do_sample(net=ema, x_init=test_samples, guidance=0, sigma_max=sigma_max)[-1]
             results["ema_L2_metric"] += float(torch.sqrt(((ema_test_outputs - gt_test_outputs) ** 2).sum(-1)).mean())/n_epochs
@@ -817,7 +825,7 @@ def do_test(net_path, ema_path=None, guide_path=None, acid=False,
         n_samples=n_samples, batch_size=batch_size,
         guidance_weight=guidance_weight,
         generator=generator,
-        device=device)
+        device=device, logging=True)
 
     # Log test loss
     log.info("Average Test Learner Loss = %s", results["learner_loss"])
@@ -885,8 +893,9 @@ def do_plot(
     else: generator = torch.Generator(device)
     
     # Generate initial samples.
+    gtd, gtcomps = gt('A', device)
     if any(x.startswith(y) for x in elems for y in ['samples', 'trajectories', 'scores']):
-        samples = gt('A', device).sample(num_samples, sigma_max, generator=generator)
+        samples = gtd.sample(num_samples, sigma_max, generator=generator)
         if sample_distance > 0:
             ok = torch.ones(len(samples), dtype=torch.bool, device=device)
             for i in range(1, len(samples)):
@@ -895,7 +904,7 @@ def do_plot(
 
     # Run sampler.
     if any(x.startswith(y) for x in elems for y in ['samples', 'trajectories']):
-        trajectories = do_sample(net=(net or gt('A', device)), x_init=samples, guidance=guidance, gnet=gnet, sigma_max=sigma_max)
+        trajectories = do_sample(net=(net or gtd), x_init=samples, guidance=guidance, gnet=gnet, sigma_max=sigma_max)
 
     # Initialize plot.
     gridx = torch.linspace(view_x - view_size, view_x + view_size, steps=grid_resolution, device=device)
@@ -922,10 +931,10 @@ def do_plot(
     if 'p_net' in elems:            contours(net.logp(gridxy, sigma_max), levels=np.linspace(-2.5, 2.5, num=20)[1:-1], cmap='Greens', linealpha=0.2)
     if 'p_gnet' in elems:           contours(gnet.logp(gridxy, sigma_max), levels=np.linspace(-2.5, 3.5, num=20)[1:-1], cmap='Reds', linealpha=0.2)
     if 'p_ratio' in elems:          contours(net.logp(gridxy, sigma_max) - gnet.logp(gridxy, sigma_max), levels=np.linspace(-2.2, 1.0, num=20)[1:-1], cmap='Blues', linealpha=0.2)
-    if 'gt_uncond' in elems:        contours(gt('AB', device).logp(gridxy), levels=[-2.12, 0], colors=[[0.9,0.9,0.9]], linecolors=[[0.7,0.7,0.7]], linewidth=1.5)
-    if 'gt_outline' in elems:       contours(gt('A', device).logp(gridxy), levels=[-2.12, 0], colors=[[1.0,0.8,0.6]], linecolors=[[0.8,0.6,0.5]], linewidth=1.5)
-    if 'gt_smax' in elems:          contours(gt('A', device).logp(gridxy, sigma_max), levels=[-1.41, 0], colors=['C1'], alpha=0.2, linealpha=0.2)
-    if 'gt_shaded' in elems:        contours(gt('A', device).logp(gridxy), levels=np.linspace(-2.5, 3.07, num=15)[1:-1], cmap='Oranges', linealpha=0.2)
+    if 'gt_uncond' in elems:        contours(gt('AB', device)[0].logp(gridxy), levels=[-2.12, 0], colors=[[0.9,0.9,0.9]], linecolors=[[0.7,0.7,0.7]], linewidth=1.5)
+    if 'gt_outline' in elems:       contours(gtd.logp(gridxy), levels=[-2.12, 0], colors=[[1.0,0.8,0.6]], linecolors=[[0.8,0.6,0.5]], linewidth=1.5)
+    if 'gt_smax' in elems:          contours(gtd.logp(gridxy, sigma_max), levels=[-1.41, 0], colors=['C1'], alpha=0.2, linealpha=0.2)
+    if 'gt_shaded' in elems:        contours(gtd.logp(gridxy), levels=np.linspace(-2.5, 3.07, num=15)[1:-1], cmap='Oranges', linealpha=0.2)
     if 'trajectories' in elems:     lines(trajectories.transpose(0, 1), alpha=0.3)
     if 'scores_net' in elems:       arrows(samples, net.score(samples, sigma_max), color='C2')
     if 'scores_gnet' in elems:      arrows(samples, gnet.score(samples, sigma_max), color='C3')
@@ -989,7 +998,8 @@ def cmdline():
 @click.option('--layers', help='Number of layers', metavar='INT',     type=int, default=4, show_default=True)
 @click.option('--dim',    help='Hidden dimension', metavar='INT',     type=int, default=64, show_default=True)
 @click.option('--total-iter', help='Number of training iterations', metavar='INT', 
-                                                                      type=int, default=4096, show_default=True)
+                                                                      type=int, default=4<<10, show_default=True)
+@click.option('--batch-size', help='Batch size', metavar='INT',       type=int, default=4<<10, show_default=True)
 @click.option('--val/--no-val', help='Use validation?', metavar='BOOL', 
                                                                       type=bool, default=True, show_default=True)
 @click.option('--test/--no-test', help='Run test?', metavar='BOOL',   type=bool, default=True, show_default=True)
@@ -1017,7 +1027,7 @@ def cmdline():
 @click.option('--logging', help='Log filename', metavar='DIR',        type=str, default=None)
 @click.option('--viz/--no-viz', help='Visualize progress?', metavar='BOOL', 
                                                                       type=bool, default=True, show_default=True)
-def train(outdir, cls, layers, dim, total_iter, val, test, viz, 
+def train(outdir, cls, layers, dim, total_iter, batch_size, val, test, viz, 
           guidance, guide_path, interpol, acid, n, filt, diff, invert, 
           seed, verbose, debug, logging):
     """Train a 2D toy model with the given parameters."""
@@ -1031,7 +1041,8 @@ def train(outdir, cls, layers, dim, total_iter, val, test, viz,
     pkl_pattern = f'{outdir}/iter%04d.pkl' if outdir is not None else None
     viz_iter = 32 if viz else None
     log.info('Training...')
-    do_train(classes=cls, num_layers=layers, hidden_dim=dim, total_iter=total_iter, seed=seed, 
+    do_train(classes=cls, num_layers=layers, hidden_dim=dim, 
+             total_iter=total_iter, batch_size=batch_size, seed=seed, 
              validation=val, testing=test, 
              guidance=guidance, guide_path=guide_path, guide_interpolation=interpol,
              acid=acid, acid_n=n, acid_f=filt, acid_diff=diff, acid_inverted=invert,
