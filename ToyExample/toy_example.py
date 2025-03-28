@@ -403,7 +403,7 @@ def do_train(
     # Training loop.
     progress_bar = tqdm.tqdm(range(total_iter))
     for iter_idx in progress_bar:
-        if logging_to_file: log.info("Iteration = %i | %s", iter_idx, str(progress_bar))
+        if logging_to_file: log.info("Iteration = %i", iter_idx)
 
         # Run forward-pass
         opt.param_groups[0]['lr'] = lr_ref / np.sqrt(max(iter_idx / lr_iter, 1))
@@ -704,7 +704,7 @@ def run_test(net, ema=None, guide=None, ref=None, acid=False,
     if logging: progress_bar = tqdm.tqdm(range(n_epochs))
     else: progress_bar = range(n_epochs)
     for i_epoch in progress_bar:
-        if logging: log.info("Iteration = %i | %s", i_epoch, str(progress_bar))
+        if logging: log.info("Iteration = %i", i_epoch)
 
         # Number of samples for this batch
         n_i_samples = min(n_samples - i_epoch*batch_size, batch_size)
