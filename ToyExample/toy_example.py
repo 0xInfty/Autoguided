@@ -909,10 +909,20 @@ def do_plot(
             for i in range(1, len(samples)):
                 ok[i] = (samples[i] - samples[:i][ok[:i]]).square().sum(-1).sqrt().min() >= sample_distance
             samples = samples[ok]
+    if any(x.startswith(y) for x in elems for y in ['out_samples', 'out_trajectories']):
+        out_samples = outd.sample(num_samples, sigma_max, generator=generator)
+        if sample_distance > 0:
+            ok = torch.ones(len(out_samples), dtype=torch.bool, device=device)
+            for i in range(1, len(out_samples)):
+                ok[i] = (out_samples[i] - out_samples[:i][ok[:i]]).square().sum(-1).sqrt().min() >= sample_distance
+            out_samples = out_samples[ok]
+        out_gt_trajectories = do_sample(net=outd, x_init=out_samples, guidance=0, sigma_max=sigma_max)
 
     # Run sampler.
     if any(x.startswith(y) for x in elems for y in ['samples', 'trajectories']):
         trajectories = do_sample(net=(net or gtd), x_init=samples, guidance=guidance, gnet=gnet, sigma_max=sigma_max)
+    if any(x.startswith(y) for x in elems for y in ['out_samples', 'out_trajectories']):
+        out_trajectories = do_sample(net=(net or outd), x_init=out_samples, guidance=guidance, gnet=gnet, sigma_max=sigma_max)
 
     # Initialize plot.
     gridx = torch.linspace(view_x - view_size, view_x + view_size, steps=grid_resolution, device=device)
@@ -954,6 +964,14 @@ def do_plot(
     if 'trajectories_small' in elems: lines(trajectories.transpose(0, 1), alpha=0.3, color="lightgrey")
     if 'out_gt_uncond' in elems:    contours(alloutd.logp(gridxy), levels=[-2.12, 0], colors=[[0.9,0.9,0.9]], linecolors=[[0.7,0.7,0.7]], linewidth=1.5)
     if 'out_gt_outline' in elems:   contours(outd.logp(gridxy), levels=[-2.12, 0], colors=[[1.0,0.8,0.6]], linecolors=[[0.8,0.6,0.5]], linewidth=1.5)
+    if 'out_gt_after' in elems:     points(out_gt_trajectories[-1], alpha=0.35, size=15, color="b")
+    if 'out_gt_trajectories_small' in elems: lines(out_gt_trajectories.transpose(0, 1), alpha=0.4, color="lightsteelblue")
+    if 'out_samples' in elems:      points(out_trajectories[-1], size=15, alpha=0.35)
+    if 'out_samples_before' in elems: points(out_samples)
+    if 'out_samples_after' in elems:  points(out_trajectories[-1])
+    if 'out_samples_before_small' in elems: points(out_samples, alpha=0.5, size=15, color="m")
+    if 'out_trajectories' in elems:   lines(out_trajectories.transpose(0, 1), alpha=0.3)
+    if 'out_trajectories_small' in elems: lines(out_trajectories.transpose(0, 1), alpha=0.4, color="lightgrey")
 
 #----------------------------------------------------------------------------
 # Main command line.
