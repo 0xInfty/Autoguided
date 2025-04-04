@@ -885,15 +885,23 @@ def do_sample(net, x_init, guidance=1, gnet=None, num_steps=32, sigma_min=0.002,
 def do_plot(
     net=None, guidance=1, gnet=None, elems={'gt_uncond', 'gt_outline', 'samples'},
     view_x=0, view_y=0, view_size=1.6, grid_resolution=400, arrow_len=0.002,
-    num_samples=1<<13, seed=1, sample_distance=0, sigma_max=5,
+    num_samples=1<<13, seed=1, sample_distance=0, sigma_max=5, depth_sep=5,
     device=torch.device('cuda'),
 ):
     if seed is not None: 
         generator = torch.Generator(device).manual_seed(seed)
     else: generator = torch.Generator(device)
-    
+
     # Generate initial samples.
     gtd, gtcomps = gt('A', device)
+    alloutcomps = [c for c in gtcomps if c.depth>=depth_sep]
+    alloutd = GaussianMixture([c.phi for c in alloutcomps], 
+                              [c.mu for c in alloutcomps], 
+                              [c.Sigma for c in alloutcomps]).to(device)
+    outcomps = [c for c in alloutcomps if c.cls=="A"]
+    outd = GaussianMixture([c.phi for c in outcomps], 
+                           [c.mu for c in outcomps], 
+                           [c.Sigma for c in outcomps]).to(device)
     if any(x.startswith(y) for x in elems for y in ['samples', 'trajectories', 'scores']):
         samples = gtd.sample(num_samples, sigma_max, generator=generator)
         if sample_distance > 0:
@@ -913,7 +921,7 @@ def do_plot(
     plt.xlim(float(gridx[0]), float(gridx[-1]))
     plt.ylim(float(gridy[0]), float(gridy[-1]))
     plt.gca().set_aspect('equal')
-    # plt.gca().set_axis_off()
+    plt.gca().set_axis_off()
 
     # Plot helper functions.
     def contours(values, levels, colors=None, cmap=None, alpha=1, linecolors='black', linealpha=1, linewidth=2.5):
@@ -944,6 +952,8 @@ def do_plot(
     if 'samples_after' in elems:    points(trajectories[-1])
     if 'samples_before_small' in elems: points(samples, alpha=0.5, size=15, color="m")
     if 'trajectories_small' in elems: lines(trajectories.transpose(0, 1), alpha=0.3, color="lightgrey")
+    if 'out_gt_uncond' in elems:    contours(alloutd.logp(gridxy), levels=[-2.12, 0], colors=[[0.9,0.9,0.9]], linecolors=[[0.7,0.7,0.7]], linewidth=1.5)
+    if 'out_gt_outline' in elems:   contours(outd.logp(gridxy), levels=[-2.12, 0], colors=[[1.0,0.8,0.6]], linecolors=[[0.8,0.6,0.5]], linewidth=1.5)
 
 #----------------------------------------------------------------------------
 # Main command line.
