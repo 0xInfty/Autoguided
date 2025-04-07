@@ -569,10 +569,18 @@ def extract_results_from_log(log_path):
     ema_val_loss = []
     guide_val_loss = []
     ref_val_loss = []
+    learner_out_val_loss = []
+    ema_out_val_loss = []
+    guide_out_val_loss = []
+    ref_out_val_loss = []
     ema_L2_val_metric = []
     ema_guided_L2_val_metric = []
     L2_val_metric = []
     guided_L2_val_metric = []
+    ema_out_L2_val_metric = []
+    ema_guided_out_L2_val_metric = []
+    out_L2_val_metric = []
+    guided_out_L2_val_metric = []
     with builtins.open(log_path, "r") as f:
         for line in f:
             if "Average" in line:
@@ -580,6 +588,24 @@ def extract_results_from_log(log_path):
                 elif "Super-Batch" in line:
                     if "Average Super-Batch Learner Loss" in line: super_learner_loss.append(vtext.find_numbers(line)[-1])
                     elif "Average Super-Batch Reference Loss" in line: super_ref_loss.append(vtext.find_numbers(line)[-1])
+                elif "Outer Validation" in line:
+                    if "Average Outer Validation Learner Loss" in line: learner_out_val_loss.append(vtext.find_numbers(line)[-1])
+                    elif "Average Outer Validation EMA Loss" in line: ema_out_val_loss.append(vtext.find_numbers(line)[-1])
+                    elif "Average Outer Validation Guide Loss" in line: guide_out_val_loss.append(vtext.find_numbers(line)[-1])
+                    elif "Average Outer Test ACID Reference Loss " in line: ref_out_val_loss.append(vtext.find_numbers(line)[-1])
+                    elif "Average Outer Validation EMA L2 Distance" in line: ema_out_L2_val_metric.append(vtext.find_numbers(line)[-1])
+                    elif "Average Outer Validation Guided EMA L2 Distance" in line: ema_guided_out_L2_val_metric.append(vtext.find_numbers(line)[-1])
+                    elif "Average Outer Validation Learner L2 Distance" in line: out_L2_val_metric.append(vtext.find_numbers(line)[-1])
+                    elif "Average Outer Validation Guided Learner L2 Distance" in line: guided_out_L2_val_metric.append(vtext.find_numbers(line)[-1])
+                elif "Outer Test" in line:
+                    if "Average Outer Test Learner Loss" in line: learner_out_test_loss = vtext.find_numbers(line)[-1]
+                    elif "Average Outer Test EMA Loss" in line: ema_out_test_loss = vtext.find_numbers(line)[-1]
+                    elif "Average Outer Test Guide Loss" in line: guide_out_test_loss = vtext.find_numbers(line)[-1]
+                    elif "Average Outer Test ACID Reference Loss" in line: ref_out_test_loss = vtext.find_numbers(line)[-1]
+                    elif "Average Outer Test EMA L2 Distance With Guidance" in line: ema_guided_out_L2_test_metric = vtext.find_numbers(line)[-1]
+                    elif "Average Outer Test EMA L2 Distance" in line: ema_out_L2_test_metric = vtext.find_numbers(line)[-1]
+                    elif "Average Outer Test Learner L2 Distance With Guidance" in line: guided_out_L2_test_metric = vtext.find_numbers(line)[-1]
+                    elif "Average Outer Test Learner L2 Distance" in line: out_L2_test_metric = vtext.find_numbers(line)[-1]
                 elif "Validation" in line:
                     if "Average Validation Learner Loss" in line: learner_val_loss.append(vtext.find_numbers(line)[-1])
                     elif "Average Validation EMA Loss" in line: ema_val_loss.append(vtext.find_numbers(line)[-1])
@@ -614,6 +640,16 @@ def extract_results_from_log(log_path):
                "L2_val_metric": L2_val_metric,
                "guided_L2_val_metric": guided_L2_val_metric}
     try:
+        results["learner_out_val_loss"] = learner_out_val_loss
+        results["ema_out_val_loss"] = ema_out_val_loss
+        results["guide_out_val_loss"] = guide_out_val_loss
+        results["ref_out_val_loss"] = ref_out_val_loss
+        results["ema_out_L2_val_metric"] = ema_out_L2_val_metric
+        results["ema_guided_out_L2_val_metric"] = ema_guided_out_L2_val_metric
+        results["out_L2_val_metric"] = out_L2_val_metric
+        results["guided_out_L2_val_metric"] = guided_out_L2_val_metric
+    except UnboundLocalError: pass
+    try:
         results["learner_test_loss"] = learner_test_loss
         results["ema_test_loss"] = ema_test_loss
         results["ema_L2_test_metric"] = ema_L2_test_metric
@@ -631,33 +667,40 @@ def extract_results_from_log(log_path):
             results["L2_test_metric"] = L2_test_metric
         except UnboundLocalError: pass
     except UnboundLocalError: pass
+    try:
+        results["learner_out_test_loss"] = learner_out_test_loss
+        results["ema_out_test_loss"] = ema_out_test_loss
+        results["ema_out_L2_test_metric"] = ema_out_L2_test_metric
+        try:
+            results["guide_out_test_loss"] = guide_out_test_loss
+            results["ema_guided_out_L2_test_metric"] = ema_guided_out_L2_test_metric
+        except UnboundLocalError: pass
+        try:
+            results["ref_out_test_loss"] = ref_out_test_loss
+        except UnboundLocalError: pass
+        try:
+            results["guided_out_L2_test_metric"] = guided_out_L2_test_metric
+        except UnboundLocalError: pass
+        try:
+            results["out_L2_test_metric"] = out_L2_test_metric
+        except UnboundLocalError: pass
+    except UnboundLocalError: pass
 
     return results
 
 def plot_loss(loss_dict, fig_path=None):
 
+    figs = []
     if fig_path is not None:
         fig_path_base, fig_extension = os.path.splitext(fig_path)
-
-    super_learner_loss = loss_dict["super_learner_loss"]
-    super_ref_loss = loss_dict["super_ref_loss"]
-    learner_loss = loss_dict["learner_loss"]
-    learner_val_loss = loss_dict["learner_val_loss"]
-    ema_val_loss = loss_dict["ema_val_loss"]
-    guide_val_loss = loss_dict["guide_val_loss"]
-    ref_val_loss = loss_dict["ref_val_loss"]
-    ema_L2_val_metric = loss_dict["ema_L2_val_metric"]
-    ema_guided_L2_val_metric = loss_dict["ema_guided_L2_val_metric"]
-    L2_val_metric = loss_dict["L2_val_metric"]
-    guided_L2_val_metric = loss_dict["guided_L2_val_metric"]
 
     # Basic plot
     def plot_training_loss():
         fig, axes = plt.subplots(nrows=2, gridspec_kw=dict(hspace=0))
-        axes[0].plot(learner_loss, "C0", label="Training Loss", alpha=0.8, linewidth=2)
-        if len(super_ref_loss)>0: 
-            axes[0].plot(super_ref_loss, "C3", label="ACID Ref Loss", alpha=1, linewidth=1)
-            axes[0].plot(super_learner_loss, "k", label="ACID Learner Loss", alpha=1, linewidth=0.5)
+        axes[0].plot(loss_dict["learner_loss"], "C0", label="Training Loss", alpha=0.8, linewidth=2)
+        if len(loss_dict["super_ref_loss"])>0: 
+            axes[0].plot(loss_dict["super_ref_loss"], "C3", label="ACID Ref Loss", alpha=1, linewidth=1)
+            axes[0].plot(loss_dict["super_learner_loss"], "k", label="ACID Learner Loss", alpha=1, linewidth=0.5)
         axes[1].set_xlabel("Epoch")
         axes[0].set_ylabel("Average Training Loss")
         axes[0].legend()
@@ -666,35 +709,76 @@ def plot_loss(loss_dict, fig_path=None):
     
     # First, plot validation loss values
     fig_1, axes_1 = plot_training_loss()
-    if len(learner_val_loss)>0:
-        if len(ref_val_loss)>0:
-            axes_1[1].plot(ref_val_loss, "C3", label="Ref Val Loss", alpha=1, linewidth=0.5)
-        axes_1[1].plot(learner_val_loss, "k", label="Learner Val Loss", alpha=1.0, linewidth=0.5)
-        axes_1[1].plot(ema_val_loss, color="m", label="EMA Val Loss", alpha=0.35, linewidth=3)
-        if len(guide_val_loss)>0:
-            axes_1[1].plot(guide_val_loss, color="r", label="Guide Val Loss", alpha=0.25, linewidth=2)
+    if len(loss_dict["learner_val_loss"])>0:
+        if len(loss_dict["ref_val_loss"])>0:
+            axes_1[1].plot(loss_dict["ref_val_loss"], "C3", label="Ref Val Loss", alpha=1, linewidth=0.5)
+        axes_1[1].plot(loss_dict["learner_val_loss"], "k", label="Learner Val Loss", alpha=1.0, linewidth=0.5)
+        axes_1[1].plot(loss_dict["ema_val_loss"], color="m", label="EMA Val Loss", alpha=0.35, linewidth=3)
+        if len(loss_dict["guide_val_loss"])>0:
+            axes_1[1].plot(loss_dict["guide_val_loss"], color="r", label="Guide Val Loss", alpha=0.25, linewidth=2)
     axes_1[1].set_ylabel("Average Validation Loss")
     axes_1[1].legend()
     plt.tight_layout()
     plt.savefig(fig_path_base+"_1"+fig_extension)
+    figs.append(fig_1)
         
-    # Then, plot validation loss values
+    # Then, plot validation L2 distance values
     fig_2, axes_2 = plot_training_loss()
-    if len(learner_val_loss)>0:
-        axes_2[1].plot(ema_L2_val_metric, "-.", color="navy", label="EMA L2 Val Metric", alpha=1, linewidth=1)
-        if len(L2_val_metric)>0:
-            axes_2[1].plot(L2_val_metric, "-", color="blue", label="Learner L2 Val Metric", alpha=0.35, linewidth=3)
-        if len(ema_guided_L2_val_metric)>0:
-            axes_2[1].plot(ema_guided_L2_val_metric, "--", color="deeppink", label="Guided EMA L2 Val Metric", alpha=1, linewidth=1)
-        if len(guided_L2_val_metric)>0:
-            axes_2[1].plot(guided_L2_val_metric, "-", color="mediumvioletred", label="Guided Learner L2 Val Metric", 
+    if len(loss_dict["learner_val_loss"])>0:
+        axes_2[1].plot(loss_dict["ema_L2_val_metric"], "-.", color="navy", label="EMA L2 Val Metric", alpha=1, linewidth=1)
+        if len(loss_dict["L2_val_metric"])>0:
+            axes_2[1].plot(loss_dict["L2_val_metric"], "-", color="blue", label="Learner L2 Val Metric", alpha=0.35, linewidth=3)
+        if len(loss_dict["ema_guided_L2_val_metric"])>0:
+            axes_2[1].plot(loss_dict["ema_guided_L2_val_metric"], "--", color="deeppink", label="Guided EMA L2 Val Metric", alpha=1, linewidth=1)
+        if len(loss_dict["guided_L2_val_metric"])>0:
+            axes_2[1].plot(loss_dict["guided_L2_val_metric"], "-", color="mediumvioletred", label="Guided Learner L2 Val Metric", 
                            alpha=0.35, linewidth=3)
     axes_2[1].set_ylabel("Average Validation L2 Distance")
     axes_2[1].legend()
     plt.tight_layout()
     plt.savefig(fig_path_base+"_2"+fig_extension)
+    figs.append(fig_2)
     
-    return fig_1, fig_2
+    # Also compare validation loss on the outer branches vs the whole distribution
+    if len(loss_dict["learner_out_val_loss"])>0:
+        fig_3, axes_3 = plot_training_loss()
+        axes_3[1].plot(loss_dict["learner_val_loss"], "k", label="Learner Val Loss", alpha=1.0, linewidth=0.5)
+        axes_3[1].plot(loss_dict["ema_val_loss"], color="m", label="EMA Val Loss", alpha=0.35, linewidth=3)
+        axes_3[1].plot(loss_dict["learner_out_val_loss"], "k", label="Learner Out Val Loss", alpha=1.0, linewidth=0.5, linestyle="dashed")
+        axes_3[1].plot(loss_dict["ema_out_val_loss"], color="orange", label="EMA Out Val Loss", alpha=0.35, linewidth=3)
+        axes_3[1].set_ylabel("Average Validation Loss")
+        axes_3[1].legend(loc="upper right", ncols=2)
+        plt.tight_layout()
+        plt.savefig(fig_path_base+"_3"+fig_extension)
+        figs.append(fig_3)
+
+    # Finally, compare validation L2 metrics on the outer branches vs the whole distribution
+    if len(loss_dict["ema_out_L2_val_metric"])>0:
+        fig_4, axes_4 = plot_training_loss()
+        axes_4[1].plot(loss_dict["ema_L2_val_metric"], "-", color="navy", label="EMA L2 Val Metric", alpha=1, linewidth=1)
+        axes_4[1].plot(loss_dict["L2_val_metric"], "-", color="blue", label="Learner L2 Val Metric", alpha=0.35, linewidth=3)
+        axes_4[1].plot(loss_dict["ema_out_L2_val_metric"], "-.", color="firebrick", label="EMA Out L2 Val Metric", alpha=1, linewidth=1)
+        axes_4[1].plot(loss_dict["out_L2_val_metric"], "-", color="salmon", label="Learner Out L2 Val Metric", alpha=0.45, linewidth=3)
+        axes_4[1].set_ylabel("Average Validation L2 Distance")
+        axes_4[1].legend(loc="upper right", ncols=2)
+        plt.tight_layout()
+        plt.savefig(fig_path_base+"_4"+fig_extension)
+        figs.append(fig_4)
+
+        fig_5, axes_5 = plot_training_loss()
+        axes_5[1].plot(loss_dict["ema_guided_L2_val_metric"], "--", color="deeppink", label="Guided EMA L2 Val Metric", alpha=1, linewidth=1)
+        axes_5[1].plot(loss_dict["guided_L2_val_metric"], "-", color="mediumvioletred", label="Guided Learner L2 Val Metric", 
+                        alpha=0.35, linewidth=3)
+        axes_5[1].plot(loss_dict["ema_guided_out_L2_val_metric"], "--", color="teal", label="Guided EMA Out L2 Val Metric", alpha=1, linewidth=1)
+        axes_5[1].plot(loss_dict["guided_out_L2_val_metric"], "-", color="lightseagreen", label="Guided Learner Out L2 Val Metric", 
+                        alpha=0.45, linewidth=3)
+        axes_5[1].set_ylabel("Average Validation L2 Distance")
+        axes_5[1].legend(loc="upper right")
+        plt.tight_layout()
+        plt.savefig(fig_path_base+"_5"+fig_extension)
+        figs.append(fig_5)
+    
+    return figs
 
 #----------------------------------------------------------------------------
 # Run test
