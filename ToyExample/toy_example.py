@@ -140,8 +140,8 @@ def gt(classes='A', device=torch.device('cpu'), seed=2, origin=np.array([0.0030,
     recurse(cls='B', depth=0, pos=origin, angle=(np.pi * 1.25))
 
     # Construct a GaussianMixture object for the selected classes.
-    sel = [c for c in comps if c.cls in classes]
-    distrib = GaussianMixture([c.phi for c in sel], [c.mu for c in sel], [c.Sigma for c in sel])
+    comps = [c for c in comps if c.cls in classes]
+    distrib = GaussianMixture([c.phi for c in comps], [c.mu for c in comps], [c.Sigma for c in comps])
 
     return distrib.to(device), comps
 
@@ -674,33 +674,49 @@ def plot_loss(loss_dict, fig_path=None):
 # Run test
 
 def run_test(net, ema=None, guide=None, ref=None, acid=False,
-             classes='A', P_mean=-2.3, P_std=1.5, sigma_max=5,
+             classes='A', P_mean=-2.3, P_std=1.5, sigma_max=5, depth_sep=5,
              n_samples=4<<8, batch_size=4<<8,
              guidance_weight=3,
              generator=None,
              device=torch.device('cuda'),
              logging=False):
-    
+
     # Basic configuration
-    gtd, gtcomps = gt(classes, device)
     test_ema = ema is not None
     test_guide = guide is not None
     if acid: test_ref = ref is not None
     else: test_ref = False
+
+    # Ground truth distribution
+    gtd, gtcomps = gt(classes, device)
+    outcomps = [c for c in gtcomps if c.depth>=depth_sep]
+    outd = GaussianMixture([c.phi for c in outcomps], 
+                           [c.mu for c in outcomps], 
+                           [c.Sigma for c in outcomps]).to(device)
+    
+    # Basic loop configuration
     n_epochs = n_samples//batch_size
     n_remainder = n_samples - n_epochs*batch_size
-    if n_remainder > 0: n_epochs += 1
-    
-    results = {"learner_loss":0, "learner_L2_metric":0}
+    if n_remainder > 0: n_epochs += 1    
+    results = {"learner_loss":0, "learner_out_loss":0, "learner_L2_metric":0, "learner_out_L2_metric":0}
     if test_ema: 
         results["ema_loss"] = 0
+        results["ema_out_loss"] = 0
         results["ema_L2_metric"] = 0
+        results["ema_out_L2_metric"] = 0
     if test_guide: 
         results["guide_loss"] = 0
+        results["guide_out_loss"] = 0
         results["learner_guided_L2_metric"] = 0
-    if test_ema and test_guide: results["ema_guided_L2_metric"] = 0
-    if test_ref: results["ref_loss"] = 0
+        results["learner_guided_out_L2_metric"] = 0
+    if test_ema and test_guide: 
+        results["ema_guided_L2_metric"] = 0
+        results["ema_guided_out_L2_metric"] = 0
+    if test_ref: 
+        results["ref_loss"] = 0
+        results["ref_out_loss"] = 0
 
+    # Test loop
     if logging: progress_bar = tqdm.tqdm(range(n_epochs))
     else: progress_bar = range(n_epochs)
     for i_epoch in progress_bar:
@@ -713,52 +729,86 @@ def run_test(net, ema=None, guide=None, ref=None, acid=False,
         test_sigma = (torch.randn(n_i_samples, device=device) * P_std + P_mean).exp()
         test_samples = gtd.sample(n_i_samples, test_sigma, generator=generator)
 
+        # Also sample from the outer branches of the distribution
+        out_test_samples = outd.sample(n_i_samples, test_sigma, generator=generator)
+
         # Evaluate scores
         gt_test_scores = gtd.score(test_samples, test_sigma)
         net_test_scores = net.score(test_samples, test_sigma)
-        if test_ema: ema_test_scores = ema.score(test_samples, test_sigma)
-        if test_guide: guide_test_scores = guide.score(test_samples, test_sigma)
+        gt_out_test_scores = outd.score(out_test_samples, test_sigma)
+        net_out_test_scores = net.score(out_test_samples, test_sigma)
+        if test_ema: 
+            ema_test_scores = ema.score(test_samples, test_sigma)
+            ema_out_test_scores = ema.score(out_test_samples, test_sigma)
+        if test_guide: 
+            guide_test_scores = guide.score(test_samples, test_sigma)
+            guide_out_test_scores = guide.score(out_test_samples, test_sigma)
         if test_ref and not test_guide and not test_ema:
             ref_test_scores = ref.score(test_samples, test_sigma)
+            ref_out_test_scores = ref.score(out_test_samples, test_sigma)
 
         # Evaluate loss
         net_test_loss = (test_sigma ** 2) * ((gt_test_scores - net_test_scores) ** 2).mean(-1)
         results["learner_loss"] += float(net_test_loss.mean())/n_epochs
+        net_out_test_loss = (test_sigma ** 2) * ((gt_out_test_scores - net_out_test_scores) ** 2).mean(-1)
+        results["learner_out_loss"] += float(net_out_test_loss.mean())/n_epochs
         if test_ema:
             ema_test_loss = (test_sigma ** 2) * ((gt_test_scores - ema_test_scores) ** 2).mean(-1)
             results["ema_loss"] += float(ema_test_loss.mean())/n_epochs
+            ema_out_test_loss = (test_sigma ** 2) * ((gt_out_test_scores - ema_out_test_scores) ** 2).mean(-1)
+            results["ema_out_loss"] += float(ema_out_test_loss.mean())/n_epochs
         if test_guide: 
             guide_test_loss = (test_sigma ** 2) * ((gt_test_scores - guide_test_scores) ** 2).mean(-1)
             results["guide_loss"] += float(guide_test_loss.mean())/n_epochs
+            guide_out_test_loss = (test_sigma ** 2) * ((gt_out_test_scores - guide_out_test_scores) ** 2).mean(-1)
+            results["guide_out_loss"] += float(guide_out_test_loss.mean())/n_epochs
         if test_ref:
             if test_guide: 
                 results["ref_loss"] += results["guide_loss"]
+                results["ref_out_loss"] += results["guide_out_loss"]
             elif test_ema:
                 results["ref_loss"] += results["ema_loss"]
+                results["ref_out_loss"] += results["ema_out_loss"]
             else:
                 ref_test_loss = (test_sigma ** 2) * ((gt_test_scores - ref_test_scores) ** 2).mean(-1)
                 results["ref_loss"] += float(ref_test_loss.mean())/n_epochs
+                ref_out_test_loss = (test_sigma ** 2) * ((gt_out_test_scores - ref_out_test_scores) ** 2).mean(-1)
+                results["ref_out_loss"] += float(ref_out_test_loss.mean())/n_epochs
 
         # Sample from pure Gaussian noise
         test_samples = gtd.sample(n_i_samples, sigma_max, generator=generator)
 
+        # Sample also from the outer branches of the distribution
+        out_test_samples = outd.sample(n_i_samples, sigma_max, generator=generator)
+
         # Create full EMA samples using net for guidance
         gt_test_outputs = do_sample(net=gtd, x_init=test_samples, guidance=0, sigma_max=sigma_max)[-1]
+        gt_out_test_outputs = do_sample(net=outd, x_init=out_test_samples, guidance=0, sigma_max=sigma_max)[-1]
         if test_ema:
             ema_test_outputs = do_sample(net=ema, x_init=test_samples, guidance=0, sigma_max=sigma_max)[-1]
             results["ema_L2_metric"] += float(torch.sqrt(((ema_test_outputs - gt_test_outputs) ** 2).sum(-1)).mean())/n_epochs
+            ema_out_test_outputs = do_sample(net=ema, x_init=out_test_samples, guidance=0, sigma_max=sigma_max)[-1]
+            results["ema_out_L2_metric"] += float(torch.sqrt(((ema_out_test_outputs - gt_out_test_outputs) ** 2).sum(-1)).mean())/n_epochs
         if test_ema and test_guide:
             guided_test_outputs = do_sample(net=ema, x_init=test_samples, 
                                             guidance=guidance_weight, gnet=guide, sigma_max=sigma_max)[-1]
             results["ema_guided_L2_metric"] += float(torch.sqrt(((guided_test_outputs - gt_test_outputs) ** 2).sum(-1)).mean())/n_epochs
+            guided_out_test_outputs = do_sample(net=ema, x_init=out_test_samples, 
+                                                guidance=guidance_weight, gnet=guide, sigma_max=sigma_max)[-1]
+            results["ema_guided_out_L2_metric"] += float(torch.sqrt(((guided_out_test_outputs - gt_out_test_outputs) ** 2).sum(-1)).mean())/n_epochs
 
         # Create full learner samples using net for guidance
         test_outputs = do_sample(net=net, x_init=test_samples, guidance=0, sigma_max=sigma_max)[-1]
         results["learner_L2_metric"] += float(torch.sqrt(((test_outputs - gt_test_outputs) ** 2).sum(-1)).mean())/n_epochs
+        out_test_outputs = do_sample(net=net, x_init=out_test_samples, guidance=0, sigma_max=sigma_max)[-1]
+        results["learner_out_L2_metric"] += float(torch.sqrt(((out_test_outputs - gt_out_test_outputs) ** 2).sum(-1)).mean())/n_epochs
         if test_guide:
             guided_test_outputs = do_sample(net=net, x_init=test_samples, 
                                             guidance=guidance_weight, gnet=guide, sigma_max=sigma_max)[-1]
             results["learner_guided_L2_metric"] += float(torch.sqrt(((guided_test_outputs - gt_test_outputs) ** 2).sum(-1)).mean())/n_epochs
+            guided_out_test_outputs = do_sample(net=net, x_init=out_test_samples, 
+                                                guidance=guidance_weight, gnet=guide, sigma_max=sigma_max)[-1]
+            results["learner_guided_out_L2_metric"] += float(torch.sqrt(((guided_out_test_outputs - gt_out_test_outputs) ** 2).sum(-1)).mean())/n_epochs
 
     return results
 
@@ -766,7 +816,7 @@ def run_test(net, ema=None, guide=None, ref=None, acid=False,
 # To run test outside of training, loading the models first
 
 def do_test(net_path, ema_path=None, guide_path=None, acid=False, 
-            classes='A', P_mean=-2.3, P_std=1.5, sigma_max=5,
+            classes='A', P_mean=-2.3, P_std=1.5, sigma_max=5, depth_sep=5,
             n_samples=4<<8, batch_size=4<<8,
             guidance_weight=3,
             seed=None, generator=None,
@@ -821,7 +871,7 @@ def do_test(net_path, ema_path=None, guide_path=None, acid=False,
 
     # Run test
     results = run_test(net, ema, guide, ref, acid=acid,
-        classes=classes, P_mean=P_mean, P_std=P_std, sigma_max=sigma_max,
+        classes=classes, P_mean=P_mean, P_std=P_std, sigma_max=sigma_max, depth_sep=depth_sep,
         n_samples=n_samples, batch_size=batch_size,
         guidance_weight=guidance_weight,
         generator=generator,
@@ -832,6 +882,16 @@ def do_test(net_path, ema_path=None, guide_path=None, acid=False,
     log.info("Average Test EMA Loss = %s", results["ema_loss"])
     try: log.info("Average Test Guide Loss = %s", results["guide_loss"])
     except UnboundLocalError: pass
+    try: log.info("Average Test Ref Loss = %s", results["ref_loss"])
+    except UnboundLocalError: pass
+
+    # Log test loss on outer branches of the distribution
+    log.info("Average Outer Test Learner Loss = %s", results["learner_out_loss"])
+    log.info("Average Outer Test EMA Loss = %s", results["ema_out_loss"])
+    try: log.info("Average Outer Test Guide Loss = %s", results["guide_out_loss"])
+    except UnboundLocalError: pass
+    try: log.info("Average Outer Test Ref Loss = %s", results["ref_out_loss"])
+    except UnboundLocalError: pass
 
     # Log test L2 metric
     log.info("Average Test EMA L2 Distance = %s", results["ema_L2_metric"])
@@ -839,6 +899,14 @@ def do_test(net_path, ema_path=None, guide_path=None, acid=False,
     except UnboundLocalError: pass
     log.info("Average Test Learner L2 Distance = %s", results["learner_L2_metric"])
     try: log.info("Average Test Guided Learner L2 Distance = %s", results["learner_guided_L2_metric"])
+    except UnboundLocalError: pass
+
+    # Log test L2 metric on outer branches of the distribution
+    log.info("Average Outer Test EMA L2 Distance = %s", results["ema_out_L2_metric"])
+    try: log.info("Average Outer Test Guided EMA L2 Distance = %s", results["ema_guided_out_L2_metric"])
+    except UnboundLocalError: pass
+    log.info("Average Outer Test Learner L2 Distance = %s", results["learner_out_L2_metric"])
+    try: log.info("Average Outer Test Guided Learner L2 Distance = %s", results["learner_guided_out_L2_metric"])
     except UnboundLocalError: pass
 
     return results
@@ -892,9 +960,13 @@ def do_plot(
         generator = torch.Generator(device).manual_seed(seed)
     else: generator = torch.Generator(device)
 
-    # Generate initial samples.
-    gtd, gtcomps = gt('A', device)
-    alloutcomps = [c for c in gtcomps if c.depth>=depth_sep]
+    # Initialize ground truth distribution
+    allgtd, allgtcomps = gt('AB', device)
+    gtcomps = [c for c in allgtcomps if c.cls=="A"]
+    gtd = GaussianMixture([c.phi for c in gtcomps], 
+                          [c.mu for c in gtcomps], 
+                          [c.Sigma for c in gtcomps]).to(device)
+    alloutcomps = [c for c in allgtcomps if c.depth>=depth_sep]
     alloutd = GaussianMixture([c.phi for c in alloutcomps], 
                               [c.mu for c in alloutcomps], 
                               [c.Sigma for c in alloutcomps]).to(device)
@@ -902,6 +974,8 @@ def do_plot(
     outd = GaussianMixture([c.phi for c in outcomps], 
                            [c.mu for c in outcomps], 
                            [c.Sigma for c in outcomps]).to(device)
+    
+    # Generate initial samples.
     if any(x.startswith(y) for x in elems for y in ['samples', 'trajectories', 'scores']):
         samples = gtd.sample(num_samples, sigma_max, generator=generator)
         if sample_distance > 0:
@@ -949,7 +1023,7 @@ def do_plot(
     if 'p_net' in elems:            contours(net.logp(gridxy, sigma_max), levels=np.linspace(-2.5, 2.5, num=20)[1:-1], cmap='Greens', linealpha=0.2)
     if 'p_gnet' in elems:           contours(gnet.logp(gridxy, sigma_max), levels=np.linspace(-2.5, 3.5, num=20)[1:-1], cmap='Reds', linealpha=0.2)
     if 'p_ratio' in elems:          contours(net.logp(gridxy, sigma_max) - gnet.logp(gridxy, sigma_max), levels=np.linspace(-2.2, 1.0, num=20)[1:-1], cmap='Blues', linealpha=0.2)
-    if 'gt_uncond' in elems:        contours(gt('AB', device)[0].logp(gridxy), levels=[-2.12, 0], colors=[[0.9,0.9,0.9]], linecolors=[[0.7,0.7,0.7]], linewidth=1.5)
+    if 'gt_uncond' in elems:        contours(allgtd.logp(gridxy), levels=[-2.12, 0], colors=[[0.9,0.9,0.9]], linecolors=[[0.7,0.7,0.7]], linewidth=1.5)
     if 'gt_outline' in elems:       contours(gtd.logp(gridxy), levels=[-2.12, 0], colors=[[1.0,0.8,0.6]], linecolors=[[0.8,0.6,0.5]], linewidth=1.5)
     if 'gt_smax' in elems:          contours(gtd.logp(gridxy, sigma_max), levels=[-1.41, 0], colors=['C1'], alpha=0.2, linealpha=0.2)
     if 'gt_shaded' in elems:        contours(gtd.logp(gridxy), levels=np.linspace(-2.5, 3.07, num=15)[1:-1], cmap='Oranges', linealpha=0.2)
