@@ -467,12 +467,25 @@ def do_train(
             if guidance: log.info("Average Validation Guide Loss = %s", val_results["guide_loss"])
             if run_acid: log.info("Average Validation ACID Reference Loss = %s", val_results["ref_loss"])
 
+            # Log validation loss in outer branches of the distribution
+            log.info("Average Outer Validation Learner Loss = %s", val_results["learner_out_loss"])
+            log.info("Average Outer Validation EMA Loss = %s", val_results["ema_out_loss"])
+            if guidance: log.info("Average Outer Validation Guide Loss = %s", val_results["guide_out_loss"])
+            if run_acid: log.info("Average Outer Validation ACID Reference Loss = %s", val_results["ref_out_loss"])
+
             # Log validation L2 metric
             log.info("Average Validation Learner L2 Distance = %s", val_results["learner_L2_metric"])
             log.info("Average Validation EMA L2 Distance = %s", val_results["ema_L2_metric"])
             if guidance:
                 log.info("Average Validation Guided Learner L2 Distance = %s", val_results["learner_guided_L2_metric"])
                 log.info("Average Validation Guided EMA L2 Distance = %s", val_results["ema_guided_L2_metric"])
+
+            # Log validation L2 metric in outer branches of the distribution
+            log.info("Average Outer Validation Learner L2 Distance = %s", val_results["learner_out_L2_metric"])
+            log.info("Average Outer Validation EMA L2 Distance = %s", val_results["ema_out_L2_metric"])
+            if guidance:
+                log.info("Average Outer Validation Guided Learner L2 Distance = %s", val_results["learner_guided_out_L2_metric"])
+                log.info("Average Outer Validation Guided EMA L2 Distance = %s", val_results["ema_guided_out_L2_metric"])
 
         # Visualize resulting sample distribution.
         if plotting_checkpoints and iter_idx % viz_iter == 0:
@@ -503,12 +516,25 @@ def do_train(
         if guidance: log.warning("Average Test Guide Loss = %s", test_results["guide_loss"])
         if acid: log.warning("Average Test ACID Reference Loss = %s", test_results["ref_loss"])
 
+        # Log test loss
+        log.warning("Average Outer Test Learner Loss = %s", test_results["learner_out_loss"])
+        log.warning("Average Outer Test EMA Loss = %s", test_results["ema_out_loss"])
+        if guidance: log.warning("Average Outer Test Guide Loss = %s", test_results["guide_out_loss"])
+        if acid: log.warning("Average Outer Test ACID Reference Loss = %s", test_results["ref_out_loss"])
+
         # Log test L2 metric
         log.warning("Average Test Learner L2 Distance = %s", test_results["learner_L2_metric"])
         log.warning("Average Test EMA L2 Distance = %s", test_results["ema_L2_metric"])
         if guidance:
             log.warning("Average Test Guided Learner L2 Distance = %s", test_results["learner_guided_L2_metric"])
             log.warning("Average Test Guided EMA L2 Distance = %s", test_results["ema_guided_L2_metric"])
+
+        # Log test L2 metric
+        log.warning("Average Outer Test Learner L2 Distance = %s", test_results["learner_out_L2_metric"])
+        log.warning("Average Outer Test EMA L2 Distance = %s", test_results["ema_out_L2_metric"])
+        if guidance:
+            log.warning("Average Outer Test Guided Learner L2 Distance = %s", test_results["learner_guided_out_L2_metric"])
+            log.warning("Average Outer Test Guided EMA L2 Distance = %s", test_results["ema_guided_out_L2_metric"])
 
     # Save and visualize last iteration
     if saving_checkpoints:
