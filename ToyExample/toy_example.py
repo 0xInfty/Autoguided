@@ -781,11 +781,30 @@ def plot_loss(loss_dict, fig_path=None):
     return figs
 
 #----------------------------------------------------------------------------
+# Estimate the KL divergence
+
+# Define the KL divergence function
+torch_KL_divergence = torch.nn.KLDivLoss(log_target=True, reduction="batchmean") 
+# Assumes both inputs are probabilities in log-space
+
+def estimate_torch_KL_divergence(ground_truth, model, n_samples=1<<17, 
+                                 P_mean=-2.3, P_std=1.5, device=torch.device('cuda')):
+
+    # Sample ground truth from random intermediate time steps
+    sigma = (torch.randn(n_samples, device=device) * P_std + P_mean).exp()
+    samples = ground_truth.sample(n_samples, sigma)
+    gt_logp = ground_truth.logp(samples, sigma)
+    net_logp = model.logp(samples, sigma)
+
+    raise NotImplementedError("Wrong because I'm not sampling from pure Gaussian noise")
+    return float( torch_KL_divergence(net_logp, gt_logp) )
+
+#----------------------------------------------------------------------------
 # Run test
 
 def run_test(net, ema=None, guide=None, ref=None, acid=False,
              classes='A', P_mean=-2.3, P_std=1.5, sigma_max=5, depth_sep=5,
-             n_samples=4<<8, batch_size=4<<8,
+             n_samples=4<<8, batch_size=4<<8, kl_div_n_samples=1<<17,
              guidance_weight=3,
              generator=None,
              device=torch.device('cuda'),
@@ -796,6 +815,7 @@ def run_test(net, ema=None, guide=None, ref=None, acid=False,
     test_guide = guide is not None
     if acid: test_ref = ref is not None
     else: test_ref = False
+    test_kl = kl_div_n_samples > 0
 
     # Ground truth distribution
     gtd, gtcomps = gt(classes, device)
@@ -825,6 +845,9 @@ def run_test(net, ema=None, guide=None, ref=None, acid=False,
     if test_ref: 
         results["ref_loss"] = 0
         results["ref_out_loss"] = 0
+    if test_kl:
+        kl_test_sigma = []
+        kl_test_samples = []
 
     # Test loop
     if logging: progress_bar = tqdm.tqdm(range(n_epochs))
@@ -838,6 +861,9 @@ def run_test(net, ema=None, guide=None, ref=None, acid=False,
         # Sample as in training
         test_sigma = (torch.randn(n_i_samples, device=device) * P_std + P_mean).exp()
         test_samples = gtd.sample(n_i_samples, test_sigma, generator=generator)
+        if test_kl:
+            kl_test_sigma.append( test_sigma )
+            kl_test_samples.append( test_samples )
 
         # Also sample from the outer branches of the distribution
         out_test_samples = outd.sample(n_i_samples, test_sigma, generator=generator)
