@@ -398,8 +398,8 @@ def do_train(
         plt.rcParams['toolbar'] = 'None'
         plt.rcParams['figure.subplot.left'] = plt.rcParams['figure.subplot.bottom'] = 0
         plt.rcParams['figure.subplot.right'] = plt.rcParams['figure.subplot.top'] = 1
-        plt.figure(figsize=[12, 12], dpi=75)
-        do_plot(ema, elems={'gt_uncond', 'gt_outline'}, device=device)
+        fig = plt.figure(figsize=[12, 12], dpi=75)
+        do_plot(ema, elems={'gt_uncond', 'gt_outline'}, figure=fig, device=device)
         plt.gcf().canvas.flush_events()
         if saving_checkpoint_plots:
             plt_path = plt_pattern % 0
@@ -502,7 +502,7 @@ def do_train(
         # Visualize resulting sample distribution.
         if plotting_checkpoints and iter_idx % viz_iter == 0:
             for x in plt.gca().lines: x.remove()
-            do_plot(ema, elems={'samples'}, sigma_max=sigma_max, device=device)
+            do_plot(ema, elems={'samples'}, sigma_max=sigma_max, figure=fig, device=device)
             plt.gcf().canvas.flush_events()
 
         # Save model snapshot.
@@ -563,7 +563,7 @@ def do_train(
         with open(pkl_path_learner, 'wb') as f:
             pickle.dump(copy.deepcopy(net).cpu(), f)
         for x in plt.gca().lines: x.remove()
-        do_plot(ema, elems={'samples'}, sigma_max=sigma_max, device=device)
+        do_plot(ema, elems={'samples'}, figure=fig, sigma_max=sigma_max, device=device)
         plt.gcf().canvas.flush_events()
         if saving_checkpoint_plots:
             plt_path = plt_pattern % (iter_idx + 1)
@@ -1120,7 +1120,7 @@ def do_plot(
     net=None, guidance=1, gnet=None, elems={'gt_uncond', 'gt_outline', 'samples'},
     view_x=0, view_y=0, view_size=1.6, grid_resolution=400, arrow_len=0.002,
     num_samples=1<<13, seed=1, sample_distance=0, sigma_max=5, depth_sep=5,
-    device=torch.device('cuda'),
+    figure=None, device=torch.device('cuda'),
 ):
     if seed is not None: 
         generator = torch.Generator(device).manual_seed(seed)
@@ -1165,6 +1165,7 @@ def do_plot(
         out_trajectories = do_sample(net=(net or outd), x_init=out_samples, guidance=guidance, gnet=gnet, sigma_max=sigma_max)
 
     # Initialize plot.
+    if figure is None: plt.figure()
     gridx = torch.linspace(view_x - view_size, view_x + view_size, steps=grid_resolution, device=device)
     gridy = torch.linspace(view_y - view_size, view_y + view_size, steps=grid_resolution, device=device)
     gridxy = torch.stack(torch.meshgrid(gridx, gridy, indexing='xy'), axis=-1)
@@ -1212,6 +1213,8 @@ def do_plot(
     if 'out_samples_before_small' in elems: points(out_samples, alpha=0.5, size=15, color="m")
     if 'out_trajectories' in elems:   lines(out_trajectories.transpose(0, 1), alpha=0.3)
     if 'out_trajectories_small' in elems: lines(out_trajectories.transpose(0, 1), alpha=0.4, color="lightgrey")
+    if 'gt_uncond_transparent' in elems:  contours(allgtd.logp(gridxy), levels=[-2.12, 0], colors=["grey"], linecolors=["grey"], linewidth=1.5, alpha=0)
+    if 'gt_outline_transparent' in elems: contours(gtd.logp(gridxy), levels=[-2.12, 0], colors=["black"], linecolors=["black"], linewidth=1.5, alpha=0)
 
 #----------------------------------------------------------------------------
 # Main command line.
@@ -1369,37 +1372,37 @@ def plot(net, gnet, guidance, save, device=torch.device('cuda')):
     # Initialize plot.
     log.info('Drawing plots...')
     plt.rcParams['font.size'] = 28
-    plt.figure(figsize=[48, 25], dpi=40, tight_layout=True)
+    fig = plt.figure(figsize=[48, 25], dpi=40, tight_layout=True)
     fig1_kwargs = dict(view_x=0.30, view_y=0.30, view_size=1.2, num_samples=1<<14, device=device)
     fig2_kwargs = dict(view_x=0.45, view_y=1.22, view_size=0.3, num_samples=1<<12, device=device, sample_distance=0.045, sigma_max=0.03)
 
     # Draw first row.
     plt.subplot(2, 4, 1)
     plt.title('Ground truth distribution')
-    do_plot(elems={'gt_uncond', 'gt_outline', 'samples'}, **fig1_kwargs)
+    do_plot(elems={'gt_uncond', 'gt_outline', 'samples'}, figure=fig, **fig1_kwargs)
     plt.subplot(2, 4, 2)
     plt.title('Sample distribution without guidance')
-    do_plot(net=net, elems={'gt_uncond', 'gt_outline', 'samples'}, **fig1_kwargs)
+    do_plot(net=net, elems={'gt_uncond', 'gt_outline', 'samples'}, figure=fig, **fig1_kwargs)
     plt.subplot(2, 4, 3)
     plt.title('Sample distribution with guidance')
-    do_plot(net=net, gnet=gnet, guidance=guidance, elems={'gt_uncond', 'gt_outline', 'samples'}, **fig1_kwargs)
+    do_plot(net=net, gnet=gnet, guidance=guidance, elems={'gt_uncond', 'gt_outline', 'samples'}, figure=fig, **fig1_kwargs)
     plt.subplot(2, 4, 4)
     plt.title('Trajectories without guidance')
-    do_plot(net=net, elems={'gt_shaded', 'trajectories', 'samples_after'}, **fig2_kwargs)
+    do_plot(net=net, elems={'gt_shaded', 'trajectories', 'samples_after'}, figure=fig, **fig2_kwargs)
 
     # Draw second row.
     plt.subplot(2, 4, 5)
     plt.title('PDF of main model')
-    do_plot(net=net, elems={'p_net', 'gt_smax', 'scores_net', 'samples_before'}, **fig2_kwargs)
+    do_plot(net=net, elems={'p_net', 'gt_smax', 'scores_net', 'samples_before'}, figure=fig, **fig2_kwargs)
     plt.subplot(2, 4, 6)
     plt.title('PDF of guiding model')
-    do_plot(net=net, gnet=gnet, elems={'p_gnet', 'gt_smax', 'scores_gnet', 'samples_before'}, **fig2_kwargs)
+    do_plot(net=net, gnet=gnet, elems={'p_gnet', 'gt_smax', 'scores_gnet', 'samples_before'}, figure=fig, **fig2_kwargs)
     plt.subplot(2, 4, 7)
     plt.title('PDF ratio (main / guiding)')
-    do_plot(net=net, gnet=gnet, elems={'p_ratio', 'gt_smax', 'scores_ratio', 'samples_before'}, **fig2_kwargs)
+    do_plot(net=net, gnet=gnet, elems={'p_ratio', 'gt_smax', 'scores_ratio', 'samples_before'}, figure=fig, **fig2_kwargs)
     plt.subplot(2, 4, 8)
     plt.title('Trajectories with guidance')
-    do_plot(net=net, gnet=gnet, guidance=guidance, elems={'gt_shaded', 'trajectories', 'samples_after'}, **fig2_kwargs)
+    do_plot(net=net, gnet=gnet, guidance=guidance, elems={'gt_shaded', 'trajectories', 'samples_after'}, figure=fig, **fig2_kwargs)
 
     # Save or display.
     if save is not None:
