@@ -1011,9 +1011,11 @@ def do_test(net_path, ema_path=None, guide_path=None, acid=False,
     if ema_path is not None:
         with builtins.open(ema_path, "rb") as f:
             ema = pickle.load(f).to(device)
+    else: ema = None
     if guide_path is not None:
         with builtins.open(guide_path, "rb") as f:
             guide = pickle.load(f).to(device)
+    else: guide = None
     if logging_to_file: set_up_logger(log_filename)
     log.warning("Model loaded from %s", net_path)
     if ema_path is not None: log.warning("EMA model loaded from %s", ema_path)
@@ -1027,8 +1029,8 @@ def do_test(net_path, ema_path=None, guide_path=None, acid=False,
     else: ref = None
     
     # Basic configuration
-    test_ema = ema is not None
-    test_guide = guide is not None
+    test_ema = ema_path is not None
+    test_guide = guide_path is not None
     test_ref = ref is not None
 
     # Run test
