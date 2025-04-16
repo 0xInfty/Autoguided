@@ -1066,6 +1066,10 @@ def do_sample(net, x_init, guidance=1, gnet=None, num_steps=32, sigma_min=0.002,
 #----------------------------------------------------------------------------
 # Draw the given set of plot elements using matplotlib.
 
+DEVICE = torch.device('cuda')
+FIG1_KWARGS = dict(view_x=0.30, view_y=0.30, view_size=1.2, num_samples=1<<14, device=DEVICE)
+FIG2_KWARGS = dict(view_x=0.45, view_y=1.22, view_size=0.3, num_samples=1<<12, device=DEVICE, sample_distance=0.045, sigma_max=0.03)
+
 def do_plot(
     net=None, guidance=1, gnet=None, elems={'gt_uncond', 'gt_outline', 'samples'},
     view_x=0, view_y=0, view_size=1.6, grid_resolution=400, arrow_len=0.002,
@@ -1323,36 +1327,34 @@ def plot(net, gnet, guidance, save, device=torch.device('cuda')):
     log.info('Drawing plots...')
     plt.rcParams['font.size'] = 28
     fig = plt.figure(figsize=[48, 25], dpi=40, tight_layout=True)
-    fig1_kwargs = dict(view_x=0.30, view_y=0.30, view_size=1.2, num_samples=1<<14, device=device)
-    fig2_kwargs = dict(view_x=0.45, view_y=1.22, view_size=0.3, num_samples=1<<12, device=device, sample_distance=0.045, sigma_max=0.03)
 
     # Draw first row.
     plt.subplot(2, 4, 1)
     plt.title('Ground truth distribution')
-    do_plot(elems={'gt_uncond', 'gt_outline', 'samples'}, figure=fig, **fig1_kwargs)
+    do_plot(elems={'gt_uncond', 'gt_outline', 'samples'}, figure=fig, **FIG1_KWARGS)
     plt.subplot(2, 4, 2)
     plt.title('Sample distribution without guidance')
-    do_plot(net=net, elems={'gt_uncond', 'gt_outline', 'samples'}, figure=fig, **fig1_kwargs)
+    do_plot(net=net, elems={'gt_uncond', 'gt_outline', 'samples'}, figure=fig, **FIG1_KWARGS)
     plt.subplot(2, 4, 3)
     plt.title('Sample distribution with guidance')
-    do_plot(net=net, gnet=gnet, guidance=guidance, elems={'gt_uncond', 'gt_outline', 'samples'}, figure=fig, **fig1_kwargs)
+    do_plot(net=net, gnet=gnet, guidance=guidance, elems={'gt_uncond', 'gt_outline', 'samples'}, figure=fig, **FIG1_KWARGS)
     plt.subplot(2, 4, 4)
     plt.title('Trajectories without guidance')
-    do_plot(net=net, elems={'gt_shaded', 'trajectories', 'samples_after'}, figure=fig, **fig2_kwargs)
+    do_plot(net=net, elems={'gt_shaded', 'trajectories', 'samples_after'}, figure=fig, **FIG2_KWARGS)
 
     # Draw second row.
     plt.subplot(2, 4, 5)
     plt.title('PDF of main model')
-    do_plot(net=net, elems={'p_net', 'gt_smax', 'scores_net', 'samples_before'}, figure=fig, **fig2_kwargs)
+    do_plot(net=net, elems={'p_net', 'gt_smax', 'scores_net', 'samples_before'}, figure=fig, **FIG2_KWARGS)
     plt.subplot(2, 4, 6)
     plt.title('PDF of guiding model')
-    do_plot(net=net, gnet=gnet, elems={'p_gnet', 'gt_smax', 'scores_gnet', 'samples_before'}, figure=fig, **fig2_kwargs)
+    do_plot(net=net, gnet=gnet, elems={'p_gnet', 'gt_smax', 'scores_gnet', 'samples_before'}, figure=fig, **FIG2_KWARGS)
     plt.subplot(2, 4, 7)
     plt.title('PDF ratio (main / guiding)')
-    do_plot(net=net, gnet=gnet, elems={'p_ratio', 'gt_smax', 'scores_ratio', 'samples_before'}, figure=fig, **fig2_kwargs)
+    do_plot(net=net, gnet=gnet, elems={'p_ratio', 'gt_smax', 'scores_ratio', 'samples_before'}, figure=fig, **FIG2_KWARGS)
     plt.subplot(2, 4, 8)
     plt.title('Trajectories with guidance')
-    do_plot(net=net, gnet=gnet, guidance=guidance, elems={'gt_shaded', 'trajectories', 'samples_after'}, figure=fig, **fig2_kwargs)
+    do_plot(net=net, gnet=gnet, guidance=guidance, elems={'gt_shaded', 'trajectories', 'samples_after'}, figure=fig, **FIG2_KWARGS)
 
     # Save or display.
     if save is not None:
