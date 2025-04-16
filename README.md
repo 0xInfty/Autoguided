@@ -5,20 +5,26 @@ Synthetic Curation as Implicit Distillation
 
 ### Installation
 
-1. Create and activate a Python environment, using commands such as...
+1. Create and activate an Anaconda environment
 
     ```bash
-    conda create -n SCID python
+    conda create -n SCID
     conda activate SCID
     ```
 
-2. Install all required packages using the installation script
+2. Install Python 3.12
+
+    ```bash
+    conda install -c conda-forge python==3.12 --force-reinstall
+    ```
+
+3. Install all required packages using the installation script
     
     ```bash
     yes | . install.sh
     ```
 
-3. Verify you have GPU support, by running...
+4. Verify you have GPU support, by running...
 
     ```bash
     python -c "import torch; print([torch.cuda.get_device_name(i) for i in range(torch.cuda.device_count())])"
