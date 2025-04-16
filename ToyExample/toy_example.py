@@ -297,7 +297,6 @@ def do_train(
     validation=False, val_batch_size=4<<7, sigma_max=5,
     testing=False, n_test_samples=4<<8, test_batch_size=4<<8,
     acid=False, acid_n=16, acid_f=0.8, acid_diff=True, acid_inverted=False, acid_stability_trick=False,
-    test_kl=True, kl_n_samples=1<<18, kl_div_iter=16,
     device=torch.device('cuda'),
     pkl_pattern=None, pkl_iter=256, 
     viz_iter=32, viz_save=True, 
@@ -350,8 +349,6 @@ def do_train(
         guide_interpolation = False
         log.warning("No guide interpolation of scores during training")
     log.info("Guide interpolation = %s", guide_interpolation)
-    log.info("KL divergence = %s", test_kl)
-    if test_kl: log.info("KL divergence iterations period = %s", kl_div_iter)
 
     # Basic configuration
     plotting_checkpoints = viz_iter is not None
@@ -460,11 +457,9 @@ def do_train(
 
         # Evaluate average loss and L2 metric on validation batch
         if validation:
-            run_kl_val = iter_idx % kl_div_iter == 0
             val_results = run_test(net, ema, guide, ref, acid=run_acid,
                 classes=classes, P_mean=P_mean, P_std=P_std, sigma_max=sigma_max,
                 n_samples=val_batch_size, batch_size=val_batch_size, 
-                test_kl=run_kl_val, kl_n_samples=kl_n_samples,
                 guidance_weight=guidance_weight,
                 generator=generator, device=device)
 
@@ -494,11 +489,6 @@ def do_train(
                 log.info("Average Outer Validation Guided Learner L2 Distance = %s", val_results["learner_guided_out_L2_metric"])
                 log.info("Average Outer Validation Guided EMA L2 Distance = %s", val_results["ema_guided_out_L2_metric"])
 
-            # Log KL divergence, if calculated
-            if run_kl_val:
-                log.info("Average Validation Learner KL Divergence Estimation = %s", val_results["learner_kl_div"])
-                log.info("Average Validation EMA KL Divergence Estimation = %s", val_results["ema_kl_div"])
-
         # Visualize resulting sample distribution.
         if plotting_checkpoints and iter_idx % viz_iter == 0:
             for x in plt.gca().lines: x.remove()
@@ -519,7 +509,6 @@ def do_train(
         test_results = run_test(net, ema, guide, ref, acid=acid,
             classes=classes, P_mean=P_mean, P_std=P_std, sigma_max=sigma_max,
             n_samples=n_test_samples, batch_size=test_batch_size, 
-            test_kl=test_kl, kl_n_samples=kl_n_samples,
             guidance_weight=guidance_weight,
             generator=generator, device=device)
 
@@ -548,11 +537,6 @@ def do_train(
         if guidance:
             log.warning("Average Outer Test Guided Learner L2 Distance = %s", test_results["learner_guided_out_L2_metric"])
             log.warning("Average Outer Test Guided EMA L2 Distance = %s", test_results["ema_guided_out_L2_metric"])
-
-        # Log KL divergence, if calculated
-        if test_kl:
-            log.info("Average Test Learner KL Divergence Estimation = %s", test_results["learner_kl_div"])
-            log.info("Average Test EMA KL Divergence Estimation = %s", test_results["ema_kl_div"])
 
     # Save and visualize last iteration
     if saving_checkpoints:
@@ -599,8 +583,6 @@ def extract_results_from_log(log_path):
     ema_guided_out_L2_val_metric = []
     out_L2_val_metric = []
     guided_out_L2_val_metric = []
-    learner_val_kl_div = []
-    ema_val_kl_div = []
     with builtins.open(log_path, "r") as f:
         for line in f:
             if "Average" in line:
@@ -612,7 +594,7 @@ def extract_results_from_log(log_path):
                     if "Average Outer Validation Learner Loss" in line: learner_out_val_loss.append(vtext.find_numbers(line)[-1])
                     elif "Average Outer Validation EMA Loss" in line: ema_out_val_loss.append(vtext.find_numbers(line)[-1])
                     elif "Average Outer Validation Guide Loss" in line: guide_out_val_loss.append(vtext.find_numbers(line)[-1])
-                    elif "Average Outer Test ACID Reference Loss" in line: ref_out_val_loss.append(vtext.find_numbers(line)[-1])
+                    elif "Average Outer Test ACID Reference Loss " in line: ref_out_val_loss.append(vtext.find_numbers(line)[-1])
                     elif "Average Outer Validation EMA L2 Distance" in line: ema_out_L2_val_metric.append(vtext.find_numbers(line)[-1])
                     elif "Average Outer Validation Guided EMA L2 Distance" in line: ema_guided_out_L2_val_metric.append(vtext.find_numbers(line)[-1])
                     elif "Average Outer Validation Learner L2 Distance" in line: out_L2_val_metric.append(vtext.find_numbers(line)[-1])
@@ -635,8 +617,6 @@ def extract_results_from_log(log_path):
                     elif "Average Validation Guided EMA L2 Distance" in line: ema_guided_L2_val_metric.append(vtext.find_numbers(line)[-1])
                     elif "Average Validation Learner L2 Distance" in line: L2_val_metric.append(vtext.find_numbers(line)[-1])
                     elif "Average Validation Guided Learner L2 Distance" in line: guided_L2_val_metric.append(vtext.find_numbers(line)[-1])
-                    elif "Average Validation Learner KL Divergence Estimation" in line: learner_val_kl_div.append(vtext.find_numbers(line)[-1])
-                    elif "Average Validation EMA KL Divergence Estimation" in line: ema_val_kl_div.append(vtext.find_numbers(line)[-1])
                     elif "Average Validation L2 Distance" in line: ema_L2_val_metric.append(vtext.find_numbers(line)[-1]) # Backwards compatibility
                     elif "Average Validation L2 Distance with Guidance" in line: ema_guided_L2_val_metric.append(vtext.find_numbers(line)[-1]) # Backwards compatibility
                 elif "Test" in line:
@@ -648,8 +628,6 @@ def extract_results_from_log(log_path):
                     elif "Average Test EMA L2 Distance" in line: ema_L2_test_metric = vtext.find_numbers(line)[-1]
                     elif "Average Test Learner L2 Distance With Guidance" in line: guided_L2_test_metric = vtext.find_numbers(line)[-1]
                     elif "Average Test Learner L2 Distance" in line: L2_test_metric = vtext.find_numbers(line)[-1]
-                    elif "Average Test Learner KL Divergence Estimation" in line: learner_test_kl_div = vtext.find_numbers(line)[-1]
-                    elif "Average Test EMA KL Divergence Estimation" in line: ema_test_kl_div = vtext.find_numbers(line)[-1]
             else: pass
     
     results = {"super_learner_loss": super_learner_loss,
@@ -672,12 +650,6 @@ def extract_results_from_log(log_path):
         results["ema_guided_out_L2_val_metric"] = ema_guided_out_L2_val_metric
         results["out_L2_val_metric"] = out_L2_val_metric
         results["guided_out_L2_val_metric"] = guided_out_L2_val_metric
-    except UnboundLocalError: pass
-    try:
-        results["learner_val_kl_div"] = learner_val_kl_div
-        results["ema_val_kl_div"] = ema_val_kl_div
-        results["learner_test_kl_div"] = learner_test_kl_div
-        results["ema_test_kl_div"] = ema_test_kl_div
     except UnboundLocalError: pass
     try:
         results["learner_test_loss"] = learner_test_loss
@@ -815,8 +787,7 @@ def plot_loss(loss_dict, fig_path=None):
 
 def run_test(net, ema=None, guide=None, ref=None, acid=False,
              classes='A', P_mean=-2.3, P_std=1.5, sigma_max=5, depth_sep=5,
-             n_samples=4<<8, batch_size=4<<8, 
-             test_kl=False, kl_n_samples=1<<18,
+             n_samples=4<<8, batch_size=4<<8,
              guidance_weight=3,
              generator=None,
              device=torch.device('cuda'),
@@ -856,8 +827,6 @@ def run_test(net, ema=None, guide=None, ref=None, acid=False,
     if test_ref: 
         results["ref_loss"] = 0
         results["ref_out_loss"] = 0
-    if test_kl:
-        kl_test_samples = []
 
     # Test loop
     if logging: progress_bar = tqdm.tqdm(range(n_epochs))
@@ -920,7 +889,6 @@ def run_test(net, ema=None, guide=None, ref=None, acid=False,
 
         # Sample from pure Gaussian noise
         test_samples = gtd.sample(n_i_samples, sigma_max, generator=generator)
-        if test_kl: kl_test_samples.append( test_samples )
 
         # Sample also from the outer branches of the distribution
         out_test_samples = outd.sample(n_i_samples, sigma_max, generator=generator)
@@ -954,18 +922,6 @@ def run_test(net, ema=None, guide=None, ref=None, acid=False,
                                                 guidance=guidance_weight, gnet=guide, sigma_max=sigma_max)[-1]
             results["learner_guided_out_L2_metric"] += float(torch.sqrt(((guided_out_test_outputs - gt_out_test_outputs) ** 2).sum(-1)).mean())/n_epochs
 
-    # KL divergence test, if needed
-    if test_kl:
-        if kl_n_samples > n_samples:
-            kl_test_samples.append( gtd.sample(kl_n_samples - n_samples, sigma_max, generator=generator) )
-        kl_test_samples = torch.cat(kl_test_samples)
-        gt_logp = gtd.logp(kl_test_samples, sigma_max)
-        net_logp = net.logp(kl_test_samples, sigma_max)
-        results["learner_kl_div"] = float(torch.sum( torch.exp( net_logp - torch.max(net_logp) ) * (net_logp - gt_logp) ) / n_samples)
-        if test_ema: 
-            ema_logp = ema.logp(kl_test_samples, sigma_max)
-            results["ema_kl_div"] = float(torch.sum( torch.exp( ema_logp - torch.max(ema_logp) ) * (ema_logp - gt_logp) ) / n_samples)
-
     return results
 
 #----------------------------------------------------------------------------
@@ -974,7 +930,6 @@ def run_test(net, ema=None, guide=None, ref=None, acid=False,
 def do_test(net_path, ema_path=None, guide_path=None, acid=False, 
             classes='A', P_mean=-2.3, P_std=1.5, sigma_max=5, depth_sep=5,
             n_samples=4<<8, batch_size=4<<8,
-            test_kl=False, kl_n_samples=1<<18,
             guidance_weight=3,
             seed=None, generator=None,
             device=torch.device('cuda'),
@@ -996,7 +951,7 @@ def do_test(net_path, ema_path=None, guide_path=None, acid=False,
         generator = torch.Generator(device).manual_seed(seed)
         np.random.seed(seed)
         log.info("Seed = %s", seed)
-
+    
     # Log basic parameters
     n_epochs = n_samples//batch_size
     n_remainder = n_samples - n_epochs*batch_size
@@ -1027,7 +982,7 @@ def do_test(net_path, ema_path=None, guide_path=None, acid=False,
     elif acid: 
         ref = ema; log.warning("EMA assigned as ACID reference")
     else: ref = None
-    
+
     # Basic configuration
     test_ema = ema_path is not None
     test_guide = guide_path is not None
@@ -1037,7 +992,6 @@ def do_test(net_path, ema_path=None, guide_path=None, acid=False,
     results = run_test(net, ema, guide, ref, acid=acid,
         classes=classes, P_mean=P_mean, P_std=P_std, sigma_max=sigma_max, depth_sep=depth_sep,
         n_samples=n_samples, batch_size=batch_size,
-        test_kl=test_kl, kl_n_samples=kl_n_samples,
         guidance_weight=guidance_weight,
         generator=generator,
         device=device, logging=True)
@@ -1070,12 +1024,6 @@ def do_test(net_path, ema_path=None, guide_path=None, acid=False,
             log.info("Average Outer Test Guided EMA L2 Distance = %s", results["ema_guided_out_L2_metric"])
     log.info("Average Outer Test Learner L2 Distance = %s", results["learner_out_L2_metric"])
     if test_guide: log.info("Average Outer Test Guided Learner L2 Distance = %s", results["learner_guided_out_L2_metric"])
-
-    # Log KL divergence, if calculated
-    if test_kl:
-        log.info("Average Test Learner KL Divergence Estimation = %s", results["learner_kl_div"])
-        if test_ema:
-            log.info("Average Test EMA KL Divergence Estimation = %s", results["ema_kl_div"])
 
     return results
 
@@ -1117,6 +1065,10 @@ def do_sample(net, x_init, guidance=1, gnet=None, num_steps=32, sigma_min=0.002,
 
 #----------------------------------------------------------------------------
 # Draw the given set of plot elements using matplotlib.
+
+DEVICE = torch.device('cuda')
+FIG1_KWARGS = dict(view_x=0.30, view_y=0.30, view_size=1.2, num_samples=1<<14, device=DEVICE)
+FIG2_KWARGS = dict(view_x=0.45, view_y=1.22, view_size=0.3, num_samples=1<<12, device=DEVICE, sample_distance=0.045, sigma_max=0.03)
 
 def do_plot(
     net=None, guidance=1, gnet=None, elems={'gt_uncond', 'gt_outline', 'samples'},
@@ -1375,36 +1327,34 @@ def plot(net, gnet, guidance, save, device=torch.device('cuda')):
     log.info('Drawing plots...')
     plt.rcParams['font.size'] = 28
     fig = plt.figure(figsize=[48, 25], dpi=40, tight_layout=True)
-    fig1_kwargs = dict(view_x=0.30, view_y=0.30, view_size=1.2, num_samples=1<<14, device=device)
-    fig2_kwargs = dict(view_x=0.45, view_y=1.22, view_size=0.3, num_samples=1<<12, device=device, sample_distance=0.045, sigma_max=0.03)
 
     # Draw first row.
     plt.subplot(2, 4, 1)
     plt.title('Ground truth distribution')
-    do_plot(elems={'gt_uncond', 'gt_outline', 'samples'}, figure=fig, **fig1_kwargs)
+    do_plot(elems={'gt_uncond', 'gt_outline', 'samples'}, figure=fig, **FIG1_KWARGS)
     plt.subplot(2, 4, 2)
     plt.title('Sample distribution without guidance')
-    do_plot(net=net, elems={'gt_uncond', 'gt_outline', 'samples'}, figure=fig, **fig1_kwargs)
+    do_plot(net=net, elems={'gt_uncond', 'gt_outline', 'samples'}, figure=fig, **FIG1_KWARGS)
     plt.subplot(2, 4, 3)
     plt.title('Sample distribution with guidance')
-    do_plot(net=net, gnet=gnet, guidance=guidance, elems={'gt_uncond', 'gt_outline', 'samples'}, figure=fig, **fig1_kwargs)
+    do_plot(net=net, gnet=gnet, guidance=guidance, elems={'gt_uncond', 'gt_outline', 'samples'}, figure=fig, **FIG1_KWARGS)
     plt.subplot(2, 4, 4)
     plt.title('Trajectories without guidance')
-    do_plot(net=net, elems={'gt_shaded', 'trajectories', 'samples_after'}, figure=fig, **fig2_kwargs)
+    do_plot(net=net, elems={'gt_shaded', 'trajectories', 'samples_after'}, figure=fig, **FIG2_KWARGS)
 
     # Draw second row.
     plt.subplot(2, 4, 5)
     plt.title('PDF of main model')
-    do_plot(net=net, elems={'p_net', 'gt_smax', 'scores_net', 'samples_before'}, figure=fig, **fig2_kwargs)
+    do_plot(net=net, elems={'p_net', 'gt_smax', 'scores_net', 'samples_before'}, figure=fig, **FIG2_KWARGS)
     plt.subplot(2, 4, 6)
     plt.title('PDF of guiding model')
-    do_plot(net=net, gnet=gnet, elems={'p_gnet', 'gt_smax', 'scores_gnet', 'samples_before'}, figure=fig, **fig2_kwargs)
+    do_plot(net=net, gnet=gnet, elems={'p_gnet', 'gt_smax', 'scores_gnet', 'samples_before'}, figure=fig, **FIG2_KWARGS)
     plt.subplot(2, 4, 7)
     plt.title('PDF ratio (main / guiding)')
-    do_plot(net=net, gnet=gnet, elems={'p_ratio', 'gt_smax', 'scores_ratio', 'samples_before'}, figure=fig, **fig2_kwargs)
+    do_plot(net=net, gnet=gnet, elems={'p_ratio', 'gt_smax', 'scores_ratio', 'samples_before'}, figure=fig, **FIG2_KWARGS)
     plt.subplot(2, 4, 8)
     plt.title('Trajectories with guidance')
-    do_plot(net=net, gnet=gnet, guidance=guidance, elems={'gt_shaded', 'trajectories', 'samples_after'}, figure=fig, **fig2_kwargs)
+    do_plot(net=net, gnet=gnet, guidance=guidance, elems={'gt_shaded', 'trajectories', 'samples_after'}, figure=fig, **FIG2_KWARGS)
 
     # Save or display.
     if save is not None:
