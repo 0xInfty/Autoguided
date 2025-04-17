@@ -1,4 +1,5 @@
 import numpy as np
+import torch
 import matplotlib.pyplot as plt
 
 def draw_fractal(ax, start, angle, length, depth, color='gray'):
@@ -37,8 +38,18 @@ def generate_scatter_points(center, radius, n_points):
 
 def point_to_cell(point, x_min, y_min, cell_size):
     """Convert point coordinates to grid cell indices"""
-    i = int((point[1] - y_min) / cell_size)
-    j = int((point[0] - x_min) / cell_size)
+    
+    if isinstance(point, torch.Tensor): 
+        point = point.cpu().numpy()
+
+    i = (point[...,1] - y_min) / cell_size
+    j = (point[...,0] - x_min) / cell_size
+    
+    if isinstance(point, np.ndarray):
+        i = np.int32(i); j = np.int32(j)
+    else:    
+        i = int(i); j = int(j)
+    
     return i, j
 
 def mark_cells_within_radius(grid, x, y, radius, cell_size, bounds):
