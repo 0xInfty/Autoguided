@@ -36,14 +36,15 @@ def generate_scatter_points(center, radius, n_points):
     y = center[1] + distances * np.sin(angles) + radius/2  # Added upward bias
     return x, y
 
-def point_to_cell(point, x_min, y_min, cell_size):
+def point_to_cell(point, x_min, y_min, x_res, y_res=None):
     """Convert point coordinates to grid cell indices"""
     
+    if y_res is None: y_res = x_res
     if isinstance(point, torch.Tensor): 
         point = point.cpu().numpy()
 
-    i = (point[...,1] - y_min) / cell_size
-    j = (point[...,0] - x_min) / cell_size
+    i = (point[...,1] - y_min) / x_res
+    j = (point[...,0] - x_min) / y_res
     
     if isinstance(point, np.ndarray):
         i = np.int32(i); j = np.int32(j)
