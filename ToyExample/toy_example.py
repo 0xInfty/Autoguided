@@ -896,12 +896,12 @@ def run_test(net, ema=None, guide=None, ref=None, acid=False,
         out_test_samples = outd.sample(n_i_samples, sigma_max, generator=generator)
 
         # Create full EMA samples using net for guidance
-        gt_test_outputs = do_sample(net=gtd, x_init=test_samples, guidance=0, sigma_max=sigma_max)[-1]
-        gt_out_test_outputs = do_sample(net=outd, x_init=out_test_samples, guidance=0, sigma_max=sigma_max)[-1]
+        gt_test_outputs = do_sample(net=gtd, x_init=test_samples, sigma_max=sigma_max)[-1]
+        gt_out_test_outputs = do_sample(net=outd, x_init=out_test_samples, sigma_max=sigma_max)[-1]
         if test_ema:
-            ema_test_outputs = do_sample(net=ema, x_init=test_samples, guidance=0, sigma_max=sigma_max)[-1]
+            ema_test_outputs = do_sample(net=ema, x_init=test_samples, sigma_max=sigma_max)[-1]
             results["ema_L2_metric"] += float(torch.sqrt(((ema_test_outputs - gt_test_outputs) ** 2).sum(-1)).mean())/n_epochs
-            ema_out_test_outputs = do_sample(net=ema, x_init=out_test_samples, guidance=0, sigma_max=sigma_max)[-1]
+            ema_out_test_outputs = do_sample(net=ema, x_init=out_test_samples, sigma_max=sigma_max)[-1]
             results["ema_out_L2_metric"] += float(torch.sqrt(((ema_out_test_outputs - gt_out_test_outputs) ** 2).sum(-1)).mean())/n_epochs
         if test_ema and test_guide:
             guided_test_outputs = do_sample(net=ema, x_init=test_samples, 
@@ -912,9 +912,9 @@ def run_test(net, ema=None, guide=None, ref=None, acid=False,
             results["ema_guided_out_L2_metric"] += float(torch.sqrt(((guided_out_test_outputs - gt_out_test_outputs) ** 2).sum(-1)).mean())/n_epochs
 
         # Create full learner samples using net for guidance
-        test_outputs = do_sample(net=net, x_init=test_samples, guidance=0, sigma_max=sigma_max)[-1]
+        test_outputs = do_sample(net=net, x_init=test_samples, sigma_max=sigma_max)[-1]
         results["learner_L2_metric"] += float(torch.sqrt(((test_outputs - gt_test_outputs) ** 2).sum(-1)).mean())/n_epochs
-        out_test_outputs = do_sample(net=net, x_init=out_test_samples, guidance=0, sigma_max=sigma_max)[-1]
+        out_test_outputs = do_sample(net=net, x_init=out_test_samples, sigma_max=sigma_max)[-1]
         results["learner_out_L2_metric"] += float(torch.sqrt(((out_test_outputs - gt_out_test_outputs) ** 2).sum(-1)).mean())/n_epochs
         if test_guide:
             guided_test_outputs = do_sample(net=net, x_init=test_samples, 
@@ -1113,7 +1113,7 @@ def do_plot(
             for i in range(1, len(out_samples)):
                 ok[i] = (out_samples[i] - out_samples[:i][ok[:i]]).square().sum(-1).sqrt().min() >= sample_distance
             out_samples = out_samples[ok]
-        out_gt_trajectories = do_sample(net=outd, x_init=out_samples, guidance=0, sigma_max=sigma_max)
+        out_gt_trajectories = do_sample(net=outd, x_init=out_samples, sigma_max=sigma_max)
 
     # Run sampler.
     if any(x.startswith(y) for x in elems for y in ['samples', 'trajectories']):
