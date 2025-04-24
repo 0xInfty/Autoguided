@@ -13,11 +13,12 @@ import ToyExample.toy_example as toy
 
 def create_grid_samples(grid_resolution, 
                         x_centre=toy.FIG1_KWARGS["view_x"], y_centre=toy.FIG1_KWARGS["view_y"], 
-                        x_side=2*toy.FIG1_KWARGS["view_size"], y_side=2*toy.FIG1_KWARGS["view_size"]):
+                        x_side=2*toy.FIG1_KWARGS["view_size"], y_side=2*toy.FIG1_KWARGS["view_size"],
+                        device=DEVICE):
     grid_x = torch.linspace(x_centre - x_side/2, x_centre + x_side/2, 
-                            grid_resolution, device=DEVICE)
+                            grid_resolution, device=device)
     grid_y = torch.linspace(y_centre - y_side/2, y_centre + y_side/2, 
-                            grid_resolution, device=DEVICE)
+                            grid_resolution, device=device)
     samples_x, samples_y = torch.meshgrid(grid_x, grid_y, indexing='xy')
     return torch.stack([samples_x, samples_y]).swapaxes(0,2) # (X_Index, Y_Index, X_Y)
 
@@ -36,9 +37,10 @@ def get_grid_params(grid_resolution,
 ### Numeric integration ########################################################################
 
 def get_simpson_params(grid_resolution, 
-                       x_side=2*toy.FIG1_KWARGS["view_size"], y_side=2*toy.FIG1_KWARGS["view_size"]):
+                       x_side=2*toy.FIG1_KWARGS["view_size"], y_side=2*toy.FIG1_KWARGS["view_size"],
+                       device=DEVICE):
     
-    simpson_vector = torch.ones(grid_resolution).to(DEVICE)
+    simpson_vector = torch.ones(grid_resolution).to(device)
     simpson_vector[1::2] = 4
     simpson_vector[2:-2:2] = 2
     simpson_matrix = torch.kron(simpson_vector, simpson_vector.reshape(1,grid_resolution)).reshape((grid_resolution, grid_resolution))
