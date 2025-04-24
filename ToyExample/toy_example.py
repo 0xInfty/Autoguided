@@ -104,8 +104,10 @@ class GaussianMixture(torch.nn.Module):
 # Construct a ground truth 2D distribution for the given set of classes
 # ('A', 'B', or 'AB').
 
+GT_ORIGIN = (0.0030, 0.0325)
+
 @functools.lru_cache(None)
-def gt(classes='A', device=torch.device('cpu'), seed=2, origin=np.array([0.0030, 0.0325]), scale=np.array([1.3136, 1.3844])):
+def gt(classes='A', device=torch.device('cpu'), seed=2, origin=np.array(GT_ORIGIN), scale=np.array([1.3136, 1.3844])):
     if seed is not None: 
         rnd = np.random.RandomState(seed)
     comps = []
@@ -894,12 +896,12 @@ def run_test(net, ema=None, guide=None, ref=None, acid=False,
         out_test_samples = outd.sample(n_i_samples, sigma_max, generator=generator)
 
         # Create full EMA samples using net for guidance
-        gt_test_outputs = do_sample(net=gtd, x_init=test_samples, guidance=0, sigma_max=sigma_max)[-1]
-        gt_out_test_outputs = do_sample(net=outd, x_init=out_test_samples, guidance=0, sigma_max=sigma_max)[-1]
+        gt_test_outputs = do_sample(net=gtd, x_init=test_samples, sigma_max=sigma_max)[-1]
+        gt_out_test_outputs = do_sample(net=outd, x_init=out_test_samples, sigma_max=sigma_max)[-1]
         if test_ema:
-            ema_test_outputs = do_sample(net=ema, x_init=test_samples, guidance=0, sigma_max=sigma_max)[-1]
+            ema_test_outputs = do_sample(net=ema, x_init=test_samples, sigma_max=sigma_max)[-1]
             results["ema_L2_metric"] += float(torch.sqrt(((ema_test_outputs - gt_test_outputs) ** 2).sum(-1)).mean())/n_epochs
-            ema_out_test_outputs = do_sample(net=ema, x_init=out_test_samples, guidance=0, sigma_max=sigma_max)[-1]
+            ema_out_test_outputs = do_sample(net=ema, x_init=out_test_samples, sigma_max=sigma_max)[-1]
             results["ema_out_L2_metric"] += float(torch.sqrt(((ema_out_test_outputs - gt_out_test_outputs) ** 2).sum(-1)).mean())/n_epochs
         if test_ema and test_guide:
             guided_test_outputs = do_sample(net=ema, x_init=test_samples, 
@@ -910,9 +912,9 @@ def run_test(net, ema=None, guide=None, ref=None, acid=False,
             results["ema_guided_out_L2_metric"] += float(torch.sqrt(((guided_out_test_outputs - gt_out_test_outputs) ** 2).sum(-1)).mean())/n_epochs
 
         # Create full learner samples using net for guidance
-        test_outputs = do_sample(net=net, x_init=test_samples, guidance=0, sigma_max=sigma_max)[-1]
+        test_outputs = do_sample(net=net, x_init=test_samples, sigma_max=sigma_max)[-1]
         results["learner_L2_metric"] += float(torch.sqrt(((test_outputs - gt_test_outputs) ** 2).sum(-1)).mean())/n_epochs
-        out_test_outputs = do_sample(net=net, x_init=out_test_samples, guidance=0, sigma_max=sigma_max)[-1]
+        out_test_outputs = do_sample(net=net, x_init=out_test_samples, sigma_max=sigma_max)[-1]
         results["learner_out_L2_metric"] += float(torch.sqrt(((out_test_outputs - gt_out_test_outputs) ** 2).sum(-1)).mean())/n_epochs
         if test_guide:
             guided_test_outputs = do_sample(net=net, x_init=test_samples, 
@@ -1069,6 +1071,7 @@ def do_sample(net, x_init, guidance=1, gnet=None, num_steps=32, sigma_min=0.002,
 DEVICE = torch.device('cuda')
 FIG1_KWARGS = dict(view_x=0.30, view_y=0.30, view_size=1.2, num_samples=1<<14, device=DEVICE)
 FIG2_KWARGS = dict(view_x=0.45, view_y=1.22, view_size=0.3, num_samples=1<<12, device=DEVICE, sample_distance=0.045, sigma_max=0.03)
+GT_LOGP_LEVEL = -2.12
 
 def do_plot(
     net=None, guidance=1, gnet=None, elems={'gt_uncond', 'gt_outline', 'samples'},
@@ -1110,7 +1113,7 @@ def do_plot(
             for i in range(1, len(out_samples)):
                 ok[i] = (out_samples[i] - out_samples[:i][ok[:i]]).square().sum(-1).sqrt().min() >= sample_distance
             out_samples = out_samples[ok]
-        out_gt_trajectories = do_sample(net=outd, x_init=out_samples, guidance=0, sigma_max=sigma_max)
+        out_gt_trajectories = do_sample(net=outd, x_init=out_samples, sigma_max=sigma_max)
 
     # Run sampler.
     if any(x.startswith(y) for x in elems for y in ['samples', 'trajectories']):
@@ -1145,8 +1148,8 @@ def do_plot(
     if 'p_net' in elems:            contours(net.logp(gridxy, sigma_max), levels=np.linspace(-2.5, 2.5, num=20)[1:-1], cmap='Greens', linealpha=0.2)
     if 'p_gnet' in elems:           contours(gnet.logp(gridxy, sigma_max), levels=np.linspace(-2.5, 3.5, num=20)[1:-1], cmap='Reds', linealpha=0.2)
     if 'p_ratio' in elems:          contours(net.logp(gridxy, sigma_max) - gnet.logp(gridxy, sigma_max), levels=np.linspace(-2.2, 1.0, num=20)[1:-1], cmap='Blues', linealpha=0.2)
-    if 'gt_uncond' in elems:        contours(allgtd.logp(gridxy), levels=[-2.12, 0], colors=[[0.9,0.9,0.9]], linecolors=[[0.7,0.7,0.7]], linewidth=1.5)
-    if 'gt_outline' in elems:       contours(gtd.logp(gridxy), levels=[-2.12, 0], colors=[[1.0,0.8,0.6]], linecolors=[[0.8,0.6,0.5]], linewidth=1.5)
+    if 'gt_uncond' in elems:        contours(allgtd.logp(gridxy), levels=[GT_LOGP_LEVEL, 0], colors=[[0.9,0.9,0.9]], linecolors=[[0.7,0.7,0.7]], linewidth=1.5)
+    if 'gt_outline' in elems:       contours(gtd.logp(gridxy), levels=[GT_LOGP_LEVEL, 0], colors=[[1.0,0.8,0.6]], linecolors=[[0.8,0.6,0.5]], linewidth=1.5)
     if 'gt_smax' in elems:          contours(gtd.logp(gridxy, sigma_max), levels=[-1.41, 0], colors=['C1'], alpha=0.2, linealpha=0.2)
     if 'gt_shaded' in elems:        contours(gtd.logp(gridxy), levels=np.linspace(-2.5, 3.07, num=15)[1:-1], cmap='Oranges', linealpha=0.2)
     if 'trajectories' in elems:     lines(trajectories.transpose(0, 1), alpha=0.3)
@@ -1158,8 +1161,8 @@ def do_plot(
     if 'samples_after' in elems:    points(trajectories[-1])
     if 'samples_before_small' in elems: points(samples, alpha=0.5, size=15, color="m")
     if 'trajectories_small' in elems: lines(trajectories.transpose(0, 1), alpha=0.3, color="lightgrey")
-    if 'out_gt_uncond' in elems:    contours(alloutd.logp(gridxy), levels=[-2.12, 0], colors=[[0.9,0.9,0.9]], linecolors=[[0.7,0.7,0.7]], linewidth=1.5)
-    if 'out_gt_outline' in elems:   contours(outd.logp(gridxy), levels=[-2.12, 0], colors=[[1.0,0.8,0.6]], linecolors=[[0.8,0.6,0.5]], linewidth=1.5)
+    if 'out_gt_uncond' in elems:    contours(alloutd.logp(gridxy), levels=[GT_LOGP_LEVEL, 0], colors=[[0.9,0.9,0.9]], linecolors=[[0.7,0.7,0.7]], linewidth=1.5)
+    if 'out_gt_outline' in elems:   contours(outd.logp(gridxy), levels=[GT_LOGP_LEVEL, 0], colors=[[1.0,0.8,0.6]], linecolors=[[0.8,0.6,0.5]], linewidth=1.5)
     if 'out_gt_after' in elems:     points(out_gt_trajectories[-1], alpha=0.35, size=15, color="b")
     if 'out_gt_trajectories_small' in elems: lines(out_gt_trajectories.transpose(0, 1), alpha=0.4, color="lightsteelblue")
     if 'out_samples' in elems:      points(out_trajectories[-1], size=15, alpha=0.35)
@@ -1168,8 +1171,10 @@ def do_plot(
     if 'out_samples_before_small' in elems: points(out_samples, alpha=0.5, size=15, color="m")
     if 'out_trajectories' in elems:   lines(out_trajectories.transpose(0, 1), alpha=0.3)
     if 'out_trajectories_small' in elems: lines(out_trajectories.transpose(0, 1), alpha=0.4, color="lightgrey")
-    if 'gt_uncond_transparent' in elems:  contours(allgtd.logp(gridxy), levels=[-2.12, 0], colors=["grey"], linecolors=["grey"], linewidth=1.5, alpha=0)
-    if 'gt_outline_transparent' in elems: contours(gtd.logp(gridxy), levels=[-2.12, 0], colors=["black"], linecolors=["black"], linewidth=1.5, alpha=0)
+    if 'gt_uncond_transparent' in elems:  contours(allgtd.logp(gridxy), levels=[GT_LOGP_LEVEL, 0], colors=["grey"], linecolors=["grey"], linewidth=1.5, alpha=0)
+    if 'gt_outline_transparent' in elems: contours(gtd.logp(gridxy), levels=[GT_LOGP_LEVEL, 0], colors=["black"], linecolors=["black"], linewidth=1.5, alpha=0)
+    if 'gt_uncond_thin' in elems:  contours(allgtd.logp(gridxy), levels=[GT_LOGP_LEVEL, 0], colors=["grey"], linecolors=["grey"], linewidth=1, alpha=0)
+    if 'gt_outline_thin' in elems: contours(gtd.logp(gridxy), levels=[GT_LOGP_LEVEL, 0], colors=["black"], linecolors=["black"], linewidth=1, alpha=0)
 
 #----------------------------------------------------------------------------
 # Main command line.
