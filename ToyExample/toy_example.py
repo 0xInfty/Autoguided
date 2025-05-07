@@ -108,8 +108,7 @@ GT_ORIGIN = (0.0030, 0.0325)
 
 @functools.lru_cache(None)
 def gt(classes='A', device=torch.device('cpu'), seed=2, origin=np.array(GT_ORIGIN), scale=np.array([1.3136, 1.3844])):
-    if seed is not None: 
-        rnd = np.random.RandomState(seed)
+    rnd = np.random.RandomState(seed)
     comps = []
 
     # Recursive function to generate a given branch of the distribution.
@@ -297,7 +296,7 @@ def do_train(
     P_mean=-2.3, P_std=1.5, sigma_data=0.5, lr_ref=1e-2, lr_iter=512, ema_std=0.010,
     guidance=False, guidance_weight=3, guide_path=None, guide_interpolation=False,
     validation=False, val_batch_size=4<<7, sigma_max=5,
-    testing=False, n_test_samples=4<<8, test_batch_size=4<<8,
+    testing=False, n_test_samples=4<<8, test_batch_size=4<<8, test_outer=False,
     acid=False, acid_n=16, acid_f=0.8, acid_diff=True, acid_inverted=False, acid_stability_trick=False,
     device=torch.device('cuda'),
     pkl_pattern=None, pkl_iter=256, 
@@ -388,8 +387,6 @@ def do_train(
         ref = ema
         log.warning("EMA assigned as ACID reference")
     else: ref = None
-    # if validation:
-    #     tgtd =  # Trimmed ground truth distribution
 
     # Initialize plot.
     if viz_iter is not None:
@@ -461,7 +458,7 @@ def do_train(
         if validation:
             val_results = run_test(net, ema, guide, ref, acid=run_acid,
                 classes=classes, P_mean=P_mean, P_std=P_std, sigma_max=sigma_max,
-                n_samples=val_batch_size, batch_size=val_batch_size, 
+                n_samples=val_batch_size, batch_size=val_batch_size, test_outer=test_outer,
                 guidance_weight=guidance_weight,
                 generator=generator, device=device)
 
@@ -471,12 +468,6 @@ def do_train(
             if guidance: log.info("Average Validation Guide Loss = %s", val_results["guide_loss"])
             if run_acid: log.info("Average Validation ACID Reference Loss = %s", val_results["ref_loss"])
 
-            # Log validation loss in outer branches of the distribution
-            log.info("Average Outer Validation Learner Loss = %s", val_results["learner_out_loss"])
-            log.info("Average Outer Validation EMA Loss = %s", val_results["ema_out_loss"])
-            if guidance: log.info("Average Outer Validation Guide Loss = %s", val_results["guide_out_loss"])
-            if run_acid: log.info("Average Outer Validation ACID Reference Loss = %s", val_results["ref_out_loss"])
-
             # Log validation L2 metric
             log.info("Average Validation Learner L2 Distance = %s", val_results["learner_L2_metric"])
             log.info("Average Validation EMA L2 Distance = %s", val_results["ema_L2_metric"])
@@ -484,12 +475,17 @@ def do_train(
                 log.info("Average Validation Guided Learner L2 Distance = %s", val_results["learner_guided_L2_metric"])
                 log.info("Average Validation Guided EMA L2 Distance = %s", val_results["ema_guided_L2_metric"])
 
-            # Log validation L2 metric in outer branches of the distribution
-            log.info("Average Outer Validation Learner L2 Distance = %s", val_results["learner_out_L2_metric"])
-            log.info("Average Outer Validation EMA L2 Distance = %s", val_results["ema_out_L2_metric"])
-            if guidance:
-                log.info("Average Outer Validation Guided Learner L2 Distance = %s", val_results["learner_guided_out_L2_metric"])
-                log.info("Average Outer Validation Guided EMA L2 Distance = %s", val_results["ema_guided_out_L2_metric"])
+            # Log validation metrics in outer branches of the distribution
+            if test_outer:
+                log.info("Average Outer Validation Learner Loss = %s", val_results["learner_out_loss"])
+                log.info("Average Outer Validation EMA Loss = %s", val_results["ema_out_loss"])
+                if guidance: log.info("Average Outer Validation Guide Loss = %s", val_results["guide_out_loss"])
+                if run_acid: log.info("Average Outer Validation ACID Reference Loss = %s", val_results["ref_out_loss"])
+                log.info("Average Outer Validation Learner L2 Distance = %s", val_results["learner_out_L2_metric"])
+                log.info("Average Outer Validation EMA L2 Distance = %s", val_results["ema_out_L2_metric"])
+                if guidance:
+                    log.info("Average Outer Validation Guided Learner L2 Distance = %s", val_results["learner_guided_out_L2_metric"])
+                    log.info("Average Outer Validation Guided EMA L2 Distance = %s", val_results["ema_guided_out_L2_metric"])
 
         # Visualize resulting sample distribution.
         if plotting_checkpoints and iter_idx % viz_iter == 0:
@@ -510,7 +506,7 @@ def do_train(
     if testing:
         test_results = run_test(net, ema, guide, ref, acid=acid,
             classes=classes, P_mean=P_mean, P_std=P_std, sigma_max=sigma_max,
-            n_samples=n_test_samples, batch_size=test_batch_size, 
+            n_samples=n_test_samples, batch_size=test_batch_size, test_outer=test_outer,
             guidance_weight=guidance_weight,
             generator=generator, device=device)
 
@@ -520,12 +516,6 @@ def do_train(
         if guidance: log.warning("Average Test Guide Loss = %s", test_results["guide_loss"])
         if acid: log.warning("Average Test ACID Reference Loss = %s", test_results["ref_loss"])
 
-        # Log test loss
-        log.warning("Average Outer Test Learner Loss = %s", test_results["learner_out_loss"])
-        log.warning("Average Outer Test EMA Loss = %s", test_results["ema_out_loss"])
-        if guidance: log.warning("Average Outer Test Guide Loss = %s", test_results["guide_out_loss"])
-        if acid: log.warning("Average Outer Test ACID Reference Loss = %s", test_results["ref_out_loss"])
-
         # Log test L2 metric
         log.warning("Average Test Learner L2 Distance = %s", test_results["learner_L2_metric"])
         log.warning("Average Test EMA L2 Distance = %s", test_results["ema_L2_metric"])
@@ -533,12 +523,17 @@ def do_train(
             log.warning("Average Test Guided Learner L2 Distance = %s", test_results["learner_guided_L2_metric"])
             log.warning("Average Test Guided EMA L2 Distance = %s", test_results["ema_guided_L2_metric"])
 
-        # Log test L2 metric
-        log.warning("Average Outer Test Learner L2 Distance = %s", test_results["learner_out_L2_metric"])
-        log.warning("Average Outer Test EMA L2 Distance = %s", test_results["ema_out_L2_metric"])
-        if guidance:
-            log.warning("Average Outer Test Guided Learner L2 Distance = %s", test_results["learner_guided_out_L2_metric"])
-            log.warning("Average Outer Test Guided EMA L2 Distance = %s", test_results["ema_guided_out_L2_metric"])
+        # Log metrics on outer branches of the distribution
+        if test_outer:
+            log.warning("Average Outer Test Learner Loss = %s", test_results["learner_out_loss"])
+            log.warning("Average Outer Test EMA Loss = %s", test_results["ema_out_loss"])
+            if guidance: log.warning("Average Outer Test Guide Loss = %s", test_results["guide_out_loss"])
+            if acid: log.warning("Average Outer Test ACID Reference Loss = %s", test_results["ref_out_loss"])
+            log.warning("Average Outer Test Learner L2 Distance = %s", test_results["learner_out_L2_metric"])
+            log.warning("Average Outer Test EMA L2 Distance = %s", test_results["ema_out_L2_metric"])
+            if guidance:
+                log.warning("Average Outer Test Guided Learner L2 Distance = %s", test_results["learner_guided_out_L2_metric"])
+                log.warning("Average Outer Test Guided EMA L2 Distance = %s", test_results["ema_guided_out_L2_metric"])
 
     # Save and visualize last iteration
     if saving_checkpoints:
@@ -743,44 +738,46 @@ def plot_loss(loss_dict, fig_path=None):
     plt.savefig(fig_path_base+"_2"+fig_extension)
     figs.append(fig_2)
     
-    # Also compare validation loss on the outer branches vs the whole distribution
-    if len(loss_dict["learner_out_val_loss"])>0:
-        fig_3, axes_3 = plot_training_loss()
-        axes_3[1].plot(loss_dict["learner_val_loss"], "k", label="Learner Val Loss", alpha=1.0, linewidth=0.5)
-        axes_3[1].plot(loss_dict["ema_val_loss"], color="m", label="EMA Val Loss", alpha=0.35, linewidth=3)
-        axes_3[1].plot(loss_dict["learner_out_val_loss"], "k", label="Learner Out Val Loss", alpha=1.0, linewidth=0.5, linestyle="dashed")
-        axes_3[1].plot(loss_dict["ema_out_val_loss"], color="orange", label="EMA Out Val Loss", alpha=0.35, linewidth=3)
-        axes_3[1].set_ylabel("Average Validation Loss")
-        axes_3[1].legend(loc="upper right", ncols=2)
-        plt.tight_layout()
-        plt.savefig(fig_path_base+"_3"+fig_extension)
-        figs.append(fig_3)
+    try:
+        # Also compare validation loss on the outer branches vs the whole distribution
+        if len(loss_dict["learner_out_val_loss"])>0:
+            fig_3, axes_3 = plot_training_loss()
+            axes_3[1].plot(loss_dict["learner_val_loss"], "k", label="Learner Val Loss", alpha=1.0, linewidth=0.5)
+            axes_3[1].plot(loss_dict["ema_val_loss"], color="m", label="EMA Val Loss", alpha=0.35, linewidth=3)
+            axes_3[1].plot(loss_dict["learner_out_val_loss"], "k", label="Learner Out Val Loss", alpha=1.0, linewidth=0.5, linestyle="dashed")
+            axes_3[1].plot(loss_dict["ema_out_val_loss"], color="orange", label="EMA Out Val Loss", alpha=0.35, linewidth=3)
+            axes_3[1].set_ylabel("Average Validation Loss")
+            axes_3[1].legend(loc="upper right", ncols=2)
+            plt.tight_layout()
+            plt.savefig(fig_path_base+"_3"+fig_extension)
+            figs.append(fig_3)
 
-    # Finally, compare validation L2 metrics on the outer branches vs the whole distribution
-    if len(loss_dict["ema_out_L2_val_metric"])>0:
-        fig_4, axes_4 = plot_training_loss()
-        axes_4[1].plot(loss_dict["ema_L2_val_metric"], "-", color="navy", label="EMA L2 Val Metric", alpha=1, linewidth=1)
-        axes_4[1].plot(loss_dict["L2_val_metric"], "-", color="blue", label="Learner L2 Val Metric", alpha=0.35, linewidth=3)
-        axes_4[1].plot(loss_dict["ema_out_L2_val_metric"], "-.", color="firebrick", label="EMA Out L2 Val Metric", alpha=1, linewidth=1)
-        axes_4[1].plot(loss_dict["out_L2_val_metric"], "-", color="salmon", label="Learner Out L2 Val Metric", alpha=0.45, linewidth=3)
-        axes_4[1].set_ylabel("Average Validation L2 Distance")
-        axes_4[1].legend(loc="upper right", ncols=2)
-        plt.tight_layout()
-        plt.savefig(fig_path_base+"_4"+fig_extension)
-        figs.append(fig_4)
+        # Finally, compare validation L2 metrics on the outer branches vs the whole distribution
+        if len(loss_dict["ema_out_L2_val_metric"])>0:
+            fig_4, axes_4 = plot_training_loss()
+            axes_4[1].plot(loss_dict["ema_L2_val_metric"], "-", color="navy", label="EMA L2 Val Metric", alpha=1, linewidth=1)
+            axes_4[1].plot(loss_dict["L2_val_metric"], "-", color="blue", label="Learner L2 Val Metric", alpha=0.35, linewidth=3)
+            axes_4[1].plot(loss_dict["ema_out_L2_val_metric"], "-.", color="firebrick", label="EMA Out L2 Val Metric", alpha=1, linewidth=1)
+            axes_4[1].plot(loss_dict["out_L2_val_metric"], "-", color="salmon", label="Learner Out L2 Val Metric", alpha=0.45, linewidth=3)
+            axes_4[1].set_ylabel("Average Validation L2 Distance")
+            axes_4[1].legend(loc="upper right", ncols=2)
+            plt.tight_layout()
+            plt.savefig(fig_path_base+"_4"+fig_extension)
+            figs.append(fig_4)
 
-        fig_5, axes_5 = plot_training_loss()
-        axes_5[1].plot(loss_dict["ema_guided_L2_val_metric"], "--", color="deeppink", label="Guided EMA L2 Val Metric", alpha=1, linewidth=1)
-        axes_5[1].plot(loss_dict["guided_L2_val_metric"], "-", color="mediumvioletred", label="Guided Learner L2 Val Metric", 
-                        alpha=0.35, linewidth=3)
-        axes_5[1].plot(loss_dict["ema_guided_out_L2_val_metric"], "--", color="teal", label="Guided EMA Out L2 Val Metric", alpha=1, linewidth=1)
-        axes_5[1].plot(loss_dict["guided_out_L2_val_metric"], "-", color="lightseagreen", label="Guided Learner Out L2 Val Metric", 
-                        alpha=0.45, linewidth=3)
-        axes_5[1].set_ylabel("Average Validation L2 Distance")
-        axes_5[1].legend(loc="upper right")
-        plt.tight_layout()
-        plt.savefig(fig_path_base+"_5"+fig_extension)
-        figs.append(fig_5)
+            fig_5, axes_5 = plot_training_loss()
+            axes_5[1].plot(loss_dict["ema_guided_L2_val_metric"], "--", color="deeppink", label="Guided EMA L2 Val Metric", alpha=1, linewidth=1)
+            axes_5[1].plot(loss_dict["guided_L2_val_metric"], "-", color="mediumvioletred", label="Guided Learner L2 Val Metric", 
+                            alpha=0.35, linewidth=3)
+            axes_5[1].plot(loss_dict["ema_guided_out_L2_val_metric"], "--", color="teal", label="Guided EMA Out L2 Val Metric", alpha=1, linewidth=1)
+            axes_5[1].plot(loss_dict["guided_out_L2_val_metric"], "-", color="lightseagreen", label="Guided Learner Out L2 Val Metric", 
+                            alpha=0.45, linewidth=3)
+            axes_5[1].set_ylabel("Average Validation L2 Distance")
+            axes_5[1].legend(loc="upper right")
+            plt.tight_layout()
+            plt.savefig(fig_path_base+"_5"+fig_extension)
+            figs.append(fig_5)
+    except: pass
     
     return figs
 
@@ -789,7 +786,7 @@ def plot_loss(loss_dict, fig_path=None):
 
 def run_test(net, ema=None, guide=None, ref=None, acid=False,
              classes='A', P_mean=-2.3, P_std=1.5, sigma_max=5, depth_sep=5,
-             n_samples=4<<8, batch_size=4<<8,
+             n_samples=4<<8, batch_size=4<<8, test_outer=False,
              guidance_weight=3,
              generator=None,
              device=torch.device('cuda'),
@@ -812,23 +809,30 @@ def run_test(net, ema=None, guide=None, ref=None, acid=False,
     n_epochs = n_samples//batch_size
     n_remainder = n_samples - n_epochs*batch_size
     if n_remainder > 0: n_epochs += 1    
-    results = {"learner_loss":0, "learner_out_loss":0, "learner_L2_metric":0, "learner_out_L2_metric":0}
+    results = {"learner_loss":0, "learner_L2_metric":0}
     if test_ema: 
         results["ema_loss"] = 0
-        results["ema_out_loss"] = 0
         results["ema_L2_metric"] = 0
-        results["ema_out_L2_metric"] = 0
     if test_guide: 
         results["guide_loss"] = 0
-        results["guide_out_loss"] = 0
         results["learner_guided_L2_metric"] = 0
-        results["learner_guided_out_L2_metric"] = 0
     if test_ema and test_guide: 
         results["ema_guided_L2_metric"] = 0
-        results["ema_guided_out_L2_metric"] = 0
     if test_ref: 
         results["ref_loss"] = 0
-        results["ref_out_loss"] = 0
+    if test_outer:
+        results["learner_out_loss"] = 0
+        results["learner_out_L2_metric"] = 0
+        if test_ema:
+            results["ema_out_loss"] = 0
+            results["ema_out_L2_metric"] = 0
+        if test_guide:
+            results["guide_out_loss"] = 0
+            results["learner_guided_out_L2_metric"] = 0
+        if test_ema and test_guide:
+            results["ema_guided_out_L2_metric"] = 0
+        if test_ref:
+            results["ref_out_loss"] = 0
 
     # Test loop
     if logging: progress_bar = tqdm.tqdm(range(n_epochs))
@@ -844,85 +848,101 @@ def run_test(net, ema=None, guide=None, ref=None, acid=False,
         test_samples = gtd.sample(n_i_samples, test_sigma, generator=generator)
 
         # Also sample from the outer branches of the distribution
-        out_test_samples = outd.sample(n_i_samples, test_sigma, generator=generator)
+        if test_outer: out_test_samples = outd.sample(n_i_samples, test_sigma, generator=generator)
 
         # Evaluate scores
         gt_test_scores = gtd.score(test_samples, test_sigma)
         net_test_scores = net.score(test_samples, test_sigma)
-        gt_out_test_scores = outd.score(out_test_samples, test_sigma)
-        net_out_test_scores = net.score(out_test_samples, test_sigma)
         if test_ema: 
             ema_test_scores = ema.score(test_samples, test_sigma)
-            ema_out_test_scores = ema.score(out_test_samples, test_sigma)
         if test_guide: 
             guide_test_scores = guide.score(test_samples, test_sigma)
-            guide_out_test_scores = guide.score(out_test_samples, test_sigma)
         if test_ref and not test_guide and not test_ema:
             ref_test_scores = ref.score(test_samples, test_sigma)
-            ref_out_test_scores = ref.score(out_test_samples, test_sigma)
+        if test_outer:
+            gt_out_test_scores = outd.score(out_test_samples, test_sigma)
+            net_out_test_scores = net.score(out_test_samples, test_sigma)
+            if test_ema: 
+                ema_out_test_scores = ema.score(out_test_samples, test_sigma)
+            if test_guide: 
+                guide_out_test_scores = guide.score(out_test_samples, test_sigma)
+            if test_ref and not test_guide and not test_ema: 
+                ref_out_test_scores = ref.score(out_test_samples, test_sigma)
 
         # Evaluate loss
         net_test_loss = (test_sigma ** 2) * ((gt_test_scores - net_test_scores) ** 2).mean(-1)
         results["learner_loss"] += float(net_test_loss.mean())/n_epochs
-        net_out_test_loss = (test_sigma ** 2) * ((gt_out_test_scores - net_out_test_scores) ** 2).mean(-1)
-        results["learner_out_loss"] += float(net_out_test_loss.mean())/n_epochs
         if test_ema:
             ema_test_loss = (test_sigma ** 2) * ((gt_test_scores - ema_test_scores) ** 2).mean(-1)
             results["ema_loss"] += float(ema_test_loss.mean())/n_epochs
-            ema_out_test_loss = (test_sigma ** 2) * ((gt_out_test_scores - ema_out_test_scores) ** 2).mean(-1)
-            results["ema_out_loss"] += float(ema_out_test_loss.mean())/n_epochs
         if test_guide: 
             guide_test_loss = (test_sigma ** 2) * ((gt_test_scores - guide_test_scores) ** 2).mean(-1)
             results["guide_loss"] += float(guide_test_loss.mean())/n_epochs
-            guide_out_test_loss = (test_sigma ** 2) * ((gt_out_test_scores - guide_out_test_scores) ** 2).mean(-1)
-            results["guide_out_loss"] += float(guide_out_test_loss.mean())/n_epochs
         if test_ref:
             if test_guide: 
                 results["ref_loss"] += results["guide_loss"]
-                results["ref_out_loss"] += results["guide_out_loss"]
             elif test_ema:
                 results["ref_loss"] += results["ema_loss"]
-                results["ref_out_loss"] += results["ema_out_loss"]
             else:
                 ref_test_loss = (test_sigma ** 2) * ((gt_test_scores - ref_test_scores) ** 2).mean(-1)
                 results["ref_loss"] += float(ref_test_loss.mean())/n_epochs
-                ref_out_test_loss = (test_sigma ** 2) * ((gt_out_test_scores - ref_out_test_scores) ** 2).mean(-1)
-                results["ref_out_loss"] += float(ref_out_test_loss.mean())/n_epochs
+        if test_outer:
+            net_out_test_loss = (test_sigma ** 2) * ((gt_out_test_scores - net_out_test_scores) ** 2).mean(-1)
+            results["learner_out_loss"] += float(net_out_test_loss.mean())/n_epochs
+            if test_ema:
+                ema_out_test_loss = (test_sigma ** 2) * ((gt_out_test_scores - ema_out_test_scores) ** 2).mean(-1)
+                results["ema_out_loss"] += float(ema_out_test_loss.mean())/n_epochs
+            if test_guide:
+                guide_out_test_loss = (test_sigma ** 2) * ((gt_out_test_scores - guide_out_test_scores) ** 2).mean(-1)
+                results["guide_out_loss"] += float(guide_out_test_loss.mean())/n_epochs
+            if test_ref:
+                if test_guide:
+                    results["ref_out_loss"] += results["guide_out_loss"]
+                elif test_ema:
+                    results["ref_out_loss"] += results["ema_out_loss"]
+                else:
+                    ref_out_test_loss = (test_sigma ** 2) * ((gt_out_test_scores - ref_out_test_scores) ** 2).mean(-1)
+                    results["ref_out_loss"] += float(ref_out_test_loss.mean())/n_epochs
 
         # Sample from pure Gaussian noise
         test_samples = gtd.sample(n_i_samples, sigma_max, generator=generator)
 
         # Sample also from the outer branches of the distribution
-        out_test_samples = outd.sample(n_i_samples, sigma_max, generator=generator)
+        if test_outer: out_test_samples = outd.sample(n_i_samples, sigma_max, generator=generator)
 
         # Create full EMA samples using net for guidance
         gt_test_outputs = do_sample(net=gtd, x_init=test_samples, sigma_max=sigma_max)[-1]
-        gt_out_test_outputs = do_sample(net=outd, x_init=out_test_samples, sigma_max=sigma_max)[-1]
         if test_ema:
             ema_test_outputs = do_sample(net=ema, x_init=test_samples, sigma_max=sigma_max)[-1]
             results["ema_L2_metric"] += float(torch.sqrt(((ema_test_outputs - gt_test_outputs) ** 2).sum(-1)).mean())/n_epochs
-            ema_out_test_outputs = do_sample(net=ema, x_init=out_test_samples, sigma_max=sigma_max)[-1]
-            results["ema_out_L2_metric"] += float(torch.sqrt(((ema_out_test_outputs - gt_out_test_outputs) ** 2).sum(-1)).mean())/n_epochs
         if test_ema and test_guide:
             guided_test_outputs = do_sample(net=ema, x_init=test_samples, 
                                             guidance=guidance_weight, gnet=guide, sigma_max=sigma_max)[-1]
             results["ema_guided_L2_metric"] += float(torch.sqrt(((guided_test_outputs - gt_test_outputs) ** 2).sum(-1)).mean())/n_epochs
-            guided_out_test_outputs = do_sample(net=ema, x_init=out_test_samples, 
-                                                guidance=guidance_weight, gnet=guide, sigma_max=sigma_max)[-1]
-            results["ema_guided_out_L2_metric"] += float(torch.sqrt(((guided_out_test_outputs - gt_out_test_outputs) ** 2).sum(-1)).mean())/n_epochs
+        if test_outer:
+            gt_out_test_outputs = do_sample(net=outd, x_init=out_test_samples, sigma_max=sigma_max)[-1]
+            if test_ema:
+                ema_out_test_outputs = do_sample(net=ema, x_init=out_test_samples, sigma_max=sigma_max)[-1]
+                results["ema_out_L2_metric"] += float(torch.sqrt(((ema_out_test_outputs - gt_out_test_outputs) ** 2).sum(-1)).mean())/n_epochs
+            if test_ema and test_guide:
+                guided_out_test_outputs = do_sample(net=ema, x_init=out_test_samples, 
+                                                    guidance=guidance_weight, gnet=guide, sigma_max=sigma_max)[-1]
+                results["ema_guided_out_L2_metric"] += float(torch.sqrt(((guided_out_test_outputs - gt_out_test_outputs) ** 2).sum(-1)).mean())/n_epochs
 
         # Create full learner samples using net for guidance
         test_outputs = do_sample(net=net, x_init=test_samples, sigma_max=sigma_max)[-1]
         results["learner_L2_metric"] += float(torch.sqrt(((test_outputs - gt_test_outputs) ** 2).sum(-1)).mean())/n_epochs
-        out_test_outputs = do_sample(net=net, x_init=out_test_samples, sigma_max=sigma_max)[-1]
-        results["learner_out_L2_metric"] += float(torch.sqrt(((out_test_outputs - gt_out_test_outputs) ** 2).sum(-1)).mean())/n_epochs
         if test_guide:
             guided_test_outputs = do_sample(net=net, x_init=test_samples, 
                                             guidance=guidance_weight, gnet=guide, sigma_max=sigma_max)[-1]
             results["learner_guided_L2_metric"] += float(torch.sqrt(((guided_test_outputs - gt_test_outputs) ** 2).sum(-1)).mean())/n_epochs
-            guided_out_test_outputs = do_sample(net=net, x_init=out_test_samples, 
-                                                guidance=guidance_weight, gnet=guide, sigma_max=sigma_max)[-1]
-            results["learner_guided_out_L2_metric"] += float(torch.sqrt(((guided_out_test_outputs - gt_out_test_outputs) ** 2).sum(-1)).mean())/n_epochs
+        if test_outer:
+            out_test_outputs = do_sample(net=net, x_init=out_test_samples, sigma_max=sigma_max)[-1]
+            results["learner_out_L2_metric"] += float(torch.sqrt(((out_test_outputs - gt_out_test_outputs) ** 2).sum(-1)).mean())/n_epochs
+            if test_guide:
+                guided_out_test_outputs = do_sample(net=net, x_init=out_test_samples, 
+                                                    guidance=guidance_weight, gnet=guide, sigma_max=sigma_max)[-1]
+                results["learner_guided_out_L2_metric"] += float(torch.sqrt(((guided_out_test_outputs - gt_out_test_outputs) ** 2).sum(-1)).mean())/n_epochs
 
     return results
 
@@ -931,7 +951,7 @@ def run_test(net, ema=None, guide=None, ref=None, acid=False,
 
 def do_test(net_path, ema_path=None, guide_path=None, acid=False, 
             classes='A', P_mean=-2.3, P_std=1.5, sigma_max=5, depth_sep=5,
-            n_samples=4<<8, batch_size=4<<8,
+            n_samples=4<<8, batch_size=4<<8, test_outer=False,
             guidance_weight=3,
             seed=None, generator=None,
             device=torch.device('cuda'),
@@ -993,7 +1013,7 @@ def do_test(net_path, ema_path=None, guide_path=None, acid=False,
     # Run test
     results = run_test(net, ema, guide, ref, acid=acid,
         classes=classes, P_mean=P_mean, P_std=P_std, sigma_max=sigma_max, depth_sep=depth_sep,
-        n_samples=n_samples, batch_size=batch_size,
+        n_samples=n_samples, batch_size=batch_size, test_outer=test_outer,
         guidance_weight=guidance_weight,
         generator=generator,
         device=device, logging=True)
@@ -1004,12 +1024,6 @@ def do_test(net_path, ema_path=None, guide_path=None, acid=False,
     if test_guide: log.info("Average Test Guide Loss = %s", results["guide_loss"])
     if test_ref: log.info("Average Test Ref Loss = %s", results["ref_loss"])
 
-    # Log test loss on outer branches of the distribution
-    log.info("Average Outer Test Learner Loss = %s", results["learner_out_loss"])
-    if test_ema: log.info("Average Outer Test EMA Loss = %s", results["ema_out_loss"])
-    if test_guide: log.info("Average Outer Test Guide Loss = %s", results["guide_out_loss"])
-    if test_ref: log.info("Average Outer Test Ref Loss = %s", results["ref_out_loss"])
-
     # Log test L2 metric
     if test_ema: 
         log.info("Average Test EMA L2 Distance = %s", results["ema_L2_metric"])
@@ -1019,13 +1033,18 @@ def do_test(net_path, ema_path=None, guide_path=None, acid=False,
     if test_guide: 
         log.info("Average Test Guided Learner L2 Distance = %s", results["learner_guided_L2_metric"])
 
-    # Log test L2 metric on outer branches of the distribution
-    if test_ema:
-        log.info("Average Outer Test EMA L2 Distance = %s", results["ema_out_L2_metric"])
-        if test_guide:
-            log.info("Average Outer Test Guided EMA L2 Distance = %s", results["ema_guided_out_L2_metric"])
-    log.info("Average Outer Test Learner L2 Distance = %s", results["learner_out_L2_metric"])
-    if test_guide: log.info("Average Outer Test Guided Learner L2 Distance = %s", results["learner_guided_out_L2_metric"])
+    # Log metrics on outer branches of the distribution
+    if test_outer:
+        log.info("Average Outer Test Learner Loss = %s", results["learner_out_loss"])
+        if test_ema: log.info("Average Outer Test EMA Loss = %s", results["ema_out_loss"])
+        if test_guide: log.info("Average Outer Test Guide Loss = %s", results["guide_out_loss"])
+        if test_ref: log.info("Average Outer Test Ref Loss = %s", results["ref_out_loss"])
+        if test_ema:
+            log.info("Average Outer Test EMA L2 Distance = %s", results["ema_out_L2_metric"])
+            if test_guide:
+                log.info("Average Outer Test Guided EMA L2 Distance = %s", results["ema_guided_out_L2_metric"])
+        log.info("Average Outer Test Learner L2 Distance = %s", results["learner_out_L2_metric"])
+        if test_guide: log.info("Average Outer Test Guided Learner L2 Distance = %s", results["learner_guided_out_L2_metric"])
 
     return results
 
