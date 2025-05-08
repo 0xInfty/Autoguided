@@ -297,7 +297,8 @@ def do_train(
     guidance=False, guidance_weight=3, guide_path=None, guide_interpolation=False,
     validation=False, val_batch_size=4<<7, sigma_max=5,
     testing=False, n_test_samples=4<<8, test_batch_size=4<<8, test_outer=False,
-    acid=False, acid_n=16, acid_f=0.8, acid_diff=True, acid_inverted=False, acid_stability_trick=False,
+    acid=False, acid_n=16, acid_f=0.8, acid_diff=True, acid_inverted=False, 
+    acid_stability_trick=False, acid_late=False,
     device=torch.device('cuda'),
     pkl_pattern=None, pkl_iter=256, 
     viz_iter=32, viz_save=True, 
@@ -332,7 +333,14 @@ def do_train(
     # Log ACID parameters
     log.info("ACID = %s", acid)
     if acid:
-        run_acid = True
+        if acid_late:
+            run_acid = False
+            trigger_acid = True
+            log.info("ACID with delayed execution strategy")
+        else:
+            run_acid = True
+            trigger_acid = False
+            log.info("ACID with early-start execution strategy")
         log.info("ACID's Number of Chunks = %s", acid_n)
         log.info("ACID's Filter Ratio = %s", acid_f)
         acid_b_over_n = int(batch_size * (1 - acid_f) / acid_n) # Size of a mini-batch chunk
@@ -341,7 +349,9 @@ def do_train(
         log.info("ACID's Learnability = %s", acid_diff)
         log.info("ACID's Scores Inverted = %s", acid_inverted)
         log.info("ACID's Numeric Stability Trick = %s", acid_stability_trick)
-    else: run_acid = False
+    else: 
+        run_acid = False
+        trigger_acid = False
 
     # Log other parameters
     if guidance and guide_interpolation:
@@ -413,16 +423,19 @@ def do_train(
         samples = gtd.sample(batch_size, sigma)
         gt_scores = gtd.score(samples, sigma)
         net_scores = net.score(samples, sigma, graph=True)
-        if run_acid: ref_scores = ref.score(samples, sigma)
+        if run_acid or trigger_acid: ref_scores = ref.score(samples, sigma)
         if guide_interpolation: interpol_scores = guide.score(samples, sigma).lerp(net_scores, guidance_weight)
 
         # Calculate teacher and student loss
         net_loss = (sigma ** 2) * ((gt_scores - net_scores) ** 2).mean(-1)
-        if run_acid: 
+        if run_acid or trigger_acid: 
             ref_loss = (sigma ** 2) * ((gt_scores - ref_scores) ** 2).mean(-1)
             if guide_interpolation: 
                 acid_loss = (sigma ** 2) * ((gt_scores - interpol_scores) ** 2).mean(-1)
             else: acid_loss = net_loss
+        if trigger_acid:
+            if acid_loss.mean() < ref_loss.mean():
+                run_acid = True
 
         # Calculate overall loss
         if run_acid:
@@ -439,6 +452,7 @@ def do_train(
                 log.warning("ACID has crashed, so it has been deactivated")
                 loss = net_loss
                 run_acid = False
+                trigger_acid = False
         else:
             loss = net_loss
 
@@ -1269,6 +1283,10 @@ def cmdline():
                                                                       type=bool, default=True, show_default=True)
 @click.option('--invert/--no-invert', help='Use inverted ACID scores?', metavar='BOOL', 
                                                                       type=bool, default=False, show_default=True)
+@click.option('--late/--no-late', help='Delay ACID start?', metavar='BOOL', 
+                                                                      type=bool, default=False, show_default=True)
+@click.option('--trick/--no-trick', help='Use the softmax stability trick?', metavar='BOOL', 
+                                                                      type=bool, default=False, show_default=True)
 @click.option('--seed',   help='Random seed', metavar='FLOAT',        type=int, default=None, show_default=True)
 @click.option('--verbose/--no-verbose', help='Whether to log information messages or not', metavar='BOOL', 
                                                                       type=bool, default=False, show_default=True)
@@ -1278,7 +1296,7 @@ def cmdline():
 @click.option('--viz/--no-viz', help='Visualize progress?', metavar='BOOL', 
                                                                       type=bool, default=True, show_default=True)
 def train(outdir, cls, layers, dim, total_iter, batch_size, val, test, viz, 
-          guidance, guide_path, interpol, acid, n, filt, diff, invert, 
+          guidance, guide_path, interpol, acid, n, filt, diff, invert, late, trick,
           seed, verbose, debug, logging):
     """Train a 2D toy model with the given parameters."""
     if debug: verbosity = 2
@@ -1295,7 +1313,8 @@ def train(outdir, cls, layers, dim, total_iter, batch_size, val, test, viz,
              total_iter=total_iter, batch_size=batch_size, seed=seed, 
              validation=val, testing=test, 
              guidance=guidance, guide_path=guide_path, guide_interpolation=interpol,
-             acid=acid, acid_n=n, acid_f=filt, acid_diff=diff, acid_inverted=invert,
+             acid=acid, acid_n=n, acid_f=filt, acid_diff=diff, acid_inverted=invert, 
+             acid_late=late, acid_stability_trick=trick,
              pkl_pattern=pkl_pattern, 
              viz_iter=viz_iter,
              verbosity=verbosity, log_filename=logging)
