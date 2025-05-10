@@ -1306,6 +1306,8 @@ def train(outdir, cls, layers, dim, total_iter, batch_size, val, test, viz,
         outdir = os.path.join(dirs.MODELS_HOME, outdir)
     if guide_path is not None:
         guide_path = os.path.join(dirs.MODELS_HOME, guide_path)
+    if logging is not None:
+        log_filepath = os.path.join(dirs.MODELS_HOME, logging)
     pkl_pattern = f'{outdir}/iter%04d.pkl' if outdir is not None else None
     viz_iter = 32 if viz else None
     log.info('Training...')
@@ -1317,7 +1319,7 @@ def train(outdir, cls, layers, dim, total_iter, batch_size, val, test, viz,
              acid_late=late, acid_stability_trick=trick,
              pkl_pattern=pkl_pattern, 
              viz_iter=viz_iter,
-             verbosity=verbosity, log_filename=logging)
+             verbosity=verbosity, log_filename=log_filepath)
     log.info('Done.')
 
 #----------------------------------------------------------------------------
