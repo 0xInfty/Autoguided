@@ -1336,7 +1336,7 @@ def train(outdir, cls, layers, dim, total_iter, batch_size, val, test, viz,
 @click.option('--batch-size', help='Batch size', metavar='INT', type=int, default=4<<8, show_default=True)
 @click.option('--seed', help='Random seed', metavar='FLOAT', type=int, default=None, show_default=True)
 @click.option('--logging', 
-    help='Log filepath', metavar='DIR', type=str, default=None)
+    help='Local path to logging file', metavar='DIR', type=str, default=None)
 def test(net_path, ema_path, guide_path, acid, n_samples, batch_size, seed, logging):
     """Test a given model on a fresh batch of test data"""
 
@@ -1345,9 +1345,11 @@ def test(net_path, ema_path, guide_path, acid, n_samples, batch_size, seed, logg
         ema_path = os.path.join(dirs.MODELS_HOME, ema_path)
     if guide_path is not None:
         guide_path = os.path.join(dirs.MODELS_HOME, guide_path)
+    if logging is not None:
+        log_filepath = os.path.join(dirs.MODELS_HOME, logging)
 
     do_test(net_path, ema_path=ema_path, guide_path=guide_path, acid=acid, 
-            batch_size=batch_size, n_samples=n_samples, seed=seed, log_filename=logging)
+            batch_size=batch_size, n_samples=n_samples, seed=seed, log_filename=log_filepath)
 
 #----------------------------------------------------------------------------
 # 'plot' subcommand.
