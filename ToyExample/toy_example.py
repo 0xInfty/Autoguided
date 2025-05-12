@@ -1078,9 +1078,21 @@ def do_test(net_path, ema_path=None, guide_path=None, acid=False,
 
     # Log test loss
     log.info("Average Test Learner Loss = %s", results["learner_loss"])
-    if test_ema: log.info("Average Test EMA Loss = %s", results["ema_loss"])
-    if test_guide: log.info("Average Test Guide Loss = %s", results["guide_loss"])
-    if test_ref: log.info("Average Test Ref Loss = %s", results["ref_loss"])
+    log.info("Average Test EMA Loss = %s", results["ema_loss"])
+    try: log.info("Average Test Guide Loss = %s", results["guide_loss"])
+    except UnboundLocalError or KeyError: pass
+    if acid:
+        try: log.info("Average Test Ref Loss = %s", results["ref_loss"])
+        except UnboundLocalError or KeyError: pass
+
+    # Log test loss on outer branches of the distribution
+    log.info("Average Outer Test Learner Loss = %s", results["learner_out_loss"])
+    log.info("Average Outer Test EMA Loss = %s", results["ema_out_loss"])
+    try: log.info("Average Outer Test Guide Loss = %s", results["guide_out_loss"])
+    except UnboundLocalError: pass
+    if acid:
+        try: log.info("Average Outer Test Ref Loss = %s", results["ref_out_loss"])
+        except UnboundLocalError: pass
 
     # Log test L2 metric
     if test_ema: 
