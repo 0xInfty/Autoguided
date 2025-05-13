@@ -229,7 +229,7 @@ class ToyModel(torch.nn.Module):
 #----------------------------------------------------------------------------
 # JEST & ACID's joint sampling batch selection method
 
-def jointly_sample_batch(learner_loss, ref_loss, n=16, filter_ratio=0.8, 
+def jointly_sample_batch(learner_loss, ref_loss, N=16, filter_ratio=0.8, 
                          learnability=True, inverted=False, numeric_stability_trick=False, 
                          plotting=False):
     """Joint sampling batch selection method used in JEST and ACID
@@ -244,7 +244,7 @@ def jointly_sample_batch(learner_loss, ref_loss, n=16, filter_ratio=0.8,
     B = int(learner_loss.numel()) # Size B of a super-batch
 
     # Each mini-batch of size b will be split in n chunks
-    b_over_n = int(B * (1 - filter_ratio) / n) # Size b/n of each mini-batch chunk
+    b_over_N = int(B * (1 - filter_ratio) / N) # Size b/N of each mini-batch chunk
 
     # Construct the scores matrix
     learner_loss = learner_loss.reshape((B,1))
@@ -264,15 +264,16 @@ def jointly_sample_batch(learner_loss, ref_loss, n=16, filter_ratio=0.8,
     log.debug(*get_debug_log("Logits ii", logits_ii))
     
     # Draw the first mini-batch chunk using a uniform probability distribution
-    indices = np.random.choice(B, b_over_n, replace=False)
+    indices = np.random.choice(B, b_over_N, replace=False)
     log.debug("Indices (%s)", len(indices))
     log.debug("Number of unique new indices? %s", len(set(indices)))
 
     # Sample all the rest of the mini-batch chunks
     all_sum_of_probs = []
-    for _ in range(n - 1):
+    for n in range(1, N):
 
-        log.debug("> JEST Round %s", _+1)
+        log.debug("> JEST Round %s", n)
+        sampled_so_far = n*b_over_N
 
         # Get a binary mask that indicates which samples have been selected so far
         is_sampled = torch.eye(B).to(device)[indices].sum(axis=0) # (B,)
@@ -289,6 +290,7 @@ def jointly_sample_batch(learner_loss, ref_loss, n=16, filter_ratio=0.8,
         
         # Get conditional scores given past samples
         logits = logits_ii + logits_kj + logits_ik
+        logits = logits / (2*sampled_so_far+1) # Normalize the logits by the number of terms added up
         logits = logits - is_sampled * 1e8 # Avoid sampling with replacement
         #Q: Why subtract that value, instead of setting all these to 0?
 
@@ -300,8 +302,7 @@ def jointly_sample_batch(learner_loss, ref_loss, n=16, filter_ratio=0.8,
         log.debug(*get_debug_log("Probabilities", probabilities))
         log.debug("Sum of Probabilities = %s", sum_of_probs)
         probabilities = probabilities / sum_of_probs
-        new_indices = np.random.choice(np.arange(B), b_over_n, replace=False,
-                                       p=probabilities)
+        new_indices = np.random.choice(np.arange(B), b_over_N, replace=False, p=probabilities)
         log.debug("Any repeated indices? %s", any([i in indices for i in new_indices]))
         log.debug("Number of unique new indices? %s", len(set(new_indices)))
         all_sum_of_probs.append(sum_of_probs)
@@ -330,7 +331,7 @@ def do_train(
     guidance=False, guidance_weight=3, guide_path=None, guide_interpolation=False,
     validation=False, val_batch_size=4<<7, sigma_max=5,
     testing=False, n_test_samples=4<<8, test_batch_size=4<<8, test_outer=False,
-    acid=False, acid_n=16, acid_f=0.8, acid_diff=True, acid_inverted=False, 
+    acid=False, acid_N=16, acid_f=0.8, acid_diff=True, acid_inverted=False, 
     acid_stability_trick=False, acid_late=False,
     device=torch.device('cuda'),
     pkl_pattern=None, pkl_iter=256, 
@@ -357,6 +358,7 @@ def do_train(
     else: generator = torch.Generator(device)
     
     # Log basic parameters
+    log.info("Device = %s", device)
     log.info("Number of training epochs = %s", total_iter)
     log.info("Training batch size = %s", batch_size)
     log.info("Number of training samples = %s", total_iter*batch_size)
@@ -375,10 +377,10 @@ def do_train(
             run_acid = True
             trigger_acid = False
             log.info("ACID with early-start execution strategy")
-        log.info("ACID's Number of Chunks = %s", acid_n)
+        log.info("ACID's Number of Chunks = %s", acid_N)
         log.info("ACID's Filter Ratio = %s", acid_f)
-        acid_b_over_n = int(batch_size * (1 - acid_f) / acid_n) # Size of a mini-batch chunk
-        acid_batch_size = acid_n * acid_b_over_n # Size of a mini-batch
+        acid_b_over_N = int(batch_size * (1 - acid_f) / acid_N) # Size of a mini-batch chunk
+        acid_batch_size = acid_N * acid_b_over_N # Size of a mini-batch
         log.info("ACID's Mini-Batch Size = %s", acid_batch_size)
         log.info("ACID's Learnability = %s", acid_diff)
         log.info("ACID's Scores Inverted = %s", acid_inverted)
@@ -478,7 +480,7 @@ def do_train(
                 log.info("Average Super-Batch Learner Loss = %s", float(acid_loss.mean()))
                 log.info("Average Super-Batch Reference Loss = %s", float(ref_loss.mean()))
                 indices = jointly_sample_batch(acid_loss, ref_loss, 
-                    n=acid_n, filter_ratio=acid_f,
+                    N=acid_N, filter_ratio=acid_f,
                     learnability=acid_diff, inverted=acid_inverted,
                     numeric_stability_trick=acid_stability_trick)
                 loss = acid_loss[indices] # Use indices of the ACID mini-batch
@@ -1351,9 +1353,11 @@ def cmdline():
 @click.option('--logging', help='Log filename', metavar='DIR',        type=str, default=None)
 @click.option('--viz/--no-viz', help='Visualize progress?', metavar='BOOL', 
                                                                       type=bool, default=True, show_default=True)
+@click.option('--device', help='CUDA GPU id?', metavar='INT', 
+                                                                      type=int, default=1, show_default=True)
 def train(outdir, cls, layers, dim, total_iter, batch_size, val, test, viz, 
           guidance, guide_path, interpol, acid, n, filt, diff, invert, late, trick,
-          seed, verbose, debug, logging):
+          seed, verbose, debug, logging, device):
     """Train a 2D toy model with the given parameters."""
     if debug: verbosity = 2
     elif verbose: verbosity = 1
@@ -1367,16 +1371,17 @@ def train(outdir, cls, layers, dim, total_iter, batch_size, val, test, viz,
     else: log_filepath = None
     pkl_pattern = f'{outdir}/iter%04d.pkl' if outdir is not None else None
     viz_iter = 32 if viz else None
+    device = torch.device("cuda:"+str(device))
     log.info('Training...')
     do_train(classes=cls, num_layers=layers, hidden_dim=dim, 
              total_iter=total_iter, batch_size=batch_size, seed=seed, 
              validation=val, testing=test, 
              guidance=guidance, guide_path=guide_path, guide_interpolation=interpol,
-             acid=acid, acid_n=n, acid_f=filt, acid_diff=diff, acid_inverted=invert, 
+             acid=acid, acid_N=n, acid_f=filt, acid_diff=diff, acid_inverted=invert, 
              acid_late=late, acid_stability_trick=trick,
              pkl_pattern=pkl_pattern, 
              viz_iter=viz_iter,
-             verbosity=verbosity, log_filename=log_filepath)
+             verbosity=verbosity, log_filename=log_filepath, device=device)
     log.info('Done.')
 
 #----------------------------------------------------------------------------
