@@ -33,6 +33,13 @@ if not os.path.isdir(PRETRAINED_HOME): os.mkdir(PRETRAINED_HOME)
 
 log = logs.create_logger("errors")
 
+def get_stats(array):
+    if isinstance(array, np.ndarray):
+        return (float(array.min()), float(array.sum())/array.size, float(array.max()), array.shape)
+    else:
+        return (float(array.min()), float(array.sum())/array.numel(), float(array.max()), tuple(array.shape))
+get_debug_log = lambda name, array : (f"{name} = [ %s | %s | %s ] %s", *get_stats(array))
+
 #----------------------------------------------------------------------------
 # Multivariate mixture of Gaussians. Allows efficient evaluation of the
 # probability density function (PDF) and score vector, as well as sampling,
@@ -223,7 +230,8 @@ class ToyModel(torch.nn.Module):
 # JEST & ACID's joint sampling batch selection method
 
 def jointly_sample_batch(learner_loss, ref_loss, n=16, filter_ratio=0.8, 
-                         learnability=True, inverted=False, numeric_stability_trick=False):
+                         learnability=True, inverted=False, numeric_stability_trick=False, 
+                         plotting=False):
     """Joint sampling batch selection method used in JEST and ACID
 
     Adapted from Evans & Parthasarathy et al's publication titled 
@@ -242,29 +250,41 @@ def jointly_sample_batch(learner_loss, ref_loss, n=16, filter_ratio=0.8,
     learner_loss = learner_loss.reshape((B,1))
     ref_loss = ref_loss.reshape((1,B))
     scores = learner_loss - ref_loss if learnability else - ref_loss  # Shape (B,B)
+    log.debug(*get_debug_log("Scores", scores))
     if inverted: scores = - scores
     device = scores.get_device()
     # Rows use different learner loss ==> i is the learner/student's index
     # Columns use different reference loss ==> j is the reference/teacher's index
     
+    log.debug("> JEST Round 0")
+
     # Extract basic score for each element of the super-batch
     logits_ii = torch.diag(scores) # Elements from the diagonal of the scores matrix
     #Q: Is this associated to the probability of picking learner i and ref j?
+    log.debug(*get_debug_log("Logits ii", logits_ii))
     
     # Draw the first mini-batch chunk using a uniform probability distribution
     indices = np.random.choice(B, b_over_n, replace=False)
+    log.debug("Indices (%s)", len(indices))
+    log.debug("Number of unique new indices? %s", len(set(indices)))
 
     # Sample all the rest of the mini-batch chunks
+    all_sum_of_probs = []
     for _ in range(n - 1):
+
+        log.debug("> JEST Round %s", _+1)
+
         # Get a binary mask that indicates which samples have been selected so far
         is_sampled = torch.eye(B).to(device)[indices].sum(axis=0) # (B,)
         
         # Mask scores to only keep learner rows k that have already been sampled
         logits_kj = (scores * is_sampled.view(B, 1)).sum(axis=0) # Sum over columns (B,)
+        log.debug(*get_debug_log("Logits kj", logits_kj))
         #Q: Associated to prob of picking learner i and an ref k that was already selected?
 
         # Mask scores to only keep ref columns k that have already been sampled
         logits_ik = (scores * is_sampled.view(1, B)).sum(axis=1) # Sum over rows (B,)
+        log.debug(*get_debug_log("Logits ik", logits_ik))
         #Q: Associated to prob of picking learner i and an ref k that was already selected?
         
         # Get conditional scores given past samples
@@ -273,17 +293,30 @@ def jointly_sample_batch(learner_loss, ref_loss, n=16, filter_ratio=0.8,
         #Q: Why subtract that value, instead of setting all these to 0?
 
         # Sample new mini-batch chunk using the conditional probability distribution
-        log.debug("Logits = %s", logits)
+        log.debug(*get_debug_log("Logits", logits))
         if numeric_stability_trick: logits = logits - max(logits)
         probabilities = np.exp(logits.detach().cpu().numpy())
-        log.debug("Probabilites = %s", probabilities)
-        log.debug("Sum of Probabilites = %s", sum(probabilities))
-        probabilities = probabilities / sum(probabilities)
+        sum_of_probs = sum(probabilities)
+        log.debug(*get_debug_log("Probabilities", probabilities))
+        log.debug("Sum of Probabilities = %s", sum_of_probs)
+        probabilities = probabilities / sum_of_probs
         new_indices = np.random.choice(np.arange(B), b_over_n, replace=False,
                                        p=probabilities)
+        log.debug("Any repeated indices? %s", any([i in indices for i in new_indices]))
+        log.debug("Number of unique new indices? %s", len(set(new_indices)))
+        all_sum_of_probs.append(sum_of_probs)
 
         # Expand the array of sampled indices
         indices = np.concatenate((indices, new_indices))
+        log.debug("Indices (%s)", len(indices))
+
+    log.debug("All sums %s", all_sum_of_probs)
+    if plotting:
+        fig, ax = plt.subplots()
+        ax.plot(range(n-1), all_sum_of_probs)
+        ax.set_xlabel("Joint batch selection iteration")
+        plt.show()
+        plt.close(fig)
 
     return indices # Gather the n chunks of size b/n and return mini-batch of size b
 
@@ -321,6 +354,7 @@ def do_train(
         torch.manual_seed(seed)
         generator = torch.Generator(device).manual_seed(seed)
         np.random.seed(seed)
+    else: generator = torch.Generator(device)
     
     # Log basic parameters
     log.info("Number of training epochs = %s", total_iter)
@@ -461,7 +495,15 @@ def do_train(
         loss.mean().backward()
 
         # Update learner parameters
+        params = dict({"Old_params."+k: p for k, p in net.named_parameters() if p.requires_grad})
+        for k,v in params.items(): 
+            try: log.debug(*get_debug_log(k, v))
+            except: log.debug("%s = %s", k, float(v))
         opt.step()
+        new_params = dict({"New_params."+k: p for k, p in net.named_parameters() if p.requires_grad})
+        for k,v in new_params.items(): 
+            try: log.debug(*get_debug_log(k, v))
+            except: log.debug("%s = %s", k, float(v))
 
         # Update reference EMA parameters
         beta = training.phema.power_function_beta(std=ema_std, t_next=iter_idx+1, t_delta=1)
@@ -515,6 +557,8 @@ def do_train(
             if saving_checkpoint_plots:
                 plt_path = plt_pattern % (iter_idx + 1)
                 plt.savefig(plt_path)
+    
+    log.info("Finished training")
     
     # Evaluate average loss and L2 metric on test data
     if testing:
@@ -1034,9 +1078,21 @@ def do_test(net_path, ema_path=None, guide_path=None, acid=False,
 
     # Log test loss
     log.info("Average Test Learner Loss = %s", results["learner_loss"])
-    if test_ema: log.info("Average Test EMA Loss = %s", results["ema_loss"])
-    if test_guide: log.info("Average Test Guide Loss = %s", results["guide_loss"])
-    if test_ref: log.info("Average Test Ref Loss = %s", results["ref_loss"])
+    log.info("Average Test EMA Loss = %s", results["ema_loss"])
+    try: log.info("Average Test Guide Loss = %s", results["guide_loss"])
+    except UnboundLocalError or KeyError: pass
+    if acid:
+        try: log.info("Average Test Ref Loss = %s", results["ref_loss"])
+        except UnboundLocalError or KeyError: pass
+
+    # Log test loss on outer branches of the distribution
+    log.info("Average Outer Test Learner Loss = %s", results["learner_out_loss"])
+    log.info("Average Outer Test EMA Loss = %s", results["ema_out_loss"])
+    try: log.info("Average Outer Test Guide Loss = %s", results["guide_out_loss"])
+    except UnboundLocalError: pass
+    if acid:
+        try: log.info("Average Outer Test Ref Loss = %s", results["ref_out_loss"])
+        except UnboundLocalError: pass
 
     # Log test L2 metric
     if test_ema: 
@@ -1306,6 +1362,9 @@ def train(outdir, cls, layers, dim, total_iter, batch_size, val, test, viz,
         outdir = os.path.join(dirs.MODELS_HOME, outdir)
     if guide_path is not None:
         guide_path = os.path.join(dirs.MODELS_HOME, guide_path)
+    if logging is not None:
+        log_filepath = os.path.join(dirs.MODELS_HOME, logging)
+    else: log_filepath = None
     pkl_pattern = f'{outdir}/iter%04d.pkl' if outdir is not None else None
     viz_iter = 32 if viz else None
     log.info('Training...')
@@ -1317,7 +1376,7 @@ def train(outdir, cls, layers, dim, total_iter, batch_size, val, test, viz,
              acid_late=late, acid_stability_trick=trick,
              pkl_pattern=pkl_pattern, 
              viz_iter=viz_iter,
-             verbosity=verbosity, log_filename=logging)
+             verbosity=verbosity, log_filename=log_filepath)
     log.info('Done.')
 
 #----------------------------------------------------------------------------
@@ -1336,7 +1395,7 @@ def train(outdir, cls, layers, dim, total_iter, batch_size, val, test, viz,
 @click.option('--batch-size', help='Batch size', metavar='INT', type=int, default=4<<8, show_default=True)
 @click.option('--seed', help='Random seed', metavar='FLOAT', type=int, default=None, show_default=True)
 @click.option('--logging', 
-    help='Log filepath', metavar='DIR', type=str, default=None)
+    help='Local path to logging file', metavar='DIR', type=str, default=None)
 def test(net_path, ema_path, guide_path, acid, n_samples, batch_size, seed, logging):
     """Test a given model on a fresh batch of test data"""
 
@@ -1345,9 +1404,11 @@ def test(net_path, ema_path, guide_path, acid, n_samples, batch_size, seed, logg
         ema_path = os.path.join(dirs.MODELS_HOME, ema_path)
     if guide_path is not None:
         guide_path = os.path.join(dirs.MODELS_HOME, guide_path)
+    if logging is not None:
+        log_filepath = os.path.join(dirs.MODELS_HOME, logging)
 
     do_test(net_path, ema_path=ema_path, guide_path=guide_path, acid=acid, 
-            batch_size=batch_size, n_samples=n_samples, seed=seed, log_filename=logging)
+            batch_size=batch_size, n_samples=n_samples, seed=seed, log_filename=log_filepath)
 
 #----------------------------------------------------------------------------
 # 'plot' subcommand.
