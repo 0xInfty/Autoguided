@@ -1354,7 +1354,7 @@ def cmdline():
 @click.option('--viz/--no-viz', help='Visualize progress?', metavar='BOOL', 
                                                                       type=bool, default=True, show_default=True)
 @click.option('--device', help='CUDA GPU id?', metavar='INT', 
-                                                                      type=int, default=1, show_default=True)
+                                                                      type=int, default=0, show_default=True)
 def train(outdir, cls, layers, dim, total_iter, batch_size, val, test, viz, 
           guidance, guide_path, interpol, acid, n, filt, diff, invert, late, trick,
           seed, verbose, debug, logging, device):
