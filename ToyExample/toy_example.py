@@ -371,11 +371,11 @@ def do_train(
     if acid:
         if acid_late:
             run_acid = False
-            trigger_acid = True
+            is_acid_waiting = True
             log.info("ACID with delayed execution strategy")
         else:
             run_acid = True
-            trigger_acid = False
+            is_acid_waiting = False
             log.info("ACID with early-start execution strategy")
         log.info("ACID's Number of Chunks = %s", acid_N)
         log.info("ACID's Filter Ratio = %s", acid_f)
@@ -387,7 +387,7 @@ def do_train(
         log.info("ACID's Numeric Stability Trick = %s", acid_stability_trick)
     else: 
         run_acid = False
-        trigger_acid = False
+        is_acid_waiting = False
 
     # Log other parameters
     if guidance and guide_interpolation:
@@ -433,6 +433,8 @@ def do_train(
         ref = ema
         log.warning("EMA assigned as ACID reference")
     else: ref = None
+    if ref is not None: 
+        net_beats_ref = False # Assume reference is always better than the model at first
 
     # Initialize plot.
     if viz_iter is not None:
@@ -459,19 +461,23 @@ def do_train(
         samples = gtd.sample(batch_size, sigma)
         gt_scores = gtd.score(samples, sigma)
         net_scores = net.score(samples, sigma, graph=True)
-        if run_acid or trigger_acid: ref_scores = ref.score(samples, sigma)
+        if run_acid or is_acid_waiting: ref_scores = ref.score(samples, sigma)
         if guide_interpolation: interpol_scores = guide.score(samples, sigma).lerp(net_scores, guidance_weight)
 
         # Calculate teacher and student loss
         net_loss = (sigma ** 2) * ((gt_scores - net_scores) ** 2).mean(-1)
-        if run_acid or trigger_acid: 
+        if run_acid or is_acid_waiting:
             ref_loss = (sigma ** 2) * ((gt_scores - ref_scores) ** 2).mean(-1)
+            if not net_beats_ref and net_loss.mean() < ref_loss.mean():
+                net_beats_ref = True
+                log.warning("Network has beaten the reference")
+                if is_acid_waiting:
+                    run_acid = True
+                    log.warning("ACID will now be run")
+        if run_acid: 
             if guide_interpolation: 
                 acid_loss = (sigma ** 2) * ((gt_scores - interpol_scores) ** 2).mean(-1)
             else: acid_loss = net_loss
-        if trigger_acid:
-            if acid_loss.mean() < ref_loss.mean():
-                run_acid = True
 
         # Calculate overall loss
         if run_acid:
@@ -488,7 +494,7 @@ def do_train(
                 log.warning("ACID has crashed, so it has been deactivated")
                 loss = net_loss
                 run_acid = False
-                trigger_acid = False
+                is_acid_waiting = False
         else:
             loss = net_loss
 
