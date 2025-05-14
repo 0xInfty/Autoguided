@@ -82,12 +82,12 @@ def is_sample_in_fractal(samples, ground_truth_distribution, sigma=0):
 
 ### Mandala metric ###############################################################################
 
-def mandala_score(model, ground_truth_dist, guide=None, guidance_weight=1,
+def mandala_score(model, ground_truth_dist, guide=None, guidance_weight=3,
                   samples=None, n_samples=2**14, sigma_max=5,
                   grid_resolution=101, 
                   x_centre=toy.GT_ORIGIN[0], y_centre=toy.GT_ORIGIN[1], 
                   x_side=2*1.5, y_side=2*1.5,
-                  logging=False, plotting=True, 
+                  logging=False, plotting=False, 
                   full_scale=True, log_scale=False, device=DEVICE):
 
     # If no samples provided, generate samples
@@ -97,7 +97,7 @@ def mandala_score(model, ground_truth_dist, guide=None, guidance_weight=1,
         else:
             gt_samples = ground_truth_dist.sample(n_samples, sigma=sigma_max)
             samples = toy.do_sample(net=model, gnet=guide, guidance=guidance_weight,
-                                        x_init=gt_samples, sigma_max=sigma_max)[-1]
+                                    x_init=gt_samples, sigma_max=sigma_max)[-1]
     else:
         n_samples = len(samples)
 
