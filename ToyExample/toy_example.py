@@ -33,6 +33,13 @@ if not os.path.isdir(PRETRAINED_HOME): os.mkdir(PRETRAINED_HOME)
 
 log = logs.create_logger("errors")
 
+def get_stats(array):
+    if isinstance(array, np.ndarray):
+        return (float(array.min()), float(array.sum())/array.size, float(array.max()), array.shape)
+    else:
+        return (float(array.min()), float(array.sum())/array.numel(), float(array.max()), tuple(array.shape))
+get_debug_log = lambda name, array : (f"{name} = [ %s | %s | %s ] %s", *get_stats(array))
+
 #----------------------------------------------------------------------------
 # Multivariate mixture of Gaussians. Allows efficient evaluation of the
 # probability density function (PDF) and score vector, as well as sampling,
@@ -108,8 +115,7 @@ GT_ORIGIN = (0.0030, 0.0325)
 
 @functools.lru_cache(None)
 def gt(classes='A', device=torch.device('cpu'), seed=2, origin=np.array(GT_ORIGIN), scale=np.array([1.3136, 1.3844])):
-    if seed is not None: 
-        rnd = np.random.RandomState(seed)
+    rnd = np.random.RandomState(seed)
     comps = []
 
     # Recursive function to generate a given branch of the distribution.
@@ -223,8 +229,9 @@ class ToyModel(torch.nn.Module):
 #----------------------------------------------------------------------------
 # JEST & ACID's joint sampling batch selection method
 
-def jointly_sample_batch(learner_loss, ref_loss, n=16, filter_ratio=0.8, 
-                         learnability=True, inverted=False, numeric_stability_trick=False):
+def jointly_sample_batch(learner_loss, ref_loss, N=16, filter_ratio=0.8, 
+                         learnability=True, inverted=False, numeric_stability_trick=False, 
+                         plotting=False):
     """Joint sampling batch selection method used in JEST and ACID
 
     Adapted from Evans & Parthasarathy et al's publication titled 
@@ -237,54 +244,80 @@ def jointly_sample_batch(learner_loss, ref_loss, n=16, filter_ratio=0.8,
     B = int(learner_loss.numel()) # Size B of a super-batch
 
     # Each mini-batch of size b will be split in n chunks
-    b_over_n = int(B * (1 - filter_ratio) / n) # Size b/n of each mini-batch chunk
+    b_over_N = int(B * (1 - filter_ratio) / N) # Size b/N of each mini-batch chunk
 
     # Construct the scores matrix
     learner_loss = learner_loss.reshape((B,1))
     ref_loss = ref_loss.reshape((1,B))
     scores = learner_loss - ref_loss if learnability else - ref_loss  # Shape (B,B)
+    log.debug(*get_debug_log("Scores", scores))
     if inverted: scores = - scores
     device = scores.get_device()
     # Rows use different learner loss ==> i is the learner/student's index
     # Columns use different reference loss ==> j is the reference/teacher's index
     
+    log.debug("> JEST Round 0")
+
     # Extract basic score for each element of the super-batch
     logits_ii = torch.diag(scores) # Elements from the diagonal of the scores matrix
     #Q: Is this associated to the probability of picking learner i and ref j?
+    log.debug(*get_debug_log("Logits ii", logits_ii))
     
     # Draw the first mini-batch chunk using a uniform probability distribution
-    indices = np.random.choice(B, b_over_n, replace=False)
+    indices = np.random.choice(B, b_over_N, replace=False)
+    log.debug("Indices (%s)", len(indices))
+    log.debug("Number of unique new indices? %s", len(set(indices)))
 
     # Sample all the rest of the mini-batch chunks
-    for _ in range(n - 1):
+    all_sum_of_probs = []
+    for n in range(1, N):
+
+        log.debug("> JEST Round %s", n)
+        sampled_so_far = n*b_over_N
+
         # Get a binary mask that indicates which samples have been selected so far
         is_sampled = torch.eye(B).to(device)[indices].sum(axis=0) # (B,)
         
         # Mask scores to only keep learner rows k that have already been sampled
         logits_kj = (scores * is_sampled.view(B, 1)).sum(axis=0) # Sum over columns (B,)
+        log.debug(*get_debug_log("Logits kj", logits_kj))
         #Q: Associated to prob of picking learner i and an ref k that was already selected?
 
         # Mask scores to only keep ref columns k that have already been sampled
         logits_ik = (scores * is_sampled.view(1, B)).sum(axis=1) # Sum over rows (B,)
+        log.debug(*get_debug_log("Logits ik", logits_ik))
         #Q: Associated to prob of picking learner i and an ref k that was already selected?
         
         # Get conditional scores given past samples
         logits = logits_ii + logits_kj + logits_ik
+        logits = logits / (2*sampled_so_far+1) # Normalize the logits by the number of terms added up
         logits = logits - is_sampled * 1e8 # Avoid sampling with replacement
         #Q: Why subtract that value, instead of setting all these to 0?
 
         # Sample new mini-batch chunk using the conditional probability distribution
-        log.debug("Logits = %s", logits)
+        log.debug(*get_debug_log("Logits", logits))
         if numeric_stability_trick: logits = logits - max(logits)
         probabilities = np.exp(logits.detach().cpu().numpy())
-        log.debug("Probabilites = %s", probabilities)
-        log.debug("Sum of Probabilites = %s", sum(probabilities))
-        probabilities = probabilities / sum(probabilities)
-        new_indices = np.random.choice(np.arange(B), b_over_n, replace=False,
-                                       p=probabilities)
+        sum_of_probs = sum(probabilities)
+        log.debug(*get_debug_log("Probabilities", probabilities))
+        log.debug("Sum of Probabilities = %s", sum_of_probs)
+        probabilities = probabilities / sum_of_probs
+        new_indices = np.random.choice(np.arange(B), b_over_N, replace=False, p=probabilities)
+        log.debug("Any repeated indices? %s", any([i in indices for i in new_indices]))
+        log.debug("Number of unique new indices? %s", len(set(new_indices)))
+        all_sum_of_probs.append(sum_of_probs)
 
         # Expand the array of sampled indices
         indices = np.concatenate((indices, new_indices))
+        log.debug("Indices (%s)", len(indices))
+
+    log.debug("All sums %s", all_sum_of_probs)
+    if plotting:
+        fig, ax = plt.subplots()
+        ax.plot(range(n-1), all_sum_of_probs)
+        ax.set_xlabel("Joint batch selection iteration")
+        plt.show()
+        plt.close(fig)
 
     return indices # Gather the n chunks of size b/n and return mini-batch of size b
 
@@ -297,9 +330,10 @@ def do_train(
     P_mean=-2.3, P_std=1.5, sigma_data=0.5, lr_ref=1e-2, lr_iter=512, ema_std=0.010,
     guidance=False, guidance_weight=3, guide_path=None, guide_interpolation=False,
     validation=False, val_batch_size=4<<7, sigma_max=5,
-    testing=False, n_test_samples=4<<8, test_batch_size=4<<8,
-    acid=False, acid_n=16, acid_f=0.8, acid_diff=True, acid_inverted=False, acid_stability_trick=False,
+    testing=False, n_test_samples=4<<8, test_batch_size=4<<8, test_outer=False,
     test_kl=True, kl_n_samples=1<<18, kl_div_iter=16,
+    acid=False, acid_N=16, acid_f=0.8, acid_diff=True, acid_inverted=False, 
+    acid_stability_trick=False, acid_late=False, acid_early=False,
     device=torch.device('cuda'),
     pkl_pattern=None, pkl_iter=256, 
     viz_iter=32, viz_save=True, 
@@ -322,8 +356,10 @@ def do_train(
         torch.manual_seed(seed)
         generator = torch.Generator(device).manual_seed(seed)
         np.random.seed(seed)
+    else: generator = torch.Generator(device)
     
     # Log basic parameters
+    log.info("Device = %s", device)
     log.info("Number of training epochs = %s", total_iter)
     log.info("Training batch size = %s", batch_size)
     log.info("Number of training samples = %s", total_iter*batch_size)
@@ -334,16 +370,29 @@ def do_train(
     # Log ACID parameters
     log.info("ACID = %s", acid)
     if acid:
-        run_acid = True
-        log.info("ACID's Number of Chunks = %s", acid_n)
+        if acid_late:
+            run_acid = False
+            is_acid_waiting = True
+            log.info("ACID with delayed execution strategy")
+        elif acid_early:
+            run_acid = True
+            is_acid_waiting = True
+            log.info("ACID programmed stop strategy")
+        else:
+            run_acid = True
+            is_acid_waiting = False
+            log.info("ACID with early-start execution strategy")
+        log.info("ACID's Number of Chunks = %s", acid_N)
         log.info("ACID's Filter Ratio = %s", acid_f)
-        acid_b_over_n = int(batch_size * (1 - acid_f) / acid_n) # Size of a mini-batch chunk
-        acid_batch_size = acid_n * acid_b_over_n # Size of a mini-batch
+        acid_b_over_N = int(batch_size * (1 - acid_f) / acid_N) # Size of a mini-batch chunk
+        acid_batch_size = acid_N * acid_b_over_N # Size of a mini-batch
         log.info("ACID's Mini-Batch Size = %s", acid_batch_size)
         log.info("ACID's Learnability = %s", acid_diff)
         log.info("ACID's Scores Inverted = %s", acid_inverted)
         log.info("ACID's Numeric Stability Trick = %s", acid_stability_trick)
-    else: run_acid = False
+    else: 
+        run_acid = False
+        is_acid_waiting = False
 
     # Log other parameters
     if guidance and guide_interpolation:
@@ -391,8 +440,8 @@ def do_train(
         ref = ema
         log.warning("EMA assigned as ACID reference")
     else: ref = None
-    # if validation:
-    #     tgtd =  # Trimmed ground truth distribution
+    if ref is not None: 
+        net_beats_ref = False # Assume reference is always better than the model at first
 
     # Initialize plot.
     if viz_iter is not None:
@@ -419,13 +468,20 @@ def do_train(
         samples = gtd.sample(batch_size, sigma)
         gt_scores = gtd.score(samples, sigma)
         net_scores = net.score(samples, sigma, graph=True)
-        if run_acid: ref_scores = ref.score(samples, sigma)
+        if run_acid or is_acid_waiting: ref_scores = ref.score(samples, sigma)
         if guide_interpolation: interpol_scores = guide.score(samples, sigma).lerp(net_scores, guidance_weight)
 
         # Calculate teacher and student loss
         net_loss = (sigma ** 2) * ((gt_scores - net_scores) ** 2).mean(-1)
-        if run_acid: 
+        if run_acid or is_acid_waiting:
             ref_loss = (sigma ** 2) * ((gt_scores - ref_scores) ** 2).mean(-1)
+            if not net_beats_ref and net_loss.mean() < ref_loss.mean():
+                net_beats_ref = True
+                log.warning("Network has beaten the reference")
+                run_acid = not(run_acid)
+                if run_acid: log.warning("ACID will now be run")
+                else: log.warning("ACID will now be stopped")
+        if run_acid: 
             if guide_interpolation: 
                 acid_loss = (sigma ** 2) * ((gt_scores - interpol_scores) ** 2).mean(-1)
             else: acid_loss = net_loss
@@ -437,7 +493,7 @@ def do_train(
                 log.info("Average Super-Batch Learner Loss = %s", float(acid_loss.mean()))
                 log.info("Average Super-Batch Reference Loss = %s", float(ref_loss.mean()))
                 indices = jointly_sample_batch(acid_loss, ref_loss, 
-                    n=acid_n, filter_ratio=acid_f,
+                    N=acid_N, filter_ratio=acid_f,
                     learnability=acid_diff, inverted=acid_inverted,
                     numeric_stability_trick=acid_stability_trick)
                 loss = acid_loss[indices] # Use indices of the ACID mini-batch
@@ -445,6 +501,7 @@ def do_train(
                 log.warning("ACID has crashed, so it has been deactivated")
                 loss = net_loss
                 run_acid = False
+                is_acid_waiting = False
         else:
             loss = net_loss
 
@@ -453,7 +510,15 @@ def do_train(
         loss.mean().backward()
 
         # Update learner parameters
+        params = dict({"Old_params."+k: p for k, p in net.named_parameters() if p.requires_grad})
+        for k,v in params.items(): 
+            try: log.debug(*get_debug_log(k, v))
+            except: log.debug("%s = %s", k, float(v))
         opt.step()
+        new_params = dict({"New_params."+k: p for k, p in net.named_parameters() if p.requires_grad})
+        for k,v in new_params.items(): 
+            try: log.debug(*get_debug_log(k, v))
+            except: log.debug("%s = %s", k, float(v))
 
         # Update reference EMA parameters
         beta = training.phema.power_function_beta(std=ema_std, t_next=iter_idx+1, t_delta=1)
@@ -465,7 +530,7 @@ def do_train(
             run_kl_val = iter_idx % kl_div_iter == 0
             val_results = run_test(net, ema, guide, ref, acid=run_acid,
                 classes=classes, P_mean=P_mean, P_std=P_std, sigma_max=sigma_max,
-                n_samples=val_batch_size, batch_size=val_batch_size, 
+                n_samples=val_batch_size, batch_size=val_batch_size, test_outer=test_outer,
                 test_kl=run_kl_val, kl_n_samples=kl_n_samples,
                 guidance_weight=guidance_weight,
                 generator=generator, device=device)
@@ -476,12 +541,6 @@ def do_train(
             if guidance: log.info("Average Validation Guide Loss = %s", val_results["guide_loss"])
             if run_acid: log.info("Average Validation ACID Reference Loss = %s", val_results["ref_loss"])
 
-            # Log validation loss in outer branches of the distribution
-            log.info("Average Outer Validation Learner Loss = %s", val_results["learner_out_loss"])
-            log.info("Average Outer Validation EMA Loss = %s", val_results["ema_out_loss"])
-            if guidance: log.info("Average Outer Validation Guide Loss = %s", val_results["guide_out_loss"])
-            if run_acid: log.info("Average Outer Validation ACID Reference Loss = %s", val_results["ref_out_loss"])
-
             # Log validation L2 metric
             log.info("Average Validation Learner L2 Distance = %s", val_results["learner_L2_metric"])
             log.info("Average Validation EMA L2 Distance = %s", val_results["ema_L2_metric"])
@@ -489,12 +548,17 @@ def do_train(
                 log.info("Average Validation Guided Learner L2 Distance = %s", val_results["learner_guided_L2_metric"])
                 log.info("Average Validation Guided EMA L2 Distance = %s", val_results["ema_guided_L2_metric"])
 
-            # Log validation L2 metric in outer branches of the distribution
-            log.info("Average Outer Validation Learner L2 Distance = %s", val_results["learner_out_L2_metric"])
-            log.info("Average Outer Validation EMA L2 Distance = %s", val_results["ema_out_L2_metric"])
-            if guidance:
-                log.info("Average Outer Validation Guided Learner L2 Distance = %s", val_results["learner_guided_out_L2_metric"])
-                log.info("Average Outer Validation Guided EMA L2 Distance = %s", val_results["ema_guided_out_L2_metric"])
+            # Log validation metrics in outer branches of the distribution
+            if test_outer:
+                log.info("Average Outer Validation Learner Loss = %s", val_results["learner_out_loss"])
+                log.info("Average Outer Validation EMA Loss = %s", val_results["ema_out_loss"])
+                if guidance: log.info("Average Outer Validation Guide Loss = %s", val_results["guide_out_loss"])
+                if run_acid: log.info("Average Outer Validation ACID Reference Loss = %s", val_results["ref_out_loss"])
+                log.info("Average Outer Validation Learner L2 Distance = %s", val_results["learner_out_L2_metric"])
+                log.info("Average Outer Validation EMA L2 Distance = %s", val_results["ema_out_L2_metric"])
+                if guidance:
+                    log.info("Average Outer Validation Guided Learner L2 Distance = %s", val_results["learner_guided_out_L2_metric"])
+                    log.info("Average Outer Validation Guided EMA L2 Distance = %s", val_results["ema_guided_out_L2_metric"])
 
             # Log KL divergence, if calculated
             if run_kl_val:
@@ -516,11 +580,13 @@ def do_train(
                 plt_path = plt_pattern % (iter_idx + 1)
                 plt.savefig(plt_path)
     
+    log.info("Finished training")
+    
     # Evaluate average loss and L2 metric on test data
     if testing:
         test_results = run_test(net, ema, guide, ref, acid=acid,
             classes=classes, P_mean=P_mean, P_std=P_std, sigma_max=sigma_max,
-            n_samples=n_test_samples, batch_size=test_batch_size, 
+            n_samples=n_test_samples, batch_size=test_batch_size, test_outer=test_outer,
             test_kl=test_kl, kl_n_samples=kl_n_samples,
             guidance_weight=guidance_weight,
             generator=generator, device=device)
@@ -531,12 +597,6 @@ def do_train(
         if guidance: log.warning("Average Test Guide Loss = %s", test_results["guide_loss"])
         if acid: log.warning("Average Test ACID Reference Loss = %s", test_results["ref_loss"])
 
-        # Log test loss
-        log.warning("Average Outer Test Learner Loss = %s", test_results["learner_out_loss"])
-        log.warning("Average Outer Test EMA Loss = %s", test_results["ema_out_loss"])
-        if guidance: log.warning("Average Outer Test Guide Loss = %s", test_results["guide_out_loss"])
-        if acid: log.warning("Average Outer Test ACID Reference Loss = %s", test_results["ref_out_loss"])
-
         # Log test L2 metric
         log.warning("Average Test Learner L2 Distance = %s", test_results["learner_L2_metric"])
         log.warning("Average Test EMA L2 Distance = %s", test_results["ema_L2_metric"])
@@ -544,12 +604,17 @@ def do_train(
             log.warning("Average Test Guided Learner L2 Distance = %s", test_results["learner_guided_L2_metric"])
             log.warning("Average Test Guided EMA L2 Distance = %s", test_results["ema_guided_L2_metric"])
 
-        # Log test L2 metric
-        log.warning("Average Outer Test Learner L2 Distance = %s", test_results["learner_out_L2_metric"])
-        log.warning("Average Outer Test EMA L2 Distance = %s", test_results["ema_out_L2_metric"])
-        if guidance:
-            log.warning("Average Outer Test Guided Learner L2 Distance = %s", test_results["learner_guided_out_L2_metric"])
-            log.warning("Average Outer Test Guided EMA L2 Distance = %s", test_results["ema_guided_out_L2_metric"])
+        # Log metrics on outer branches of the distribution
+        if test_outer:
+            log.warning("Average Outer Test Learner Loss = %s", test_results["learner_out_loss"])
+            log.warning("Average Outer Test EMA Loss = %s", test_results["ema_out_loss"])
+            if guidance: log.warning("Average Outer Test Guide Loss = %s", test_results["guide_out_loss"])
+            if acid: log.warning("Average Outer Test ACID Reference Loss = %s", test_results["ref_out_loss"])
+            log.warning("Average Outer Test Learner L2 Distance = %s", test_results["learner_out_L2_metric"])
+            log.warning("Average Outer Test EMA L2 Distance = %s", test_results["ema_out_L2_metric"])
+            if guidance:
+                log.warning("Average Outer Test Guided Learner L2 Distance = %s", test_results["learner_guided_out_L2_metric"])
+                log.warning("Average Outer Test Guided EMA L2 Distance = %s", test_results["ema_guided_out_L2_metric"])
 
         # Log KL divergence, if calculated
         if test_kl:
@@ -771,44 +836,46 @@ def plot_loss(loss_dict, fig_path=None):
     plt.savefig(fig_path_base+"_2"+fig_extension)
     figs.append(fig_2)
     
-    # Also compare validation loss on the outer branches vs the whole distribution
-    if len(loss_dict["learner_out_val_loss"])>0:
-        fig_3, axes_3 = plot_training_loss()
-        axes_3[1].plot(loss_dict["learner_val_loss"], "k", label="Learner Val Loss", alpha=1.0, linewidth=0.5)
-        axes_3[1].plot(loss_dict["ema_val_loss"], color="m", label="EMA Val Loss", alpha=0.35, linewidth=3)
-        axes_3[1].plot(loss_dict["learner_out_val_loss"], "k", label="Learner Out Val Loss", alpha=1.0, linewidth=0.5, linestyle="dashed")
-        axes_3[1].plot(loss_dict["ema_out_val_loss"], color="orange", label="EMA Out Val Loss", alpha=0.35, linewidth=3)
-        axes_3[1].set_ylabel("Average Validation Loss")
-        axes_3[1].legend(loc="upper right", ncols=2)
-        plt.tight_layout()
-        plt.savefig(fig_path_base+"_3"+fig_extension)
-        figs.append(fig_3)
+    try:
+        # Also compare validation loss on the outer branches vs the whole distribution
+        if len(loss_dict["learner_out_val_loss"])>0:
+            fig_3, axes_3 = plot_training_loss()
+            axes_3[1].plot(loss_dict["learner_val_loss"], "k", label="Learner Val Loss", alpha=1.0, linewidth=0.5)
+            axes_3[1].plot(loss_dict["ema_val_loss"], color="m", label="EMA Val Loss", alpha=0.35, linewidth=3)
+            axes_3[1].plot(loss_dict["learner_out_val_loss"], "k", label="Learner Out Val Loss", alpha=1.0, linewidth=0.5, linestyle="dashed")
+            axes_3[1].plot(loss_dict["ema_out_val_loss"], color="orange", label="EMA Out Val Loss", alpha=0.35, linewidth=3)
+            axes_3[1].set_ylabel("Average Validation Loss")
+            axes_3[1].legend(loc="upper right", ncols=2)
+            plt.tight_layout()
+            plt.savefig(fig_path_base+"_3"+fig_extension)
+            figs.append(fig_3)
 
-    # Finally, compare validation L2 metrics on the outer branches vs the whole distribution
-    if len(loss_dict["ema_out_L2_val_metric"])>0:
-        fig_4, axes_4 = plot_training_loss()
-        axes_4[1].plot(loss_dict["ema_L2_val_metric"], "-", color="navy", label="EMA L2 Val Metric", alpha=1, linewidth=1)
-        axes_4[1].plot(loss_dict["L2_val_metric"], "-", color="blue", label="Learner L2 Val Metric", alpha=0.35, linewidth=3)
-        axes_4[1].plot(loss_dict["ema_out_L2_val_metric"], "-.", color="firebrick", label="EMA Out L2 Val Metric", alpha=1, linewidth=1)
-        axes_4[1].plot(loss_dict["out_L2_val_metric"], "-", color="salmon", label="Learner Out L2 Val Metric", alpha=0.45, linewidth=3)
-        axes_4[1].set_ylabel("Average Validation L2 Distance")
-        axes_4[1].legend(loc="upper right", ncols=2)
-        plt.tight_layout()
-        plt.savefig(fig_path_base+"_4"+fig_extension)
-        figs.append(fig_4)
+        # Finally, compare validation L2 metrics on the outer branches vs the whole distribution
+        if len(loss_dict["ema_out_L2_val_metric"])>0:
+            fig_4, axes_4 = plot_training_loss()
+            axes_4[1].plot(loss_dict["ema_L2_val_metric"], "-", color="navy", label="EMA L2 Val Metric", alpha=1, linewidth=1)
+            axes_4[1].plot(loss_dict["L2_val_metric"], "-", color="blue", label="Learner L2 Val Metric", alpha=0.35, linewidth=3)
+            axes_4[1].plot(loss_dict["ema_out_L2_val_metric"], "-.", color="firebrick", label="EMA Out L2 Val Metric", alpha=1, linewidth=1)
+            axes_4[1].plot(loss_dict["out_L2_val_metric"], "-", color="salmon", label="Learner Out L2 Val Metric", alpha=0.45, linewidth=3)
+            axes_4[1].set_ylabel("Average Validation L2 Distance")
+            axes_4[1].legend(loc="upper right", ncols=2)
+            plt.tight_layout()
+            plt.savefig(fig_path_base+"_4"+fig_extension)
+            figs.append(fig_4)
 
-        fig_5, axes_5 = plot_training_loss()
-        axes_5[1].plot(loss_dict["ema_guided_L2_val_metric"], "--", color="deeppink", label="Guided EMA L2 Val Metric", alpha=1, linewidth=1)
-        axes_5[1].plot(loss_dict["guided_L2_val_metric"], "-", color="mediumvioletred", label="Guided Learner L2 Val Metric", 
-                        alpha=0.35, linewidth=3)
-        axes_5[1].plot(loss_dict["ema_guided_out_L2_val_metric"], "--", color="teal", label="Guided EMA Out L2 Val Metric", alpha=1, linewidth=1)
-        axes_5[1].plot(loss_dict["guided_out_L2_val_metric"], "-", color="lightseagreen", label="Guided Learner Out L2 Val Metric", 
-                        alpha=0.45, linewidth=3)
-        axes_5[1].set_ylabel("Average Validation L2 Distance")
-        axes_5[1].legend(loc="upper right")
-        plt.tight_layout()
-        plt.savefig(fig_path_base+"_5"+fig_extension)
-        figs.append(fig_5)
+            fig_5, axes_5 = plot_training_loss()
+            axes_5[1].plot(loss_dict["ema_guided_L2_val_metric"], "--", color="deeppink", label="Guided EMA L2 Val Metric", alpha=1, linewidth=1)
+            axes_5[1].plot(loss_dict["guided_L2_val_metric"], "-", color="mediumvioletred", label="Guided Learner L2 Val Metric", 
+                            alpha=0.35, linewidth=3)
+            axes_5[1].plot(loss_dict["ema_guided_out_L2_val_metric"], "--", color="teal", label="Guided EMA Out L2 Val Metric", alpha=1, linewidth=1)
+            axes_5[1].plot(loss_dict["guided_out_L2_val_metric"], "-", color="lightseagreen", label="Guided Learner Out L2 Val Metric", 
+                            alpha=0.45, linewidth=3)
+            axes_5[1].set_ylabel("Average Validation L2 Distance")
+            axes_5[1].legend(loc="upper right")
+            plt.tight_layout()
+            plt.savefig(fig_path_base+"_5"+fig_extension)
+            figs.append(fig_5)
+    except: pass
     
     return figs
 
@@ -817,7 +884,7 @@ def plot_loss(loss_dict, fig_path=None):
 
 def run_test(net, ema=None, guide=None, ref=None, acid=False,
              classes='A', P_mean=-2.3, P_std=1.5, sigma_max=5, depth_sep=5,
-             n_samples=4<<8, batch_size=4<<8, 
+             n_samples=4<<8, batch_size=4<<8, test_outer=False,
              test_kl=False, kl_n_samples=1<<18,
              guidance_weight=3,
              generator=None,
@@ -841,23 +908,30 @@ def run_test(net, ema=None, guide=None, ref=None, acid=False,
     n_epochs = n_samples//batch_size
     n_remainder = n_samples - n_epochs*batch_size
     if n_remainder > 0: n_epochs += 1    
-    results = {"learner_loss":0, "learner_out_loss":0, "learner_L2_metric":0, "learner_out_L2_metric":0}
+    results = {"learner_loss":0, "learner_L2_metric":0}
     if test_ema: 
         results["ema_loss"] = 0
-        results["ema_out_loss"] = 0
         results["ema_L2_metric"] = 0
-        results["ema_out_L2_metric"] = 0
     if test_guide: 
         results["guide_loss"] = 0
-        results["guide_out_loss"] = 0
         results["learner_guided_L2_metric"] = 0
-        results["learner_guided_out_L2_metric"] = 0
     if test_ema and test_guide: 
         results["ema_guided_L2_metric"] = 0
-        results["ema_guided_out_L2_metric"] = 0
     if test_ref: 
         results["ref_loss"] = 0
-        results["ref_out_loss"] = 0
+    if test_outer:
+        results["learner_out_loss"] = 0
+        results["learner_out_L2_metric"] = 0
+        if test_ema:
+            results["ema_out_loss"] = 0
+            results["ema_out_L2_metric"] = 0
+        if test_guide:
+            results["guide_out_loss"] = 0
+            results["learner_guided_out_L2_metric"] = 0
+        if test_ema and test_guide:
+            results["ema_guided_out_L2_metric"] = 0
+        if test_ref:
+            results["ref_out_loss"] = 0
     if test_kl:
         kl_test_samples = []
 
@@ -875,86 +949,102 @@ def run_test(net, ema=None, guide=None, ref=None, acid=False,
         test_samples = gtd.sample(n_i_samples, test_sigma, generator=generator)
 
         # Also sample from the outer branches of the distribution
-        out_test_samples = outd.sample(n_i_samples, test_sigma, generator=generator)
+        if test_outer: out_test_samples = outd.sample(n_i_samples, test_sigma, generator=generator)
 
         # Evaluate scores
         gt_test_scores = gtd.score(test_samples, test_sigma)
         net_test_scores = net.score(test_samples, test_sigma)
-        gt_out_test_scores = outd.score(out_test_samples, test_sigma)
-        net_out_test_scores = net.score(out_test_samples, test_sigma)
         if test_ema: 
             ema_test_scores = ema.score(test_samples, test_sigma)
-            ema_out_test_scores = ema.score(out_test_samples, test_sigma)
         if test_guide: 
             guide_test_scores = guide.score(test_samples, test_sigma)
-            guide_out_test_scores = guide.score(out_test_samples, test_sigma)
         if test_ref and not test_guide and not test_ema:
             ref_test_scores = ref.score(test_samples, test_sigma)
-            ref_out_test_scores = ref.score(out_test_samples, test_sigma)
+        if test_outer:
+            gt_out_test_scores = outd.score(out_test_samples, test_sigma)
+            net_out_test_scores = net.score(out_test_samples, test_sigma)
+            if test_ema: 
+                ema_out_test_scores = ema.score(out_test_samples, test_sigma)
+            if test_guide: 
+                guide_out_test_scores = guide.score(out_test_samples, test_sigma)
+            if test_ref and not test_guide and not test_ema: 
+                ref_out_test_scores = ref.score(out_test_samples, test_sigma)
 
         # Evaluate loss
         net_test_loss = (test_sigma ** 2) * ((gt_test_scores - net_test_scores) ** 2).mean(-1)
         results["learner_loss"] += float(net_test_loss.mean())/n_epochs
-        net_out_test_loss = (test_sigma ** 2) * ((gt_out_test_scores - net_out_test_scores) ** 2).mean(-1)
-        results["learner_out_loss"] += float(net_out_test_loss.mean())/n_epochs
         if test_ema:
             ema_test_loss = (test_sigma ** 2) * ((gt_test_scores - ema_test_scores) ** 2).mean(-1)
             results["ema_loss"] += float(ema_test_loss.mean())/n_epochs
-            ema_out_test_loss = (test_sigma ** 2) * ((gt_out_test_scores - ema_out_test_scores) ** 2).mean(-1)
-            results["ema_out_loss"] += float(ema_out_test_loss.mean())/n_epochs
         if test_guide: 
             guide_test_loss = (test_sigma ** 2) * ((gt_test_scores - guide_test_scores) ** 2).mean(-1)
             results["guide_loss"] += float(guide_test_loss.mean())/n_epochs
-            guide_out_test_loss = (test_sigma ** 2) * ((gt_out_test_scores - guide_out_test_scores) ** 2).mean(-1)
-            results["guide_out_loss"] += float(guide_out_test_loss.mean())/n_epochs
         if test_ref:
             if test_guide: 
                 results["ref_loss"] += results["guide_loss"]
-                results["ref_out_loss"] += results["guide_out_loss"]
             elif test_ema:
                 results["ref_loss"] += results["ema_loss"]
-                results["ref_out_loss"] += results["ema_out_loss"]
             else:
                 ref_test_loss = (test_sigma ** 2) * ((gt_test_scores - ref_test_scores) ** 2).mean(-1)
                 results["ref_loss"] += float(ref_test_loss.mean())/n_epochs
-                ref_out_test_loss = (test_sigma ** 2) * ((gt_out_test_scores - ref_out_test_scores) ** 2).mean(-1)
-                results["ref_out_loss"] += float(ref_out_test_loss.mean())/n_epochs
+        if test_outer:
+            net_out_test_loss = (test_sigma ** 2) * ((gt_out_test_scores - net_out_test_scores) ** 2).mean(-1)
+            results["learner_out_loss"] += float(net_out_test_loss.mean())/n_epochs
+            if test_ema:
+                ema_out_test_loss = (test_sigma ** 2) * ((gt_out_test_scores - ema_out_test_scores) ** 2).mean(-1)
+                results["ema_out_loss"] += float(ema_out_test_loss.mean())/n_epochs
+            if test_guide:
+                guide_out_test_loss = (test_sigma ** 2) * ((gt_out_test_scores - guide_out_test_scores) ** 2).mean(-1)
+                results["guide_out_loss"] += float(guide_out_test_loss.mean())/n_epochs
+            if test_ref:
+                if test_guide:
+                    results["ref_out_loss"] += results["guide_out_loss"]
+                elif test_ema:
+                    results["ref_out_loss"] += results["ema_out_loss"]
+                else:
+                    ref_out_test_loss = (test_sigma ** 2) * ((gt_out_test_scores - ref_out_test_scores) ** 2).mean(-1)
+                    results["ref_out_loss"] += float(ref_out_test_loss.mean())/n_epochs
 
         # Sample from pure Gaussian noise
         test_samples = gtd.sample(n_i_samples, sigma_max, generator=generator)
         if test_kl: kl_test_samples.append( test_samples )
 
         # Sample also from the outer branches of the distribution
-        out_test_samples = outd.sample(n_i_samples, sigma_max, generator=generator)
+        if test_outer: out_test_samples = outd.sample(n_i_samples, sigma_max, generator=generator)
 
         # Create full EMA samples using net for guidance
         gt_test_outputs = do_sample(net=gtd, x_init=test_samples, sigma_max=sigma_max)[-1]
-        gt_out_test_outputs = do_sample(net=outd, x_init=out_test_samples, sigma_max=sigma_max)[-1]
         if test_ema:
             ema_test_outputs = do_sample(net=ema, x_init=test_samples, sigma_max=sigma_max)[-1]
             results["ema_L2_metric"] += float(torch.sqrt(((ema_test_outputs - gt_test_outputs) ** 2).sum(-1)).mean())/n_epochs
-            ema_out_test_outputs = do_sample(net=ema, x_init=out_test_samples, sigma_max=sigma_max)[-1]
-            results["ema_out_L2_metric"] += float(torch.sqrt(((ema_out_test_outputs - gt_out_test_outputs) ** 2).sum(-1)).mean())/n_epochs
         if test_ema and test_guide:
             guided_test_outputs = do_sample(net=ema, x_init=test_samples, 
                                             guidance=guidance_weight, gnet=guide, sigma_max=sigma_max)[-1]
             results["ema_guided_L2_metric"] += float(torch.sqrt(((guided_test_outputs - gt_test_outputs) ** 2).sum(-1)).mean())/n_epochs
-            guided_out_test_outputs = do_sample(net=ema, x_init=out_test_samples, 
-                                                guidance=guidance_weight, gnet=guide, sigma_max=sigma_max)[-1]
-            results["ema_guided_out_L2_metric"] += float(torch.sqrt(((guided_out_test_outputs - gt_out_test_outputs) ** 2).sum(-1)).mean())/n_epochs
+        if test_outer:
+            gt_out_test_outputs = do_sample(net=outd, x_init=out_test_samples, sigma_max=sigma_max)[-1]
+            if test_ema:
+                ema_out_test_outputs = do_sample(net=ema, x_init=out_test_samples, sigma_max=sigma_max)[-1]
+                results["ema_out_L2_metric"] += float(torch.sqrt(((ema_out_test_outputs - gt_out_test_outputs) ** 2).sum(-1)).mean())/n_epochs
+            if test_ema and test_guide:
+                guided_out_test_outputs = do_sample(net=ema, x_init=out_test_samples, 
+                                                    guidance=guidance_weight, gnet=guide, sigma_max=sigma_max)[-1]
+                results["ema_guided_out_L2_metric"] += float(torch.sqrt(((guided_out_test_outputs - gt_out_test_outputs) ** 2).sum(-1)).mean())/n_epochs
 
         # Create full learner samples using net for guidance
         test_outputs = do_sample(net=net, x_init=test_samples, sigma_max=sigma_max)[-1]
         results["learner_L2_metric"] += float(torch.sqrt(((test_outputs - gt_test_outputs) ** 2).sum(-1)).mean())/n_epochs
-        out_test_outputs = do_sample(net=net, x_init=out_test_samples, sigma_max=sigma_max)[-1]
-        results["learner_out_L2_metric"] += float(torch.sqrt(((out_test_outputs - gt_out_test_outputs) ** 2).sum(-1)).mean())/n_epochs
         if test_guide:
             guided_test_outputs = do_sample(net=net, x_init=test_samples, 
                                             guidance=guidance_weight, gnet=guide, sigma_max=sigma_max)[-1]
             results["learner_guided_L2_metric"] += float(torch.sqrt(((guided_test_outputs - gt_test_outputs) ** 2).sum(-1)).mean())/n_epochs
-            guided_out_test_outputs = do_sample(net=net, x_init=out_test_samples, 
-                                                guidance=guidance_weight, gnet=guide, sigma_max=sigma_max)[-1]
-            results["learner_guided_out_L2_metric"] += float(torch.sqrt(((guided_out_test_outputs - gt_out_test_outputs) ** 2).sum(-1)).mean())/n_epochs
+        if test_outer:
+            out_test_outputs = do_sample(net=net, x_init=out_test_samples, sigma_max=sigma_max)[-1]
+            results["learner_out_L2_metric"] += float(torch.sqrt(((out_test_outputs - gt_out_test_outputs) ** 2).sum(-1)).mean())/n_epochs
+            if test_guide:
+                guided_out_test_outputs = do_sample(net=net, x_init=out_test_samples, 
+                                                    guidance=guidance_weight, gnet=guide, sigma_max=sigma_max)[-1]
+                results["learner_guided_out_L2_metric"] += float(torch.sqrt(((guided_out_test_outputs - gt_out_test_outputs) ** 2).sum(-1)).mean())/n_epochs
 
     # KL divergence test, if needed
     if test_kl:
@@ -975,7 +1065,7 @@ def run_test(net, ema=None, guide=None, ref=None, acid=False,
 
 def do_test(net_path, ema_path=None, guide_path=None, acid=False, 
             classes='A', P_mean=-2.3, P_std=1.5, sigma_max=5, depth_sep=5,
-            n_samples=4<<8, batch_size=4<<8,
+            n_samples=4<<8, batch_size=4<<8, test_outer=False,
             test_kl=False, kl_n_samples=1<<18,
             guidance_weight=3,
             seed=None, generator=None,
@@ -983,6 +1073,7 @@ def do_test(net_path, ema_path=None, guide_path=None, acid=False,
             log_filename=None):
 
     # Set up the logger
+    log = logs.create_logger(net_path)
     logging_to_file = log_filename is not None
     def set_up_logger(log_filename=None):
         log_level = logs.get_log_level(1)
@@ -1018,7 +1109,7 @@ def do_test(net_path, ema_path=None, guide_path=None, acid=False,
         with builtins.open(guide_path, "rb") as f:
             guide = pickle.load(f).to(device)
     else: guide = None
-    if logging_to_file: set_up_logger(log_filename)
+    set_up_logger(log_filename)
     log.warning("Model loaded from %s", net_path)
     if ema_path is not None: log.warning("EMA model loaded from %s", ema_path)
     if guide_path is not None: 
@@ -1038,7 +1129,7 @@ def do_test(net_path, ema_path=None, guide_path=None, acid=False,
     # Run test
     results = run_test(net, ema, guide, ref, acid=acid,
         classes=classes, P_mean=P_mean, P_std=P_std, sigma_max=sigma_max, depth_sep=depth_sep,
-        n_samples=n_samples, batch_size=batch_size,
+        n_samples=n_samples, batch_size=batch_size, test_outer=test_outer,
         test_kl=test_kl, kl_n_samples=kl_n_samples,
         guidance_weight=guidance_weight,
         generator=generator,
@@ -1065,13 +1156,18 @@ def do_test(net_path, ema_path=None, guide_path=None, acid=False,
     if test_guide: 
         log.info("Average Test Guided Learner L2 Distance = %s", results["learner_guided_L2_metric"])
 
-    # Log test L2 metric on outer branches of the distribution
-    if test_ema:
-        log.info("Average Outer Test EMA L2 Distance = %s", results["ema_out_L2_metric"])
-        if test_guide:
-            log.info("Average Outer Test Guided EMA L2 Distance = %s", results["ema_guided_out_L2_metric"])
-    log.info("Average Outer Test Learner L2 Distance = %s", results["learner_out_L2_metric"])
-    if test_guide: log.info("Average Outer Test Guided Learner L2 Distance = %s", results["learner_guided_out_L2_metric"])
+    # Log metrics on outer branches of the distribution
+    if test_outer:
+        log.info("Average Outer Test Learner Loss = %s", results["learner_out_loss"])
+        if test_ema: log.info("Average Outer Test EMA Loss = %s", results["ema_out_loss"])
+        if test_guide: log.info("Average Outer Test Guide Loss = %s", results["guide_out_loss"])
+        if test_ref: log.info("Average Outer Test Ref Loss = %s", results["ref_out_loss"])
+        if test_ema:
+            log.info("Average Outer Test EMA L2 Distance = %s", results["ema_out_L2_metric"])
+            if test_guide:
+                log.info("Average Outer Test Guided EMA L2 Distance = %s", results["ema_guided_out_L2_metric"])
+        log.info("Average Outer Test Learner L2 Distance = %s", results["learner_out_L2_metric"])
+        if test_guide: log.info("Average Outer Test Guided Learner L2 Distance = %s", results["learner_guided_out_L2_metric"])
 
     # Log KL divergence, if calculated
     if test_kl:
@@ -1303,6 +1399,12 @@ def cmdline():
                                                                       type=bool, default=True, show_default=True)
 @click.option('--invert/--no-invert', help='Use inverted ACID scores?', metavar='BOOL', 
                                                                       type=bool, default=False, show_default=True)
+@click.option('--late/--no-late', help='Delay ACID start?', metavar='BOOL', 
+                                                                      type=bool, default=False, show_default=True)
+@click.option('--early/--no-early', help='Run ACID just at the beginning?', metavar='BOOL', 
+                                                                      type=bool, default=False, show_default=True)
+@click.option('--trick/--no-trick', help='Use the softmax stability trick?', metavar='BOOL', 
+                                                                      type=bool, default=False, show_default=True)
 @click.option('--seed',   help='Random seed', metavar='FLOAT',        type=int, default=None, show_default=True)
 @click.option('--verbose/--no-verbose', help='Whether to log information messages or not', metavar='BOOL', 
                                                                       type=bool, default=False, show_default=True)
@@ -1311,9 +1413,10 @@ def cmdline():
 @click.option('--logging', help='Log filename', metavar='DIR',        type=str, default=None)
 @click.option('--viz/--no-viz', help='Visualize progress?', metavar='BOOL', 
                                                                       type=bool, default=True, show_default=True)
+@click.option('--device', help='CUDA GPU id?', metavar='INT',         type=int, default=0, show_default=True)
 def train(outdir, cls, layers, dim, total_iter, batch_size, val, test, viz, 
-          guidance, guide_path, interpol, acid, n, filt, diff, invert, 
-          seed, verbose, debug, logging):
+          guidance, guide_path, interpol, acid, n, filt, diff, invert, late, early, trick,
+          seed, verbose, debug, logging, device):
     """Train a 2D toy model with the given parameters."""
     if debug: verbosity = 2
     elif verbose: verbosity = 1
@@ -1322,17 +1425,22 @@ def train(outdir, cls, layers, dim, total_iter, batch_size, val, test, viz,
         outdir = os.path.join(dirs.MODELS_HOME, outdir)
     if guide_path is not None:
         guide_path = os.path.join(dirs.MODELS_HOME, guide_path)
+    if logging is not None:
+        log_filepath = os.path.join(dirs.MODELS_HOME, logging)
+    else: log_filepath = None
     pkl_pattern = f'{outdir}/iter%04d.pkl' if outdir is not None else None
     viz_iter = 32 if viz else None
+    device = torch.device("cuda:"+str(device))
     log.info('Training...')
     do_train(classes=cls, num_layers=layers, hidden_dim=dim, 
              total_iter=total_iter, batch_size=batch_size, seed=seed, 
              validation=val, testing=test, 
              guidance=guidance, guide_path=guide_path, guide_interpolation=interpol,
-             acid=acid, acid_n=n, acid_f=filt, acid_diff=diff, acid_inverted=invert,
+             acid=acid, acid_N=n, acid_f=filt, acid_diff=diff, acid_inverted=invert, 
+             acid_late=late, acid_stability_trick=trick, acid_early=early,
              pkl_pattern=pkl_pattern, 
              viz_iter=viz_iter,
-             verbosity=verbosity, log_filename=logging)
+             verbosity=verbosity, log_filename=log_filepath, device=device)
     log.info('Done.')
 
 #----------------------------------------------------------------------------
@@ -1351,7 +1459,7 @@ def train(outdir, cls, layers, dim, total_iter, batch_size, val, test, viz,
 @click.option('--batch-size', help='Batch size', metavar='INT', type=int, default=4<<8, show_default=True)
 @click.option('--seed', help='Random seed', metavar='FLOAT', type=int, default=None, show_default=True)
 @click.option('--logging', 
-    help='Log filepath', metavar='DIR', type=str, default=None)
+    help='Local path to logging file', metavar='DIR', type=str, default=None)
 def test(net_path, ema_path, guide_path, acid, n_samples, batch_size, seed, logging):
     """Test a given model on a fresh batch of test data"""
 
@@ -1360,9 +1468,11 @@ def test(net_path, ema_path, guide_path, acid, n_samples, batch_size, seed, logg
         ema_path = os.path.join(dirs.MODELS_HOME, ema_path)
     if guide_path is not None:
         guide_path = os.path.join(dirs.MODELS_HOME, guide_path)
+    if logging is not None:
+        log_filepath = os.path.join(dirs.MODELS_HOME, logging)
 
     do_test(net_path, ema_path=ema_path, guide_path=guide_path, acid=acid, 
-            batch_size=batch_size, n_samples=n_samples, seed=seed, log_filename=logging)
+            batch_size=batch_size, n_samples=n_samples, seed=seed, log_filename=log_filepath)
 
 #----------------------------------------------------------------------------
 # 'plot' subcommand.
