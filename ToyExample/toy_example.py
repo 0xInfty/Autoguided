@@ -332,7 +332,7 @@ def do_train(
     validation=False, val_batch_size=4<<7, sigma_max=5,
     testing=False, n_test_samples=4<<8, test_batch_size=4<<8, test_outer=False,
     acid=False, acid_N=16, acid_f=0.8, acid_diff=True, acid_inverted=False, 
-    acid_stability_trick=False, acid_late=False,
+    acid_stability_trick=False, acid_late=False, acid_early=False,
     device=torch.device('cuda'),
     pkl_pattern=None, pkl_iter=256, 
     viz_iter=32, viz_save=True, 
@@ -373,6 +373,10 @@ def do_train(
             run_acid = False
             is_acid_waiting = True
             log.info("ACID with delayed execution strategy")
+        elif acid_early:
+            run_acid = True
+            is_acid_waiting = True
+            log.info("ACID programmed stop strategy")
         else:
             run_acid = True
             is_acid_waiting = False
@@ -471,9 +475,9 @@ def do_train(
             if not net_beats_ref and net_loss.mean() < ref_loss.mean():
                 net_beats_ref = True
                 log.warning("Network has beaten the reference")
-                if is_acid_waiting:
-                    run_acid = True
-                    log.warning("ACID will now be run")
+                run_acid = not(run_acid)
+                if run_acid: log.warning("ACID will now be run")
+                else: log.warning("ACID will now be stopped")
         if run_acid: 
             if guide_interpolation: 
                 acid_loss = (sigma ** 2) * ((gt_scores - interpol_scores) ** 2).mean(-1)
@@ -1024,6 +1028,7 @@ def do_test(net_path, ema_path=None, guide_path=None, acid=False,
             log_filename=None):
 
     # Set up the logger
+    log = logs.create_logger(net_path)
     logging_to_file = log_filename is not None
     def set_up_logger(log_filename=None):
         log_level = logs.get_log_level(1)
@@ -1059,7 +1064,7 @@ def do_test(net_path, ema_path=None, guide_path=None, acid=False,
         with builtins.open(guide_path, "rb") as f:
             guide = pickle.load(f).to(device)
     else: guide = None
-    if logging_to_file: set_up_logger(log_filename)
+    set_up_logger(log_filename)
     log.warning("Model loaded from %s", net_path)
     if ema_path is not None: log.warning("EMA model loaded from %s", ema_path)
     if guide_path is not None: 
@@ -1349,6 +1354,8 @@ def cmdline():
                                                                       type=bool, default=False, show_default=True)
 @click.option('--late/--no-late', help='Delay ACID start?', metavar='BOOL', 
                                                                       type=bool, default=False, show_default=True)
+@click.option('--early/--no-early', help='Run ACID just at the beginning?', metavar='BOOL', 
+                                                                      type=bool, default=False, show_default=True)
 @click.option('--trick/--no-trick', help='Use the softmax stability trick?', metavar='BOOL', 
                                                                       type=bool, default=False, show_default=True)
 @click.option('--seed',   help='Random seed', metavar='FLOAT',        type=int, default=None, show_default=True)
@@ -1361,7 +1368,7 @@ def cmdline():
                                                                       type=bool, default=True, show_default=True)
 @click.option('--device', help='CUDA GPU id?', metavar='INT',         type=int, default=0, show_default=True)
 def train(outdir, cls, layers, dim, total_iter, batch_size, val, test, viz, 
-          guidance, guide_path, interpol, acid, n, filt, diff, invert, late, trick,
+          guidance, guide_path, interpol, acid, n, filt, diff, invert, late, early, trick,
           seed, verbose, debug, logging, device):
     """Train a 2D toy model with the given parameters."""
     if debug: verbosity = 2
@@ -1383,7 +1390,7 @@ def train(outdir, cls, layers, dim, total_iter, batch_size, val, test, viz,
              validation=val, testing=test, 
              guidance=guidance, guide_path=guide_path, guide_interpolation=interpol,
              acid=acid, acid_N=n, acid_f=filt, acid_diff=diff, acid_inverted=invert, 
-             acid_late=late, acid_stability_trick=trick,
+             acid_late=late, acid_stability_trick=trick, acid_early=early,
              pkl_pattern=pkl_pattern, 
              viz_iter=viz_iter,
              verbosity=verbosity, log_filename=log_filepath, device=device)
