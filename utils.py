@@ -83,20 +83,23 @@ def is_sample_in_fractal(samples, ground_truth_distribution, sigma=0):
 ### Mandala metric ###############################################################################
 
 def mandala_score(model, ground_truth_dist, guide=None, guidance_weight=1,
-                  n_samples=500, sigma_max=5,
+                  samples=None, n_samples=2**14, sigma_max=5,
                   grid_resolution=101, 
                   x_centre=toy.GT_ORIGIN[0], y_centre=toy.GT_ORIGIN[1], 
                   x_side=2*1.5, y_side=2*1.5,
                   logging=False, plotting=True, 
                   full_scale=True, log_scale=False, device=DEVICE):
 
-    # Create samples
-    if isinstance(model, toy.GaussianMixture):
-        net_samples = ground_truth_dist.sample(n_samples, sigma=0)
+    # If no samples provided, generate samples
+    if samples is None:
+        if isinstance(model, toy.GaussianMixture):
+            samples = ground_truth_dist.sample(n_samples, sigma=0)
+        else:
+            gt_samples = ground_truth_dist.sample(n_samples, sigma=sigma_max)
+            samples = toy.do_sample(net=model, gnet=guide, guidance=guidance_weight,
+                                        x_init=gt_samples, sigma_max=sigma_max)[-1]
     else:
-        gt_samples = ground_truth_dist.sample(n_samples, sigma=sigma_max)
-        net_samples = toy.do_sample(net=model, gnet=guide, guidance=guidance_weight,
-                                    x_init=gt_samples, sigma_max=sigma_max)[-1]
+        n_samples = len(samples)
 
     # Create grid
     grid_coords = create_grid_samples(grid_resolution, x_centre, y_centre, x_side, y_side, device=device)
@@ -106,19 +109,19 @@ def mandala_score(model, ground_truth_dist, guide=None, guidance_weight=1,
     y_edges = np.linspace(*bounds[1], grid_resolution+1)
 
     # Discard samples that fell off the grid
-    net_samples = net_samples[net_samples[:,0]>=bounds[0][0]]
-    net_samples = net_samples[net_samples[:,0]<=bounds[0][1]]
-    net_samples = net_samples[net_samples[:,1]>=bounds[1][0]]
-    net_samples = net_samples[net_samples[:,1]<=bounds[1][1]]
-    n_in_grid = len(net_samples)
+    samples = samples[samples[:,0]>=bounds[0][0]]
+    samples = samples[samples[:,0]<=bounds[0][1]]
+    samples = samples[samples[:,1]>=bounds[1][0]]
+    samples = samples[samples[:,1]<=bounds[1][1]]
+    n_in_grid = len(samples)
 
     # Count hits and misses
-    hit_samples_mask = is_sample_in_fractal(net_samples, ground_truth_dist)
+    hit_samples_mask = is_sample_in_fractal(samples, ground_truth_dist)
     n_hits = int(torch.sum(hit_samples_mask))
     n_miss = n_in_grid - n_hits
     if logging: print("Total in grid", n_in_grid, "\n> Hits", n_hits, "\n> Misses", n_miss)
-    hit_samples = net_samples[hit_samples_mask]
-    miss_samples = net_samples[torch.logical_not(hit_samples_mask)]
+    hit_samples = samples[hit_samples_mask]
+    miss_samples = samples[torch.logical_not(hit_samples_mask)]
 
     # Calculate non-unique metric
     non_unique_score = n_hits / n_samples
@@ -152,7 +155,7 @@ def mandala_score(model, ground_truth_dist, guide=None, guidance_weight=1,
 
     # Optional plotting step
     if plotting:
-        plot_mandala_score(net_samples, grid, 
+        plot_mandala_score(samples, grid, 
             grid_coords, x_edges, y_edges, bounds,
             x_centre, y_centre, x_side, y_side, 
             n_hits_unique, n_miss_unique, 
@@ -163,7 +166,7 @@ def mandala_score(model, ground_truth_dist, guide=None, guidance_weight=1,
 
 ### Visualization utils ########################################################################
 
-def plot_mandala_score(net_samples, grid, 
+def plot_mandala_score(samples, grid, 
                        grid_coords, x_edges, y_edges, bounds,
                        x_centre, y_centre, x_side, y_side, 
                        n_hits_unique, n_miss_unique, 
@@ -183,7 +186,7 @@ def plot_mandala_score(net_samples, grid,
                 view_x=x_centre, view_y=y_centre, view_size=x_side/2, ax=ax1)
 
     # Plot scatter points
-    ax1.scatter(*net_samples.swapaxes(0,1).detach().cpu().numpy(), color='k', alpha=0.1, s=10, zorder=10)
+    ax1.scatter(*samples.swapaxes(0,1).detach().cpu().numpy(), color='k', alpha=0.1, s=10, zorder=10)
 
     # 2. Hit/Miss Visualization
     ax2.set_title("Hit/Miss Analysis")
