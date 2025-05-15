@@ -886,16 +886,17 @@ def mandala_score(model, ground_truth_dist, guide=None, guidance_weight=3,
                   x_centre=GT_ORIGIN[0], y_centre=GT_ORIGIN[1], 
                   x_side=2*1.5, y_side=2*1.5,
                   logging=False, plotting=False, 
-                  full_scale=True, log_scale=False, device=torch.device("cuda")):
+                  full_scale=True, log_scale=False, 
+                  device=torch.device("cuda"), generator=None):
 
     # If no samples provided, generate samples
     if samples is None:
         if isinstance(model, GaussianMixture):
-            samples = ground_truth_dist.sample(n_samples, sigma=0)
+            samples = ground_truth_dist.sample(n_samples, sigma=0, generator=generator)
         else:
-            gt_samples = ground_truth_dist.sample(n_samples, sigma=sigma_max)
+            gt_samples = ground_truth_dist.sample(n_samples, sigma=sigma_max, generator=generator)
             samples = do_sample(net=model, gnet=guide, guidance=guidance_weight,
-                                    x_init=gt_samples, sigma_max=sigma_max)[-1]
+                                x_init=gt_samples, sigma_max=sigma_max)[-1]
     else:
         n_samples = len(samples)
 
@@ -1181,7 +1182,7 @@ def run_test(net, ema=None, guide=None, ref=None, acid=False,
                 results["ema_classification_score"] = ema_classification
                 if test_guide:
                     ema_mandala, ema_classification = mandala_score(
-                        ema, gtd, samples=ema_test_outputs, sigma_max=sigma_max, 
+                        ema, gtd, samples=guided_test_outputs, sigma_max=sigma_max, 
                         guide=guide, guidance_weight=guidance_weight)
                     results["ema_guided_mandala_score"] = ema_mandala
                     results["ema_guided_classification_score"] = ema_classification
@@ -1208,7 +1209,7 @@ def run_test(net, ema=None, guide=None, ref=None, acid=False,
             results["learner_classification_score"] = net_classification
             if test_guide:
                 net_mandala, net_classification = mandala_score(
-                    net, gtd, samples=test_outputs, sigma_max=sigma_max, 
+                    net, gtd, samples=guided_test_outputs, sigma_max=sigma_max, 
                     guide=guide, guidance_weight=guidance_weight)
                 results["learner_guided_mandala_score"] = net_mandala
                 results["learner_guided_classification_score"] = net_classification
