@@ -475,16 +475,17 @@ def do_train(
         net_loss = (sigma ** 2) * ((gt_scores - net_scores) ** 2).mean(-1)
         if run_acid or is_acid_waiting:
             ref_loss = (sigma ** 2) * ((gt_scores - ref_scores) ** 2).mean(-1)
-            if not net_beats_ref and net_loss.mean() < ref_loss.mean():
-                net_beats_ref = True
-                log.warning("Network has beaten the reference")
-                run_acid = not(run_acid)
-                if run_acid: log.warning("ACID will now be run")
-                else: log.warning("ACID will now be stopped")
-        if run_acid: 
             if guide_interpolation: 
                 acid_loss = (sigma ** 2) * ((gt_scores - interpol_scores) ** 2).mean(-1)
             else: acid_loss = net_loss
+            if not net_beats_ref and net_loss.mean() < ref_loss.mean():
+                net_beats_ref = True
+                log.warning("Network has beaten the reference")
+                if guide_interpolation: log.warning("Trigger took the interpolation into account")
+                run_acid = not(run_acid)
+                if run_acid: log.warning("ACID will now be run")
+                else: log.warning("ACID will now be stopped")
+                is_acid_waiting = False
 
         # Calculate overall loss
         if run_acid:
@@ -1574,6 +1575,7 @@ def train(outdir, cls, layers, dim, total_iter, batch_size, val, test, viz,
     else: verbosity = 0
     if outdir is not None:
         outdir = os.path.join(dirs.MODELS_HOME, outdir)
+        if not os.path.isdir(outdir): os.makedirs(outdir)
     if guide_path is not None:
         guide_path = os.path.join(dirs.MODELS_HOME, guide_path)
     if logging is not None:
