@@ -481,11 +481,12 @@ def do_train(
             if not net_beats_ref and net_loss.mean() < ref_loss.mean():
                 net_beats_ref = True
                 log.warning("Network has beaten the reference")
-                if guide_interpolation: log.warning("Trigger took the interpolation into account")
-                run_acid = not(run_acid)
-                if run_acid: log.warning("ACID will now be run")
-                else: log.warning("ACID will now be stopped")
-                is_acid_waiting = False
+                if guide_interpolation: log.warning("Calculation took the interpolation into account")
+                if is_acid_waiting:
+                    run_acid = not(run_acid)
+                    if run_acid: log.warning("ACID will now be run")
+                    else: log.warning("ACID will now be stopped")
+                    is_acid_waiting = False
 
         # Calculate overall loss
         if run_acid:
