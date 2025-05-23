@@ -478,7 +478,7 @@ def do_train(
             if guide_interpolation: 
                 acid_loss = (sigma ** 2) * ((gt_scores - interpol_scores) ** 2).mean(-1)
             else: acid_loss = net_loss
-            if not net_beats_ref and acid_loss.mean() < ref_loss.mean():
+            if not net_beats_ref and net_loss.mean() < ref_loss.mean():
                 net_beats_ref = True
                 log.warning("Network has beaten the reference")
                 if guide_interpolation: log.warning("Calculation took the interpolation into account")
