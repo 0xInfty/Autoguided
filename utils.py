@@ -5,9 +5,11 @@ sys.path.insert(0, dirs.SYSTEM_HOME)
 sys.path.insert(0, os.path.join(dirs.SYSTEM_HOME, "ToyExample"))
 
 import torch
-DEVICE = torch.device("cuda")
+from re import finditer
 
 ### Global parameters ##############################################################################
+
+DEVICE = torch.device("cuda")
 
 GT_ORIGIN = (0.0030, 0.0325)
 
@@ -81,3 +83,10 @@ def is_sample_in_fractal(samples, ground_truth_distribution, sigma=0):
     logp = ground_truth_distribution.logp(samples, sigma=sigma)
 
     return logp >= GT_LOGP_LEVEL
+
+### Basic utilities ##############################################################################
+
+def split_camel_case(identifier):
+    """https://stackoverflow.com/questions/29916065/how-to-do-camelcase-split-in-python"""
+    matches = finditer('.+?(?:(?<=[a-z])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])|$)', identifier)
+    return [m.group(0) for m in matches]
