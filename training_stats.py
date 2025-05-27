@@ -14,7 +14,7 @@ import numpy as np
 import torch
 import dnnlib
 
-from . import misc
+import torch_utils as misc
 
 #----------------------------------------------------------------------------
 
