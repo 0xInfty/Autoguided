@@ -398,7 +398,7 @@ def do_train(
 
     # Log other parameters
     if guidance and guide_interpolation:
-        log.warning("Guide interpolation of scores during training")
+        log.warning("Guide interpolation of scores during training") # Technically, only in ACID scores
     else:
         guide_interpolation = False
         log.warning("No guide interpolation of scores during training")
@@ -469,7 +469,8 @@ def do_train(
         gt_scores = gtd.score(samples, sigma)
         net_scores = net.score(samples, sigma, graph=True)
         if run_acid or is_acid_waiting: ref_scores = ref.score(samples, sigma)
-        if guide_interpolation: interpol_scores = guide.score(samples, sigma).lerp(net_scores, guidance_weight)
+        if guide_interpolation: 
+            interpol_scores = guide.score(samples, sigma).lerp(net_scores, guidance_weight)
 
         # Calculate teacher and student loss
         net_loss = (sigma ** 2) * ((gt_scores - net_scores) ** 2).mean(-1)
@@ -492,7 +493,9 @@ def do_train(
         if run_acid:
             try:
                 log.warning("Using ACID")
-                log.info("Average Super-Batch Learner Loss = %s", float(acid_loss.mean()))
+                log.info("Average Super-Batch Learner Loss = %s", float(net_loss.mean()))
+                if guide_interpolation: 
+                    log.info("Average Super-Batch Guided Learner Loss = %s", float(acid_loss.mean()))
                 log.info("Average Super-Batch Reference Loss = %s", float(ref_loss.mean()))
                 indices = jointly_sample_batch(acid_loss, ref_loss, 
                     N=acid_N, filter_ratio=acid_f,
