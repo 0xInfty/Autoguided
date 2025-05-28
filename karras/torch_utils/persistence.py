@@ -11,7 +11,10 @@ during unpickling. This way, any previously exported pickles will remain
 usable even if the original code is no longer available, or if the current
 version of the code is not consistent with what was originally pickled."""
 
+import pyvdirs.dirs as dirs
 import sys
+sys.path.insert(0, dirs.SYSTEM_HOME)
+
 import pickle
 import io
 import inspect
@@ -19,7 +22,8 @@ import copy
 import uuid
 import types
 import functools
-from dnnlib.util import EasyDict
+
+from karras.dnnlib import EasyDict
 
 #----------------------------------------------------------------------------
 

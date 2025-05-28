@@ -9,12 +9,16 @@ multiple processes and devices. The interface is designed to minimize
 synchronization overhead as well as the amount of boilerplate in user
 code."""
 
+import pyvdirs.dirs as dirs
+import sys
+sys.path.insert(0, dirs.SYSTEM_HOME)
+
 import re
 import numpy as np
 import torch
-import dnnlib
 
-import torch_utils as misc
+import karras.dnnlib as dnnlib
+import karras.torch_utils.misc as misc
 
 #----------------------------------------------------------------------------
 
@@ -30,7 +34,7 @@ _cumulative     = dict()        # Cumulative counters on the CPU, updated by _sy
 #----------------------------------------------------------------------------
 
 def init_multiprocessing(rank, sync_device):
-    r"""Initializes `torch_utils.training_stats` for collecting statistics
+    r"""Initializes `karras.torch_utils.training_stats` for collecting statistics
     across multiple processes.
 
     This function must be called after

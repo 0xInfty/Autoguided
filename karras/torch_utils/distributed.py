@@ -4,12 +4,17 @@
 # Original copyright disclaimer:
 # Copyright (c) 2024, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 
+import pyvdirs.dirs as dirs
+import sys
+sys.path.insert(0, dirs.SYSTEM_HOME)
+
 import os
 import re
 import socket
 import torch
 import torch.distributed
-import training_stats
+
+import karras.torch_utils.training_stats as training_stats
 
 _sync_device = None
 

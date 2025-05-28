@@ -4,13 +4,18 @@
 # Original copyright disclaimer:
 # Copyright (c) 2024, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 
+import pyvdirs.dirs as dirs
+import sys
+sys.path.insert(0, dirs.SYSTEM_HOME)
+
 import re
 import contextlib
 import functools
 import numpy as np
 import torch
 import warnings
-import dnnlib
+
+import karras.dnnlib as dnnlib
 
 #----------------------------------------------------------------------------
 # Re-seed torch & numpy random generators based on the given arguments.
