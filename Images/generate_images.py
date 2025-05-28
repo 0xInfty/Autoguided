@@ -8,9 +8,10 @@
 
 import pyvdirs.dirs as dirs
 import sys
-sys.path.insert(0, dirs.SYSTEM_HOME)
-
 import os
+sys.path.insert(0, dirs.SYSTEM_HOME)
+sys.path.insert(0, os.path.join(dirs.SYSTEM_HOME, "karras"))
+
 import re
 import warnings
 import click
@@ -20,8 +21,11 @@ import numpy as np
 import torch
 import PIL.Image
 
-from karras.dnnlib import EasyDict, construct_class_by_name, open_url, call_func_by_name
+from karras.dnnlib.util import EasyDict, construct_class_by_name, open_url, call_func_by_name
 import karras.torch_utils.distributed as dist
+
+PRETRAINED_HOME = os.path.join(dirs.MODELS_HOME, "Images", "00_PreTrained")
+if not os.path.isdir(PRETRAINED_HOME): os.mkdir(PRETRAINED_HOME)
 
 warnings.filterwarnings('ignore', '`resume_download` is deprecated')
 warnings.filterwarnings('ignore', 'You are using `torch.load` with `weights_only=False`')
@@ -168,7 +172,8 @@ def generate_images(
     if isinstance(net, str):
         if verbose:
             dist.print0(f'Loading main network from {net} ...')
-        with open_url(net, verbose=(verbose and dist.get_rank() == 0)) as f:
+        with open_url(net, verbose=(verbose and dist.get_rank() == 0),
+                      cache_dir=PRETRAINED_HOME) as f:
             data = pickle.load(f)
         net = data['ema'].to(device)
         if encoder is None:
@@ -181,7 +186,8 @@ def generate_images(
     if isinstance(gnet, str):
         if verbose:
             dist.print0(f'Loading guiding network from {gnet} ...')
-        with open_url(gnet, verbose=(verbose and dist.get_rank() == 0)) as f:
+        with open_url(gnet, verbose=(verbose and dist.get_rank() == 0),
+                      cache_dir=PRETRAINED_HOME) as f:
             gnet = pickle.load(f)['ema'].to(device)
     if gnet is None:
         gnet = net
