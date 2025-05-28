@@ -25,7 +25,7 @@ import click
 import tqdm
 import pyvtools.text as vtext
 
-import karras.dnnlib as dnnlib
+import karras.dnnlib.util as util
 import karras.torch_utils.persistence as persistence
 import karras.training.phema as phema
 
@@ -135,7 +135,7 @@ def gt(classes='A', device=torch.device('cpu'), seed=2, origin=np.array(GT_ORIGI
 
         # Represent the current branch as a sequence of Gaussian components.
         for t in np.linspace(0.07, 0.93, num=8):
-            c = dnnlib.EasyDict()
+            c = util.EasyDict()
             c.cls = cls
             c.phi = dist * (0.5 ** depth)
             c.mu = (pos + dir * dist * t) * scale
@@ -1645,10 +1645,10 @@ def plot(net, gnet, guidance, save, device=torch.device('cuda')):
     """Visualize sampling distributions with and without guidance."""
     log.info('Loading models...')
     if isinstance(net, str):
-        with dnnlib.open_url(net, cache_dir=PRETRAINED_HOME) as f:
+        with util.open_url(net, cache_dir=PRETRAINED_HOME) as f:
             net = pickle.load(f).to(device)
     if isinstance(gnet, str):
-        with dnnlib.open_url(gnet, cache_dir=PRETRAINED_HOME) as f:
+        with util.open_url(gnet, cache_dir=PRETRAINED_HOME) as f:
             gnet = pickle.load(f).to(device)
 
     # Initialize plot.
