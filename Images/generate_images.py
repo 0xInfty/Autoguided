@@ -6,6 +6,10 @@
 
 """Generate random images using the given model."""
 
+import pyvdirs.dirs as dirs
+import sys
+sys.path.insert(0, dirs.SYSTEM_HOME)
+
 import os
 import re
 import warnings
@@ -15,8 +19,9 @@ import pickle
 import numpy as np
 import torch
 import PIL.Image
-from ..ToyExample.dnnlib.util import EasyDict, construct_class_by_name, open_url, call_func_by_name
-from ..ToyExample.torch_utils import distributed as dist
+
+from karras.dnnlib import EasyDict, construct_class_by_name, open_url, call_func_by_name
+import karras.torch_utils.distributed as dist
 
 warnings.filterwarnings('ignore', '`resume_download` is deprecated')
 warnings.filterwarnings('ignore', 'You are using `torch.load` with `weights_only=False`')
