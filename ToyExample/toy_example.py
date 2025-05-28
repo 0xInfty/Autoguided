@@ -8,9 +8,10 @@
 
 import pyvdirs.dirs as dirs
 import sys
-sys.path.insert(0, dirs.SYSTEM_HOME)
-
 import os
+sys.path.insert(0, dirs.SYSTEM_HOME)
+sys.path.insert(0, os.path.join(dirs.SYSTEM_HOME, "karras"))
+
 import copy
 import pickle
 import warnings
@@ -19,13 +20,18 @@ import builtins
 import numpy as np
 import torch
 import matplotlib.pyplot as plt
+from matplotlib.colors import LinearSegmentedColormap, LogNorm
 import click
 import tqdm
 import pyvtools.text as vtext
 
-import dnnlib
-from torch_utils import persistence
-import training.phema
+import karras.dnnlib.util as util
+import karras.torch_utils.persistence as persistence
+import karras.training.phema as phema
+
+from utils import FIG1_KWARGS, FIG2_KWARGS, GT_ORIGIN, GT_LOGP_LEVEL
+from utils import is_sample_in_fractal, get_grid_params, create_grid_samples
+import mandala_exploration.fractal_step_by_step as mand
 import logs
 
 PRETRAINED_HOME = os.path.join(dirs.DATA_HOME, "ToyExample")
@@ -111,8 +117,6 @@ class GaussianMixture(torch.nn.Module):
 # Construct a ground truth 2D distribution for the given set of classes
 # ('A', 'B', or 'AB').
 
-GT_ORIGIN = (0.0030, 0.0325)
-
 @functools.lru_cache(None)
 def gt(classes='A', device=torch.device('cpu'), seed=2, origin=np.array(GT_ORIGIN), scale=np.array([1.3136, 1.3844])):
     rnd = np.random.RandomState(seed)
@@ -131,7 +135,7 @@ def gt(classes='A', device=torch.device('cpu'), seed=2, origin=np.array(GT_ORIGI
 
         # Represent the current branch as a sequence of Gaussian components.
         for t in np.linspace(0.07, 0.93, num=8):
-            c = dnnlib.util.EasyDict()
+            c = util.EasyDict()
             c.cls = cls
             c.phi = dist * (0.5 ** depth)
             c.mu = (pos + dir * dist * t) * scale
@@ -330,7 +334,7 @@ def do_train(
     P_mean=-2.3, P_std=1.5, sigma_data=0.5, lr_ref=1e-2, lr_iter=512, ema_std=0.010,
     guidance=False, guidance_weight=3, guide_path=None, guide_interpolation=False,
     validation=False, val_batch_size=4<<7, sigma_max=5,
-    testing=False, n_test_samples=4<<8, test_batch_size=4<<8, test_outer=False,
+    testing=False, n_test_samples=4<<8, test_batch_size=4<<8, test_outer=False, test_mandala=False,
     test_kl=True, kl_n_samples=1<<18, kl_div_iter=16,
     acid=False, acid_N=16, acid_f=0.8, acid_diff=True, acid_inverted=False, 
     acid_stability_trick=False, acid_late=False, acid_early=False,
@@ -396,7 +400,7 @@ def do_train(
 
     # Log other parameters
     if guidance and guide_interpolation:
-        log.warning("Guide interpolation of scores during training")
+        log.warning("Guide interpolation of scores during training") # Technically, only in ACID scores
     else:
         guide_interpolation = False
         log.warning("No guide interpolation of scores during training")
@@ -469,28 +473,33 @@ def do_train(
         gt_scores = gtd.score(samples, sigma)
         net_scores = net.score(samples, sigma, graph=True)
         if run_acid or is_acid_waiting: ref_scores = ref.score(samples, sigma)
-        if guide_interpolation: interpol_scores = guide.score(samples, sigma).lerp(net_scores, guidance_weight)
+        if guide_interpolation: 
+            interpol_scores = guide.score(samples, sigma).lerp(net_scores, guidance_weight)
 
         # Calculate teacher and student loss
         net_loss = (sigma ** 2) * ((gt_scores - net_scores) ** 2).mean(-1)
         if run_acid or is_acid_waiting:
             ref_loss = (sigma ** 2) * ((gt_scores - ref_scores) ** 2).mean(-1)
-            if not net_beats_ref and net_loss.mean() < ref_loss.mean():
-                net_beats_ref = True
-                log.warning("Network has beaten the reference")
-                run_acid = not(run_acid)
-                if run_acid: log.warning("ACID will now be run")
-                else: log.warning("ACID will now be stopped")
-        if run_acid: 
             if guide_interpolation: 
                 acid_loss = (sigma ** 2) * ((gt_scores - interpol_scores) ** 2).mean(-1)
             else: acid_loss = net_loss
+            if not net_beats_ref and net_loss.mean() < ref_loss.mean():
+                net_beats_ref = True
+                log.warning("Network has beaten the reference")
+                if guide_interpolation: log.warning("Calculation took the interpolation into account")
+                if is_acid_waiting:
+                    run_acid = not(run_acid)
+                    if run_acid: log.warning("ACID will now be run")
+                    else: log.warning("ACID will now be stopped")
+                    is_acid_waiting = False
 
         # Calculate overall loss
         if run_acid:
             try:
                 log.warning("Using ACID")
-                log.info("Average Super-Batch Learner Loss = %s", float(acid_loss.mean()))
+                log.info("Average Super-Batch Learner Loss = %s", float(net_loss.mean()))
+                if guide_interpolation: 
+                    log.info("Average Super-Batch Guided Learner Loss = %s", float(acid_loss.mean()))
                 log.info("Average Super-Batch Reference Loss = %s", float(ref_loss.mean()))
                 indices = jointly_sample_batch(acid_loss, ref_loss, 
                     N=acid_N, filter_ratio=acid_f,
@@ -521,7 +530,7 @@ def do_train(
             except: log.debug("%s = %s", k, float(v))
 
         # Update reference EMA parameters
-        beta = training.phema.power_function_beta(std=ema_std, t_next=iter_idx+1, t_delta=1)
+        beta = phema.power_function_beta(std=ema_std, t_next=iter_idx+1, t_delta=1)
         for p_net, p_ema in zip(net.parameters(), ema.parameters()):
             p_ema.lerp_(p_net.detach(), 1 - beta)
 
@@ -530,7 +539,8 @@ def do_train(
             run_kl_val = iter_idx % kl_div_iter == 0
             val_results = run_test(net, ema, guide, ref, acid=run_acid,
                 classes=classes, P_mean=P_mean, P_std=P_std, sigma_max=sigma_max,
-                n_samples=val_batch_size, batch_size=val_batch_size, test_outer=test_outer,
+                n_samples=val_batch_size, batch_size=val_batch_size, 
+                test_outer=test_outer, test_mandala=test_mandala,
                 test_kl=run_kl_val, kl_n_samples=kl_n_samples,
                 guidance_weight=guidance_weight,
                 generator=generator, device=device)
@@ -559,6 +569,18 @@ def do_train(
                 if guidance:
                     log.info("Average Outer Validation Guided Learner L2 Distance = %s", val_results["learner_guided_out_L2_metric"])
                     log.info("Average Outer Validation Guided EMA L2 Distance = %s", val_results["ema_guided_out_L2_metric"])
+            
+            # Log validation mandala score
+            if test_mandala:
+                log.info("Validation Learner Mandala Score = %s", val_results["learner_mandala_score"])
+                log.info("Validation EMA Mandala Score = %s", val_results["ema_mandala_score"])
+                log.info("Validation Learner Classification Score = %s", val_results["learner_classification_score"])
+                log.info("Validation EMA Classification Score = %s", val_results["ema_classification_score"])
+                if guidance:
+                    log.info("Validation Guided Learner Mandala Score = %s", val_results["learner_guided_mandala_score"])
+                    log.info("Validation Guided EMA Mandala Score = %s", val_results["ema_guided_mandala_score"])
+                    log.info("Validation Guided Learner Classification Score = %s", val_results["learner_guided_classification_score"])
+                    log.info("Validation Guided EMA Classification Score = %s", val_results["ema_guided_classification_score"])
 
             # Log KL divergence, if calculated
             if run_kl_val:
@@ -616,6 +638,18 @@ def do_train(
                 log.warning("Average Outer Test Guided Learner L2 Distance = %s", test_results["learner_guided_out_L2_metric"])
                 log.warning("Average Outer Test Guided EMA L2 Distance = %s", test_results["ema_guided_out_L2_metric"])
 
+        # Log test mandala score
+        if test_mandala:
+            log.info("Test Learner Mandala Score = %s", test_results["learner_mandala_score"])
+            log.info("Test EMA Mandala Score = %s", test_results["ema_mandala_score"])
+            log.info("Test Learner Classification Score = %s", test_results["learner_classification_score"])
+            log.info("Test EMA Classification Score = %s", test_results["ema_classification_score"])
+            if guidance:
+                log.info("Test Guided Learner Mandala Score = %s", test_results["learner_guided_mandala_score"])
+                log.info("Test Guided EMA Mandala Score = %s", test_results["ema_guided_mandala_score"])
+                log.info("Test Guided Learner Classification Score = %s", test_results["learner_guided_classification_score"])
+                log.info("Test Guided EMA Classification Score = %s", test_results["ema_guided_classification_score"])
+
         # Log KL divergence, if calculated
         if test_kl:
             log.info("Average Test Learner KL Divergence Estimation = %s", test_results["learner_kl_div"])
@@ -647,6 +681,7 @@ def do_train(
 
 def extract_results_from_log(log_path):
 
+    results = {}
     super_learner_loss = []
     super_ref_loss = []
     learner_loss = []
@@ -666,121 +701,119 @@ def extract_results_from_log(log_path):
     ema_guided_out_L2_val_metric = []
     out_L2_val_metric = []
     guided_out_L2_val_metric = []
+    learner_mandala_score = []
+    learner_classification_score = []
+    learner_guided_mandala_score = []
+    learner_guided_classification_score = []
+    ema_mandala_score = []
+    ema_classification_score = []
+    ema_guided_mandala_score = []
+    ema_guided_classification_score = []
     learner_val_kl_div = []
     ema_val_kl_div = []
     with builtins.open(log_path, "r") as f:
         for line in f:
             if "Average" in line:
-                if "Average Learner Loss" in line: learner_loss.append(vtext.find_numbers(line)[-1])
+                if "Average Learner Loss" in line: learner_loss.append(vtext.find_numbers(line)[-1]); continue
                 elif "Super-Batch" in line:
-                    if "Average Super-Batch Learner Loss" in line: super_learner_loss.append(vtext.find_numbers(line)[-1])
-                    elif "Average Super-Batch Reference Loss" in line: super_ref_loss.append(vtext.find_numbers(line)[-1])
+                    if "Average Super-Batch Learner Loss" in line: super_learner_loss.append(vtext.find_numbers(line)[-1]); continue
+                    elif "Average Super-Batch Reference Loss" in line: super_ref_loss.append(vtext.find_numbers(line)[-1]); continue
                 elif "Outer Validation" in line:
-                    if "Average Outer Validation Learner Loss" in line: learner_out_val_loss.append(vtext.find_numbers(line)[-1])
-                    elif "Average Outer Validation EMA Loss" in line: ema_out_val_loss.append(vtext.find_numbers(line)[-1])
-                    elif "Average Outer Validation Guide Loss" in line: guide_out_val_loss.append(vtext.find_numbers(line)[-1])
-                    elif "Average Outer Test ACID Reference Loss" in line: ref_out_val_loss.append(vtext.find_numbers(line)[-1])
-                    elif "Average Outer Validation EMA L2 Distance" in line: ema_out_L2_val_metric.append(vtext.find_numbers(line)[-1])
-                    elif "Average Outer Validation Guided EMA L2 Distance" in line: ema_guided_out_L2_val_metric.append(vtext.find_numbers(line)[-1])
-                    elif "Average Outer Validation Learner L2 Distance" in line: out_L2_val_metric.append(vtext.find_numbers(line)[-1])
-                    elif "Average Outer Validation Guided Learner L2 Distance" in line: guided_out_L2_val_metric.append(vtext.find_numbers(line)[-1])
+                    if "Average Outer Validation Learner Loss" in line: learner_out_val_loss.append(vtext.find_numbers(line)[-1]); continue
+                    elif "Average Outer Validation EMA Loss" in line: ema_out_val_loss.append(vtext.find_numbers(line)[-1]); continue
+                    elif "Average Outer Validation Guide Loss" in line: guide_out_val_loss.append(vtext.find_numbers(line)[-1]); continue
+                    elif "Average Outer Test ACID Reference Loss" in line: ref_out_val_loss.append(vtext.find_numbers(line)[-1]); continue
+                    elif "Average Outer Validation EMA L2 Distance" in line: ema_out_L2_val_metric.append(vtext.find_numbers(line)[-1]); continue
+                    elif "Average Outer Validation Guided EMA L2 Distance" in line: ema_guided_out_L2_val_metric.append(vtext.find_numbers(line)[-1]); continue
+                    elif "Average Outer Validation Learner L2 Distance" in line: out_L2_val_metric.append(vtext.find_numbers(line)[-1]); continue
+                    elif "Average Outer Validation Guided Learner L2 Distance" in line: guided_out_L2_val_metric.append(vtext.find_numbers(line)[-1]); continue
                 elif "Outer Test" in line:
-                    if "Average Outer Test Learner Loss" in line: learner_out_test_loss = vtext.find_numbers(line)[-1]
-                    elif "Average Outer Test EMA Loss" in line: ema_out_test_loss = vtext.find_numbers(line)[-1]
-                    elif "Average Outer Test Guide Loss" in line: guide_out_test_loss = vtext.find_numbers(line)[-1]
-                    elif "Average Outer Test ACID Reference Loss" in line: ref_out_test_loss = vtext.find_numbers(line)[-1]
-                    elif "Average Outer Test EMA L2 Distance With Guidance" in line: ema_guided_out_L2_test_metric = vtext.find_numbers(line)[-1]
-                    elif "Average Outer Test EMA L2 Distance" in line: ema_out_L2_test_metric = vtext.find_numbers(line)[-1]
-                    elif "Average Outer Test Learner L2 Distance With Guidance" in line: guided_out_L2_test_metric = vtext.find_numbers(line)[-1]
-                    elif "Average Outer Test Learner L2 Distance" in line: out_L2_test_metric = vtext.find_numbers(line)[-1]
+                    if "Average Outer Test Learner Loss" in line: results["learner_out_test_loss"] = vtext.find_numbers(line)[-1]; continue
+                    elif "Average Outer Test EMA Loss" in line: results["ema_out_test_loss"] = vtext.find_numbers(line)[-1]; continue
+                    elif "Average Outer Test Guide Loss" in line: results["guide_out_test_loss"] = vtext.find_numbers(line)[-1]; continue
+                    elif "Average Outer Test ACID Reference Loss" in line: results["ref_out_test_loss"] = vtext.find_numbers(line)[-1]; continue
+                    elif "Average Outer Test EMA L2 Distance With Guidance" in line: results["ema_guided_out_L2_test_metric"] = vtext.find_numbers(line)[-1]; continue
+                    elif "Average Outer Test EMA L2 Distance" in line: results["ema_out_L2_test_metric"] = vtext.find_numbers(line)[-1]; continue
+                    elif "Average Outer Test Learner L2 Distance With Guidance" in line: results["guided_out_L2_test_metric"] = vtext.find_numbers(line)[-1]; continue
+                    elif "Average Outer Test Learner L2 Distance" in line: results["out_L2_test_metric"] = vtext.find_numbers(line)[-1]; continue
                 elif "Validation" in line:
-                    if "Average Validation Learner Loss" in line: learner_val_loss.append(vtext.find_numbers(line)[-1])
-                    elif "Average Validation EMA Loss" in line: ema_val_loss.append(vtext.find_numbers(line)[-1])
-                    elif "Average Validation Guide Loss" in line: guide_val_loss.append(vtext.find_numbers(line)[-1])
-                    elif "Average Validation ACID Reference Loss" in line: ref_val_loss.append(vtext.find_numbers(line)[-1])
-                    elif "Average Validation EMA L2 Distance" in line: ema_L2_val_metric.append(vtext.find_numbers(line)[-1])
-                    elif "Average Validation Guided EMA L2 Distance" in line: ema_guided_L2_val_metric.append(vtext.find_numbers(line)[-1])
-                    elif "Average Validation Learner L2 Distance" in line: L2_val_metric.append(vtext.find_numbers(line)[-1])
-                    elif "Average Validation Guided Learner L2 Distance" in line: guided_L2_val_metric.append(vtext.find_numbers(line)[-1])
-                    elif "Average Validation Learner KL Divergence Estimation" in line: learner_val_kl_div.append(vtext.find_numbers(line)[-1])
-                    elif "Average Validation EMA KL Divergence Estimation" in line: ema_val_kl_div.append(vtext.find_numbers(line)[-1])
-                    elif "Average Validation L2 Distance" in line: ema_L2_val_metric.append(vtext.find_numbers(line)[-1]) # Backwards compatibility
-                    elif "Average Validation L2 Distance with Guidance" in line: ema_guided_L2_val_metric.append(vtext.find_numbers(line)[-1]) # Backwards compatibility
+                    if "Average Validation Learner Loss" in line: learner_val_loss.append(vtext.find_numbers(line)[-1]); continue
+                    elif "Average Validation EMA Loss" in line: ema_val_loss.append(vtext.find_numbers(line)[-1]); continue
+                    elif "Average Validation Guide Loss" in line: guide_val_loss.append(vtext.find_numbers(line)[-1]); continue
+                    elif "Average Validation ACID Reference Loss" in line: ref_val_loss.append(vtext.find_numbers(line)[-1]); continue
+                    elif "Average Validation EMA L2 Distance" in line: ema_L2_val_metric.append(vtext.find_numbers(line)[-1]); continue
+                    elif "Average Validation Guided EMA L2 Distance" in line: ema_guided_L2_val_metric.append(vtext.find_numbers(line)[-1]); continue
+                    elif "Average Validation Learner L2 Distance" in line: L2_val_metric.append(vtext.find_numbers(line)[-1]); continue
+                    elif "Average Validation Guided Learner L2 Distance" in line: guided_L2_val_metric.append(vtext.find_numbers(line)[-1]); continue
+                    elif "Average Validation Learner KL Divergence Estimation" in line: learner_val_kl_div.append(vtext.find_numbers(line)[-1]); continue
+                    elif "Average Validation EMA KL Divergence Estimation" in line: ema_val_kl_div.append(vtext.find_numbers(line)[-1]); continue
+                    elif "Average Validation L2 Distance" in line: ema_L2_val_metric.append(vtext.find_numbers(line)[-1]); continue # Backwards compatibility
+                    elif "Average Validation L2 Distance with Guidance" in line: ema_guided_L2_val_metric.append(vtext.find_numbers(line)[-1]); continue # Backwards compatibility
                 elif "Test" in line:
-                    if "Average Test Learner Loss" in line: learner_test_loss = vtext.find_numbers(line)[-1]
-                    elif "Average Test EMA Loss" in line: ema_test_loss = vtext.find_numbers(line)[-1]
-                    elif "Average Test Guide Loss" in line: guide_test_loss = vtext.find_numbers(line)[-1]
-                    elif "Average Test ACID Reference Loss" in line: ref_test_loss = vtext.find_numbers(line)[-1]
-                    elif "Average Test EMA L2 Distance With Guidance" in line: ema_guided_L2_test_metric = vtext.find_numbers(line)[-1]
-                    elif "Average Test EMA L2 Distance" in line: ema_L2_test_metric = vtext.find_numbers(line)[-1]
-                    elif "Average Test Learner L2 Distance With Guidance" in line: guided_L2_test_metric = vtext.find_numbers(line)[-1]
-                    elif "Average Test Learner L2 Distance" in line: L2_test_metric = vtext.find_numbers(line)[-1]
-                    elif "Average Test Learner KL Divergence Estimation" in line: learner_test_kl_div = vtext.find_numbers(line)[-1]
-                    elif "Average Test EMA KL Divergence Estimation" in line: ema_test_kl_div = vtext.find_numbers(line)[-1]
+                    if "Average Test Learner Loss" in line: results["learner_test_loss"] = vtext.find_numbers(line)[-1]; continue
+                    elif "Average Test EMA Loss" in line: results["ema_test_loss"] = vtext.find_numbers(line)[-1]; continue
+                    elif "Average Test Guide Loss" in line: results["guide_test_loss"] = vtext.find_numbers(line)[-1]; continue
+                    elif "Average Test ACID Reference Loss" in line: results["ref_test_loss"] = vtext.find_numbers(line)[-1]; continue
+                    elif "Average Test EMA L2 Distance With Guidance" in line: results["ema_guided_L2_test_metric"] = vtext.find_numbers(line)[-1]; continue
+                    elif "Average Test EMA L2 Distance" in line: results["ema_L2_test_metric"] = vtext.find_numbers(line)[-1]; continue
+                    elif "Average Test Learner L2 Distance With Guidance" in line: results["guided_L2_test_metric"] = vtext.find_numbers(line)[-1]; continue
+                    elif "Average Test Learner L2 Distance" in line: results["L2_test_metric"] = vtext.find_numbers(line)[-1]; continue
+                    elif "Average Test Learner KL Divergence Estimation" in line: results["learner_test_kl_div"] = vtext.find_numbers(line)[-1]; continue
+                    elif "Average Test EMA KL Divergence Estimation" in line: results["ema_test_kl_div"] = vtext.find_numbers(line)[-1]; continue
+            elif "Score" in line:
+                if "Validation" in line:
+                    if "Validation Learner Mandala Score" in line: learner_mandala_score.append(vtext.find_numbers(line)[-1]); continue
+                    elif "Validation EMA Mandala Score" in line: ema_mandala_score.append(vtext.find_numbers(line)[-1]); continue
+                    elif "Validation Learner Classification Score" in line: learner_classification_score.append(vtext.find_numbers(line)[-1]); continue
+                    elif "Validation EMA Classification Score" in line: ema_classification_score.append(vtext.find_numbers(line)[-1]); continue
+                    elif "Validation Guided Learner Mandala Score" in line: learner_guided_mandala_score.append(vtext.find_numbers(line)[-1]); continue
+                    elif "Validation Guided EMA Mandala Score" in line: ema_guided_mandala_score.append(vtext.find_numbers(line)[-1]); continue
+                    elif "Validation Guided Learner Classification Score" in line: learner_guided_classification_score.append(vtext.find_numbers(line)[-1]); continue
+                    elif "Validation Guided EMA Classification Score" in line: ema_guided_classification_score.append(vtext.find_numbers(line)[-1]); continue
+                elif "Test" in line:
+                    if "Test Learner Mandala Score" in line: results["learner_test_mandala_score"] = vtext.find_numbers(line)[-1]; continue
+                    elif "Test EMA Mandala Score" in line: results["ema_test_mandala_score"] = vtext.find_numbers(line)[-1]; continue
+                    elif "Test Learner Classification Score" in line: results["learner_test_classification_score"] = vtext.find_numbers(line)[-1]; continue
+                    elif "Test EMA Classification Score" in line: results["ema_test_classification_score"] = vtext.find_numbers(line)[-1]; continue
+                    elif "Test Guided Learner Mandala Score" in line: results["learner_guided_test_mandala_score"] = vtext.find_numbers(line)[-1]; continue
+                    elif "Test Guided EMA Mandala Score" in line: results["ema_guided_test_mandala_score"] = vtext.find_numbers(line)[-1]; continue
+                    elif "Test Guided Learner Classification Score" in line: results["learner_guided_test_classification_score"] = vtext.find_numbers(line)[-1]; continue
+                    elif "Test Guided EMA Classification Score" in line: results["ema_guided_test_classification_score"] = vtext.find_numbers(line)[-1]; continue
             else: pass
     
-    results = {"super_learner_loss": super_learner_loss,
-               "super_ref_loss": super_ref_loss,
-               "learner_loss": learner_loss,
-               "learner_val_loss": learner_val_loss,
-               "ema_val_loss": ema_val_loss,
-               "guide_val_loss": guide_val_loss,
-               "ref_val_loss": ref_val_loss,
-               "ema_L2_val_metric": ema_L2_val_metric,
-               "ema_guided_L2_val_metric": ema_guided_L2_val_metric,
-               "L2_val_metric": L2_val_metric,
-               "guided_L2_val_metric": guided_L2_val_metric}
-    try:
-        results["learner_out_val_loss"] = learner_out_val_loss
-        results["ema_out_val_loss"] = ema_out_val_loss
-        results["guide_out_val_loss"] = guide_out_val_loss
-        results["ref_out_val_loss"] = ref_out_val_loss
-        results["ema_out_L2_val_metric"] = ema_out_L2_val_metric
-        results["ema_guided_out_L2_val_metric"] = ema_guided_out_L2_val_metric
-        results["out_L2_val_metric"] = out_L2_val_metric
-        results["guided_out_L2_val_metric"] = guided_out_L2_val_metric
-    except UnboundLocalError: pass
+    results["super_learner_loss"] = super_learner_loss
+    results["super_ref_loss"] = super_ref_loss
+    results["learner_loss"] = learner_loss
+    results["learner_val_loss"] = learner_val_loss
+    results["ema_val_loss"] = ema_val_loss
+    results["guide_val_loss"] = guide_val_loss
+    results["ref_val_loss"] = ref_val_loss
+    results["ema_L2_val_metric"] = ema_L2_val_metric
+    results["ema_guided_L2_val_metric"] = ema_guided_L2_val_metric
+    results["L2_val_metric"] = L2_val_metric
+    results["guided_L2_val_metric"] = guided_L2_val_metric
+    
+    results["learner_out_val_loss"] = learner_out_val_loss
+    results["ema_out_val_loss"] = ema_out_val_loss
+    results["guide_out_val_loss"] = guide_out_val_loss
+    results["ref_out_val_loss"] = ref_out_val_loss
+    results["ema_out_L2_val_metric"] = ema_out_L2_val_metric
+    results["ema_guided_out_L2_val_metric"] = ema_guided_out_L2_val_metric
+    results["out_L2_val_metric"] = out_L2_val_metric
+    results["guided_out_L2_val_metric"] = guided_out_L2_val_metric
+
+    results["learner_mandala_score"] = learner_mandala_score
+    results["ema_mandala_score"] = ema_mandala_score
+    results["learner_classification_score"] = learner_classification_score
+    results["ema_classification_score"] = ema_classification_score
+    results["learner_guided_mandala_score"] = learner_guided_mandala_score
+    results["ema_guided_mandala_score"] = ema_guided_mandala_score
+    results["learner_guided_classification_score"] = learner_guided_classification_score
+    results["ema_guided_classification_score"] = ema_guided_classification_score
+    
     try:
         results["learner_val_kl_div"] = learner_val_kl_div
         results["ema_val_kl_div"] = ema_val_kl_div
-        results["learner_test_kl_div"] = learner_test_kl_div
-        results["ema_test_kl_div"] = ema_test_kl_div
-    except UnboundLocalError: pass
-    try:
-        results["learner_test_loss"] = learner_test_loss
-        results["ema_test_loss"] = ema_test_loss
-        results["ema_L2_test_metric"] = ema_L2_test_metric
-        try:
-            results["guide_test_loss"] = guide_test_loss
-            results["ema_guided_L2_test_metric"] = ema_guided_L2_test_metric
-        except UnboundLocalError: pass
-        try:
-            results["ref_test_loss"] = ref_test_loss
-        except UnboundLocalError: pass
-        try:
-            results["guided_L2_test_metric"] = guided_L2_test_metric
-        except UnboundLocalError: pass
-        try:
-            results["L2_test_metric"] = L2_test_metric
-        except UnboundLocalError: pass
-    except UnboundLocalError: pass
-    try:
-        results["learner_out_test_loss"] = learner_out_test_loss
-        results["ema_out_test_loss"] = ema_out_test_loss
-        results["ema_out_L2_test_metric"] = ema_out_L2_test_metric
-        try:
-            results["guide_out_test_loss"] = guide_out_test_loss
-            results["ema_guided_out_L2_test_metric"] = ema_guided_out_L2_test_metric
-        except UnboundLocalError: pass
-        try:
-            results["ref_out_test_loss"] = ref_out_test_loss
-        except UnboundLocalError: pass
-        try:
-            results["guided_out_L2_test_metric"] = guided_out_L2_test_metric
-        except UnboundLocalError: pass
-        try:
-            results["out_L2_test_metric"] = out_L2_test_metric
-        except UnboundLocalError: pass
     except UnboundLocalError: pass
 
     return results
@@ -835,56 +868,205 @@ def plot_loss(loss_dict, fig_path=None):
     plt.tight_layout()
     plt.savefig(fig_path_base+"_2"+fig_extension)
     figs.append(fig_2)
-    
-    try:
-        # Also compare validation loss on the outer branches vs the whole distribution
-        if len(loss_dict["learner_out_val_loss"])>0:
-            fig_3, axes_3 = plot_training_loss()
-            axes_3[1].plot(loss_dict["learner_val_loss"], "k", label="Learner Val Loss", alpha=1.0, linewidth=0.5)
-            axes_3[1].plot(loss_dict["ema_val_loss"], color="m", label="EMA Val Loss", alpha=0.35, linewidth=3)
-            axes_3[1].plot(loss_dict["learner_out_val_loss"], "k", label="Learner Out Val Loss", alpha=1.0, linewidth=0.5, linestyle="dashed")
-            axes_3[1].plot(loss_dict["ema_out_val_loss"], color="orange", label="EMA Out Val Loss", alpha=0.35, linewidth=3)
-            axes_3[1].set_ylabel("Average Validation Loss")
-            axes_3[1].legend(loc="upper right", ncols=2)
-            plt.tight_layout()
-            plt.savefig(fig_path_base+"_3"+fig_extension)
-            figs.append(fig_3)
 
-        # Finally, compare validation L2 metrics on the outer branches vs the whole distribution
-        if len(loss_dict["ema_out_L2_val_metric"])>0:
-            fig_4, axes_4 = plot_training_loss()
-            axes_4[1].plot(loss_dict["ema_L2_val_metric"], "-", color="navy", label="EMA L2 Val Metric", alpha=1, linewidth=1)
-            axes_4[1].plot(loss_dict["L2_val_metric"], "-", color="blue", label="Learner L2 Val Metric", alpha=0.35, linewidth=3)
-            axes_4[1].plot(loss_dict["ema_out_L2_val_metric"], "-.", color="firebrick", label="EMA Out L2 Val Metric", alpha=1, linewidth=1)
-            axes_4[1].plot(loss_dict["out_L2_val_metric"], "-", color="salmon", label="Learner Out L2 Val Metric", alpha=0.45, linewidth=3)
-            axes_4[1].set_ylabel("Average Validation L2 Distance")
-            axes_4[1].legend(loc="upper right", ncols=2)
-            plt.tight_layout()
-            plt.savefig(fig_path_base+"_4"+fig_extension)
-            figs.append(fig_4)
+    # Also compare validation loss on the outer branches vs the whole distribution
+    if len(loss_dict["learner_out_val_loss"])>0:
+        fig_3, axes_3 = plot_training_loss()
+        axes_3[1].plot(loss_dict["learner_val_loss"], "k", label="Learner Val Loss", alpha=1.0, linewidth=0.5)
+        axes_3[1].plot(loss_dict["ema_val_loss"], color="m", label="EMA Val Loss", alpha=0.35, linewidth=3)
+        axes_3[1].plot(loss_dict["learner_out_val_loss"], "k", label="Learner Out Val Loss", alpha=1.0, linewidth=0.5, linestyle="dashed")
+        axes_3[1].plot(loss_dict["ema_out_val_loss"], color="orange", label="EMA Out Val Loss", alpha=0.35, linewidth=3)
+        axes_3[1].set_ylabel("Average Validation Loss")
+        axes_3[1].legend(loc="upper right", ncols=2)
+        plt.tight_layout()
+        plt.savefig(fig_path_base+"_3"+fig_extension)
+        figs.append(fig_3)
 
-            fig_5, axes_5 = plot_training_loss()
-            axes_5[1].plot(loss_dict["ema_guided_L2_val_metric"], "--", color="deeppink", label="Guided EMA L2 Val Metric", alpha=1, linewidth=1)
-            axes_5[1].plot(loss_dict["guided_L2_val_metric"], "-", color="mediumvioletred", label="Guided Learner L2 Val Metric", 
-                            alpha=0.35, linewidth=3)
-            axes_5[1].plot(loss_dict["ema_guided_out_L2_val_metric"], "--", color="teal", label="Guided EMA Out L2 Val Metric", alpha=1, linewidth=1)
-            axes_5[1].plot(loss_dict["guided_out_L2_val_metric"], "-", color="lightseagreen", label="Guided Learner Out L2 Val Metric", 
-                            alpha=0.45, linewidth=3)
-            axes_5[1].set_ylabel("Average Validation L2 Distance")
-            axes_5[1].legend(loc="upper right")
-            plt.tight_layout()
-            plt.savefig(fig_path_base+"_5"+fig_extension)
-            figs.append(fig_5)
-    except: pass
+    # Finally, compare validation L2 metrics on the outer branches vs the whole distribution
+    if len(loss_dict["ema_out_L2_val_metric"])>0:
+        fig_4, axes_4 = plot_training_loss()
+        axes_4[1].plot(loss_dict["ema_L2_val_metric"], "-", color="navy", label="EMA L2 Val Metric", alpha=1, linewidth=1)
+        axes_4[1].plot(loss_dict["L2_val_metric"], "-", color="blue", label="Learner L2 Val Metric", alpha=0.35, linewidth=3)
+        axes_4[1].plot(loss_dict["ema_out_L2_val_metric"], "-.", color="firebrick", label="EMA Out L2 Val Metric", alpha=1, linewidth=1)
+        axes_4[1].plot(loss_dict["out_L2_val_metric"], "-", color="salmon", label="Learner Out L2 Val Metric", alpha=0.45, linewidth=3)
+        axes_4[1].set_ylabel("Average Validation L2 Distance")
+        axes_4[1].legend(loc="upper right", ncols=2)
+        plt.tight_layout()
+        plt.savefig(fig_path_base+"_4"+fig_extension)
+        figs.append(fig_4)
+
+        fig_5, axes_5 = plot_training_loss()
+        axes_5[1].plot(loss_dict["ema_guided_L2_val_metric"], "--", color="deeppink", label="Guided EMA L2 Val Metric", alpha=1, linewidth=1)
+        axes_5[1].plot(loss_dict["guided_L2_val_metric"], "-", color="mediumvioletred", label="Guided Learner L2 Val Metric", 
+                        alpha=0.35, linewidth=3)
+        axes_5[1].plot(loss_dict["ema_guided_out_L2_val_metric"], "--", color="teal", label="Guided EMA Out L2 Val Metric", alpha=1, linewidth=1)
+        axes_5[1].plot(loss_dict["guided_out_L2_val_metric"], "-", color="lightseagreen", label="Guided Learner Out L2 Val Metric", 
+                        alpha=0.45, linewidth=3)
+        axes_5[1].set_ylabel("Average Validation L2 Distance")
+        axes_5[1].legend(loc="upper right")
+        plt.tight_layout()
+        plt.savefig(fig_path_base+"_5"+fig_extension)
+        figs.append(fig_5)
     
     return figs
+
+#----------------------------------------------------------------------------
+# Mandala metric
+
+def mandala_score(model, ground_truth_dist, guide=None, guidance_weight=3,
+                  samples=None, n_samples=2**14, sigma_max=5,
+                  grid_resolution=101, 
+                  x_centre=GT_ORIGIN[0], y_centre=GT_ORIGIN[1], 
+                  x_side=2*1.5, y_side=2*1.5,
+                  logging=False, plotting=False, 
+                  full_scale=True, log_scale=False, 
+                  device=torch.device("cuda"), generator=None):
+
+    # If no samples provided, generate samples
+    if samples is None:
+        if isinstance(model, GaussianMixture):
+            samples = ground_truth_dist.sample(n_samples, sigma=0, generator=generator)
+        else:
+            gt_samples = ground_truth_dist.sample(n_samples, sigma=sigma_max, generator=generator)
+            samples = do_sample(net=model, gnet=guide, guidance=guidance_weight,
+                                x_init=gt_samples, sigma_max=sigma_max)[-1]
+    else:
+        n_samples = len(samples)
+
+    # Create grid
+    grid_coords = create_grid_samples(grid_resolution, x_centre, y_centre, x_side, y_side, device=device)
+    cell_size, bounds = get_grid_params(grid_resolution, x_centre, y_centre, x_side, y_side)
+    cell_size = cell_size[0] # Squared symmetric grid ==> Retain just one
+    x_edges = np.linspace(*bounds[0], grid_resolution+1)
+    y_edges = np.linspace(*bounds[1], grid_resolution+1)
+
+    # Discard samples that fell off the grid
+    samples = samples[samples[:,0]>=bounds[0][0]]
+    samples = samples[samples[:,0]<=bounds[0][1]]
+    samples = samples[samples[:,1]>=bounds[1][0]]
+    samples = samples[samples[:,1]<=bounds[1][1]]
+    n_in_grid = len(samples)
+
+    # Count hits and misses
+    hit_samples_mask = is_sample_in_fractal(samples, ground_truth_dist)
+    n_hits = int(torch.sum(hit_samples_mask))
+    n_miss = n_in_grid - n_hits
+    if logging: print("Total in grid", n_in_grid, "\n> Hits", n_hits, "\n> Misses", n_miss)
+    hit_samples = samples[hit_samples_mask]
+    miss_samples = samples[torch.logical_not(hit_samples_mask)]
+
+    # Calculate non-unique metric
+    non_unique_score = n_hits / n_samples
+    if logging: print("Initial score", non_unique_score)
+
+    # Get grid coordinates for hits and misses
+    hit_cells = np.array( mand.point_to_cell(hit_samples, 
+                                             bounds[0][0], bounds[1][0], 
+                                             cell_size, xy_order=True ), dtype=np.int32 ).T
+    miss_cells = np.array( mand.point_to_cell(miss_samples, 
+                                              bounds[0][0], bounds[1][0], 
+                                              cell_size, xy_order=True ), dtype=np.int32 ).T
+
+    # Register hits and missess in a plottable grid
+    grid = np.zeros((grid_resolution, grid_resolution))
+    for cell in hit_cells: grid[*cell] += 1
+    for cell in miss_cells: grid[*cell] += 1
+
+    # Get unique hits and misses
+    hit_unique = set([(x,y) for x,y in hit_cells])
+    miss_unique = set([(x,y) for x,y in miss_cells if not (x,y) in hit_unique])
+    n_hits_unique = len(hit_unique)
+    n_miss_unique = len(miss_unique)
+    n_unique = n_hits_unique + n_miss_unique
+    if logging: print("Unique total in grid", n_unique, "\n> Unique hits", n_hits_unique, 
+                      "\n> Unique misses", n_miss_unique)
+
+    # Calculate metric    
+    unique_score = n_hits_unique / n_unique
+    if logging: print("Mandala score", unique_score)
+
+    # Optional plotting step
+    if plotting:
+        plot_mandala_score(samples, grid, 
+            grid_coords, x_edges, y_edges, bounds,
+            x_centre, y_centre, x_side, y_side, 
+            n_hits_unique, n_miss_unique, 
+            ground_truth_dist,
+            full_scale=full_scale, log_scale=log_scale)
+
+    return unique_score, non_unique_score
+
+#----------------------------------------------------------------------------
+# Visualization utils
+
+def plot_mandala_score(samples, grid, 
+                       grid_coords, x_edges, y_edges, bounds,
+                       x_centre, y_centre, x_side, y_side, 
+                       n_hits_unique, n_miss_unique, 
+                       ground_truth_dist,
+                       full_scale=True, log_scale=False):
+       
+    # Create figure with square aspect ratio
+    fig, [ax1, ax2, ax3] = plt.subplots(ncols=3, figsize=(10.2, 5), dpi=300, 
+                                        gridspec_kw={'width_ratios': [5, 5, .2]})
+
+    # 1. Draw fractal with scatter
+    ax1.set_title("Fractal Tree with Scatter")
+    ax1.set_aspect("equal")
+
+    # Draw fractal
+    do_plot(ground_truth_dist, elems={'gt_uncond', 'gt_outline'},
+                view_x=x_centre, view_y=y_centre, view_size=x_side/2, ax=ax1)
+
+    # Plot scatter points
+    ax1.scatter(*samples.swapaxes(0,1).detach().cpu().numpy(), color='k', alpha=0.1, s=10, zorder=10)
+
+    # 2. Hit/Miss Visualization
+    ax2.set_title("Hit/Miss Analysis")
+    ax2.set_aspect("equal")
+
+    if not full_scale:
+        grid[grid>1]=2 # Set every n>=2 to 2
+    if log_scale:
+        kwargs = dict(norm=LogNorm(vmin=1))
+    else: 
+        kwargs = dict(vmin=0)
+    cmap = LinearSegmentedColormap.from_list('', ['white', *plt.cm.Reds(np.arange(255))])
+    map = ax2.pcolormesh(*grid_coords.swapaxes(0,2).detach().cpu().numpy(), 
+                          grid.T, cmap=cmap, **kwargs)
+    do_plot(ground_truth_dist, elems={'gt_uncond_thin', 'gt_outline_thin'},
+                view_x=x_centre, view_y=y_centre, view_size=x_side/2, ax=ax2)
+    plt.colorbar(map, ax=ax2, cax=ax3)
+
+    # Add thin grid lines
+    for x in x_edges:
+        ax2.axvline(x=x, color='gray', alpha=0.2, linewidth=0.1)
+    for y in y_edges:
+        ax2.axhline(y=y, color='gray', alpha=0.2, linewidth=0.1)
+
+    # Set bounds and remove axis numbers for all plots
+    for ax in [ax1, ax2]:
+        ax.set_xlim(*bounds[0])
+        ax.set_ylim(*bounds[1])
+        ax.set_xticklabels([])
+        ax.set_yticklabels([])
+    plt.tight_layout()
+
+    # Add stats only to the last plot
+    stats_text = f"Unique Total: {n_hits_unique+n_miss_unique}\nHits: {n_hits_unique}\nMisses: {n_miss_unique}"\
+        f"\nMandala Score: {n_hits_unique/(n_hits_unique+n_miss_unique):.3f}"
+    ax2.text(0.02, 0.98, stats_text,
+                transform=ax2.transAxes,
+                verticalalignment='top',
+                fontsize=8,
+                bbox=dict(facecolor='white', alpha=0.8, edgecolor='none'))
 
 #----------------------------------------------------------------------------
 # Run test
 
 def run_test(net, ema=None, guide=None, ref=None, acid=False,
              classes='A', P_mean=-2.3, P_std=1.5, sigma_max=5, depth_sep=5,
-             n_samples=4<<8, batch_size=4<<8, test_outer=False,
+             n_samples=4<<8, batch_size=4<<8, test_outer=False, test_mandala=False,
              test_kl=False, kl_n_samples=1<<18,
              guidance_weight=3,
              generator=None,
@@ -1017,19 +1199,30 @@ def run_test(net, ema=None, guide=None, ref=None, acid=False,
         if test_ema:
             ema_test_outputs = do_sample(net=ema, x_init=test_samples, sigma_max=sigma_max)[-1]
             results["ema_L2_metric"] += float(torch.sqrt(((ema_test_outputs - gt_test_outputs) ** 2).sum(-1)).mean())/n_epochs
-        if test_ema and test_guide:
-            guided_test_outputs = do_sample(net=ema, x_init=test_samples, 
-                                            guidance=guidance_weight, gnet=guide, sigma_max=sigma_max)[-1]
-            results["ema_guided_L2_metric"] += float(torch.sqrt(((guided_test_outputs - gt_test_outputs) ** 2).sum(-1)).mean())/n_epochs
-        if test_outer:
-            gt_out_test_outputs = do_sample(net=outd, x_init=out_test_samples, sigma_max=sigma_max)[-1]
-            if test_ema:
+            if test_guide:
+                guided_test_outputs = do_sample(net=ema, x_init=test_samples, 
+                                                guidance=guidance_weight, gnet=guide, sigma_max=sigma_max)[-1]
+                results["ema_guided_L2_metric"] += float(torch.sqrt(((guided_test_outputs - gt_test_outputs) ** 2).sum(-1)).mean())/n_epochs
+            if test_outer:
+                gt_out_test_outputs = do_sample(net=outd, x_init=out_test_samples, sigma_max=sigma_max)[-1]
                 ema_out_test_outputs = do_sample(net=ema, x_init=out_test_samples, sigma_max=sigma_max)[-1]
                 results["ema_out_L2_metric"] += float(torch.sqrt(((ema_out_test_outputs - gt_out_test_outputs) ** 2).sum(-1)).mean())/n_epochs
-            if test_ema and test_guide:
-                guided_out_test_outputs = do_sample(net=ema, x_init=out_test_samples, 
-                                                    guidance=guidance_weight, gnet=guide, sigma_max=sigma_max)[-1]
-                results["ema_guided_out_L2_metric"] += float(torch.sqrt(((guided_out_test_outputs - gt_out_test_outputs) ** 2).sum(-1)).mean())/n_epochs
+                if test_guide:
+                    guided_out_test_outputs = do_sample(net=ema, x_init=out_test_samples, 
+                                                        guidance=guidance_weight, gnet=guide, sigma_max=sigma_max)[-1]
+                    results["ema_guided_out_L2_metric"] += float(torch.sqrt(((guided_out_test_outputs - gt_out_test_outputs) ** 2).sum(-1)).mean())/n_epochs
+            if test_mandala:
+                ema_mandala, ema_classification = mandala_score(ema, gtd, 
+                                                                samples=ema_test_outputs,
+                                                                sigma_max=sigma_max)
+                results["ema_mandala_score"] = ema_mandala
+                results["ema_classification_score"] = ema_classification
+                if test_guide:
+                    ema_mandala, ema_classification = mandala_score(
+                        ema, gtd, samples=guided_test_outputs, sigma_max=sigma_max, 
+                        guide=guide, guidance_weight=guidance_weight)
+                    results["ema_guided_mandala_score"] = ema_mandala
+                    results["ema_guided_classification_score"] = ema_classification
 
         # Create full learner samples using net for guidance
         test_outputs = do_sample(net=net, x_init=test_samples, sigma_max=sigma_max)[-1]
@@ -1045,6 +1238,18 @@ def run_test(net, ema=None, guide=None, ref=None, acid=False,
                 guided_out_test_outputs = do_sample(net=net, x_init=out_test_samples, 
                                                     guidance=guidance_weight, gnet=guide, sigma_max=sigma_max)[-1]
                 results["learner_guided_out_L2_metric"] += float(torch.sqrt(((guided_out_test_outputs - gt_out_test_outputs) ** 2).sum(-1)).mean())/n_epochs
+        if test_mandala:
+            net_mandala, net_classification = mandala_score(net, gtd, 
+                                                            samples=test_outputs,
+                                                            sigma_max=sigma_max)
+            results["learner_mandala_score"] = net_mandala
+            results["learner_classification_score"] = net_classification
+            if test_guide:
+                net_mandala, net_classification = mandala_score(
+                    net, gtd, samples=guided_test_outputs, sigma_max=sigma_max, 
+                    guide=guide, guidance_weight=guidance_weight)
+                results["learner_guided_mandala_score"] = net_mandala
+                results["learner_guided_classification_score"] = net_classification
 
     # KL divergence test, if needed
     if test_kl:
@@ -1065,7 +1270,7 @@ def run_test(net, ema=None, guide=None, ref=None, acid=False,
 
 def do_test(net_path, ema_path=None, guide_path=None, acid=False, 
             classes='A', P_mean=-2.3, P_std=1.5, sigma_max=5, depth_sep=5,
-            n_samples=4<<8, batch_size=4<<8, test_outer=False,
+            n_samples=4<<8, batch_size=4<<8, test_outer=False, test_mandala=False,
             test_kl=False, kl_n_samples=1<<18,
             guidance_weight=3,
             seed=None, generator=None,
@@ -1129,7 +1334,8 @@ def do_test(net_path, ema_path=None, guide_path=None, acid=False,
     # Run test
     results = run_test(net, ema, guide, ref, acid=acid,
         classes=classes, P_mean=P_mean, P_std=P_std, sigma_max=sigma_max, depth_sep=depth_sep,
-        n_samples=n_samples, batch_size=batch_size, test_outer=test_outer,
+        n_samples=n_samples, batch_size=batch_size, 
+        test_outer=test_outer, test_mandala=test_mandala,
         test_kl=test_kl, kl_n_samples=kl_n_samples,
         guidance_weight=guidance_weight,
         generator=generator,
@@ -1217,9 +1423,6 @@ def do_sample(net, x_init, guidance=1, gnet=None, num_steps=32, sigma_min=0.002,
 # Draw the given set of plot elements using matplotlib.
 
 DEVICE = torch.device('cuda')
-FIG1_KWARGS = dict(view_x=0.30, view_y=0.30, view_size=1.2, num_samples=1<<14, device=DEVICE)
-FIG2_KWARGS = dict(view_x=0.45, view_y=1.22, view_size=0.3, num_samples=1<<12, device=DEVICE, sample_distance=0.045, sigma_max=0.03)
-GT_LOGP_LEVEL = -2.12
 
 def do_plot(
     net=None, guidance=1, gnet=None, elems={'gt_uncond', 'gt_outline', 'samples'},
@@ -1423,6 +1626,7 @@ def train(outdir, cls, layers, dim, total_iter, batch_size, val, test, viz,
     else: verbosity = 0
     if outdir is not None:
         outdir = os.path.join(dirs.MODELS_HOME, outdir)
+        if not os.path.isdir(outdir): os.makedirs(outdir)
     if guide_path is not None:
         guide_path = os.path.join(dirs.MODELS_HOME, guide_path)
     if logging is not None:
@@ -1486,10 +1690,10 @@ def plot(net, gnet, guidance, save, device=torch.device('cuda')):
     """Visualize sampling distributions with and without guidance."""
     log.info('Loading models...')
     if isinstance(net, str):
-        with dnnlib.util.open_url(net, cache_dir=PRETRAINED_HOME) as f:
+        with util.open_url(net, cache_dir=PRETRAINED_HOME) as f:
             net = pickle.load(f).to(device)
     if isinstance(gnet, str):
-        with dnnlib.util.open_url(gnet, cache_dir=PRETRAINED_HOME) as f:
+        with util.open_url(gnet, cache_dir=PRETRAINED_HOME) as f:
             gnet = pickle.load(f).to(device)
 
     # Initialize plot.

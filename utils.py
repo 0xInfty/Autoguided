@@ -5,15 +5,24 @@ sys.path.insert(0, dirs.SYSTEM_HOME)
 sys.path.insert(0, os.path.join(dirs.SYSTEM_HOME, "ToyExample"))
 
 import torch
+from re import finditer
+
+### Global parameters ##############################################################################
+
 DEVICE = torch.device("cuda")
 
-import ToyExample.toy_example as toy
+GT_ORIGIN = (0.0030, 0.0325)
+
+FIG1_KWARGS = dict(view_x=0.30, view_y=0.30, view_size=1.2, num_samples=1<<14, device=DEVICE)
+FIG2_KWARGS = dict(view_x=0.45, view_y=1.22, view_size=0.3, num_samples=1<<12, device=DEVICE, sample_distance=0.045, sigma_max=0.03)
+
+GT_LOGP_LEVEL = -2.12
 
 ### Grid creation ##############################################################################
 
 def create_grid_samples(grid_resolution, 
-                        x_centre=toy.FIG1_KWARGS["view_x"], y_centre=toy.FIG1_KWARGS["view_y"], 
-                        x_side=2*toy.FIG1_KWARGS["view_size"], y_side=2*toy.FIG1_KWARGS["view_size"],
+                        x_centre=FIG1_KWARGS["view_x"], y_centre=FIG1_KWARGS["view_y"], 
+                        x_side=2*FIG1_KWARGS["view_size"], y_side=2*FIG1_KWARGS["view_size"],
                         device=DEVICE):
     grid_x = torch.linspace(x_centre - x_side/2, x_centre + x_side/2, 
                             grid_resolution, device=device)
@@ -23,8 +32,8 @@ def create_grid_samples(grid_resolution,
     return torch.stack([samples_x, samples_y]).swapaxes(0,2) # (X_Index, Y_Index, X_Y)
 
 def get_grid_params(grid_resolution, 
-                    x_centre=toy.FIG1_KWARGS["view_x"], y_centre=toy.FIG1_KWARGS["view_y"], 
-                    x_side=2*toy.FIG1_KWARGS["view_size"], y_side=2*toy.FIG1_KWARGS["view_size"]):
+                    x_centre=FIG1_KWARGS["view_x"], y_centre=FIG1_KWARGS["view_y"], 
+                    x_side=2*FIG1_KWARGS["view_size"], y_side=2*FIG1_KWARGS["view_size"]):
 
     x_cell_size = x_side / (grid_resolution-1)
     y_cell_size = y_side / (grid_resolution-1)
@@ -37,7 +46,7 @@ def get_grid_params(grid_resolution,
 ### Numeric integration ########################################################################
 
 def get_simpson_params(grid_resolution, 
-                       x_side=2*toy.FIG1_KWARGS["view_size"], y_side=2*toy.FIG1_KWARGS["view_size"],
+                       x_side=2*FIG1_KWARGS["view_size"], y_side=2*FIG1_KWARGS["view_size"],
                        device=DEVICE):
     
     simpson_vector = torch.ones(grid_resolution).to(device)
@@ -52,8 +61,8 @@ def get_simpson_params(grid_resolution,
     return simpson_matrix, simpson_scale
 
 def integrate_simpson(f, grid_resolution, 
-                      x_centre=toy.FIG1_KWARGS["view_x"], y_centre=toy.FIG1_KWARGS["view_y"], 
-                      x_side=2*toy.FIG1_KWARGS["view_size"], y_side=2*toy.FIG1_KWARGS["view_size"]):
+                      x_centre=FIG1_KWARGS["view_x"], y_centre=FIG1_KWARGS["view_y"], 
+                      x_side=2*FIG1_KWARGS["view_size"], y_side=2*FIG1_KWARGS["view_size"]):
     
     # Create the grid
     samples = create_grid_samples(grid_resolution, x_centre, y_centre, x_side, y_side)
@@ -73,4 +82,11 @@ def is_sample_in_fractal(samples, ground_truth_distribution, sigma=0):
     
     logp = ground_truth_distribution.logp(samples, sigma=sigma)
 
-    return logp >= toy.GT_LOGP_LEVEL
+    return logp >= GT_LOGP_LEVEL
+
+### Basic utilities ##############################################################################
+
+def split_camel_case(identifier):
+    """https://stackoverflow.com/questions/29916065/how-to-do-camelcase-split-in-python"""
+    matches = finditer('.+?(?:(?<=[a-z])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])|$)', identifier)
+    return [m.group(0) for m in matches]
