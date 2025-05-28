@@ -2,7 +2,7 @@
 # conda activate SCID
 
 # Simply run to test it works
-# python ToyExample/toy_example.py train --outdir "ToyExample/Test" --dim 32 --total-iter 128 --guidance --guide-path "ToyExample/08_GuideAsACIDRef/Ref/iter0512.pkl" --invert --acid --seed 0 --val --test --verbose --logging "ToyExample/log_test.txt"
+. ToyExample/run/run_test.sh
 
 # Train a guide model
 # python ToyExample/toy_example.py train --dim 32 --total-iter 512 --outdir "ToyExample/Ref" --seed 0 --val --test --verbose --logging "ToyExample/log_Ref.txt"
@@ -11,14 +11,14 @@
 # . run_once.sh
 
 # Run for different random seeds
-. run_sweep_seed.sh
+# . run_sweep_seed.sh
 
 # Change n, compare to the default value n = 16 
 # Change filter_ratio, compare to the default value filter_ratio = 0.8
 # . run_sweep_ACID.sh
 
 # Run for different batch size
-. run_sweep_batch_size.sh
+# . run_sweep_batch_size.sh
 
 # Change learnability, compare to the default value learnability = True
 # python ToyExample/toy_example.py train --no-diff --outdir "ToyExample/05_ACIDParams/No_ACID_N_16_F_0.80_L_0" --no-acid --seed 0 --verbose --logging "ToyExample/05_ACIDParams/No_ACID_N_16_F_0.80_L_0.txt"

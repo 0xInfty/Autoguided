@@ -5,7 +5,7 @@ Backup*
 *.txt
 
 # Custom, needed for pyvdirs
-dirs.json
+dirs*.json
 models/
 data/
 results/

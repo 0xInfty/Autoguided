@@ -6,6 +6,10 @@
 
 """Miscellaneous utility classes and functions."""
 
+import pyvdirs.dirs as dirs
+import sys
+sys.path.insert(0, dirs.SYSTEM_HOME)
+
 import ctypes
 import fnmatch
 import importlib
@@ -13,7 +17,6 @@ import inspect
 import numpy as np
 import os
 import shutil
-import sys
 import types
 import io
 import pickle

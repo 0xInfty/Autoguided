@@ -8,9 +8,10 @@
 
 import pyvdirs.dirs as dirs
 import sys
-sys.path.insert(0, dirs.SYSTEM_HOME)
-
 import os
+sys.path.insert(0, dirs.SYSTEM_HOME)
+sys.path.insert(0, os.path.join(dirs.SYSTEM_HOME, "karras"))
+
 import copy
 import pickle
 import warnings
@@ -24,12 +25,13 @@ import click
 import tqdm
 import pyvtools.text as vtext
 
-import dnnlib
-from torch_utils import persistence
+import karras.dnnlib as dnnlib
+import karras.torch_utils.persistence as persistence
+import karras.training.phema as phema
+
 from utils import FIG1_KWARGS, FIG2_KWARGS, GT_ORIGIN, GT_LOGP_LEVEL
 from utils import is_sample_in_fractal, get_grid_params, create_grid_samples
 import mandala_exploration.fractal_step_by_step as mand
-import training.phema
 import logs
 
 PRETRAINED_HOME = os.path.join(dirs.DATA_HOME, "ToyExample")
@@ -133,7 +135,7 @@ def gt(classes='A', device=torch.device('cpu'), seed=2, origin=np.array(GT_ORIGI
 
         # Represent the current branch as a sequence of Gaussian components.
         for t in np.linspace(0.07, 0.93, num=8):
-            c = dnnlib.util.EasyDict()
+            c = dnnlib.EasyDict()
             c.cls = cls
             c.phi = dist * (0.5 ** depth)
             c.mu = (pos + dir * dist * t) * scale
@@ -526,7 +528,7 @@ def do_train(
             except: log.debug("%s = %s", k, float(v))
 
         # Update reference EMA parameters
-        beta = training.phema.power_function_beta(std=ema_std, t_next=iter_idx+1, t_delta=1)
+        beta = phema.power_function_beta(std=ema_std, t_next=iter_idx+1, t_delta=1)
         for p_net, p_ema in zip(net.parameters(), ema.parameters()):
             p_ema.lerp_(p_net.detach(), 1 - beta)
 
@@ -1643,10 +1645,10 @@ def plot(net, gnet, guidance, save, device=torch.device('cuda')):
     """Visualize sampling distributions with and without guidance."""
     log.info('Loading models...')
     if isinstance(net, str):
-        with dnnlib.util.open_url(net, cache_dir=PRETRAINED_HOME) as f:
+        with dnnlib.open_url(net, cache_dir=PRETRAINED_HOME) as f:
             net = pickle.load(f).to(device)
     if isinstance(gnet, str):
-        with dnnlib.util.open_url(gnet, cache_dir=PRETRAINED_HOME) as f:
+        with dnnlib.open_url(gnet, cache_dir=PRETRAINED_HOME) as f:
             gnet = pickle.load(f).to(device)
 
     # Initialize plot.
