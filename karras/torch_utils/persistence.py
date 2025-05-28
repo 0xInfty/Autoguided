@@ -1,4 +1,4 @@
-# This is a commented copy from code found at "EDM2 and Autoguidance" by Tero Karras et al
+# This is an adaptation from code found at "EDM2 and Autoguidance" by Tero Karras et al
 # https://github.com/NVlabs/edm2/blob/main/torch_utils/persistence.py licensed under CC BY-NC-SA 4.0
 #
 # Original copyright disclaimer:
