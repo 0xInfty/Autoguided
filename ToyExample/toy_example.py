@@ -235,7 +235,7 @@ class ToyModel(torch.nn.Module):
 
 def jointly_sample_batch(learner_loss, ref_loss, N=16, filter_ratio=0.8, 
                          learnability=True, inverted=False, numeric_stability_trick=False, 
-                         plotting=False):
+                         plotting=False, generator=np.random):
     """Joint sampling batch selection method used in JEST and ACID
 
     Adapted from Evans & Parthasarathy et al's publication titled 
@@ -243,7 +243,7 @@ def jointly_sample_batch(learner_loss, ref_loss, N=16, filter_ratio=0.8,
     (Google DeepMind, London, UK, 2024)
     Available at https://arxiv.org/abs/2406.17711 under CC BY licence
     """
-	
+
     # Define size of super-batch
     B = int(learner_loss.numel()) # Size B of a super-batch
 
@@ -268,7 +268,7 @@ def jointly_sample_batch(learner_loss, ref_loss, N=16, filter_ratio=0.8,
     log.debug(*get_debug_log("Logits ii", logits_ii))
     
     # Draw the first mini-batch chunk using a uniform probability distribution
-    indices = np.random.choice(B, b_over_N, replace=False)
+    indices = generator.choice(B, b_over_N, replace=False)
     log.debug("Indices (%s)", len(indices))
     log.debug("Number of unique new indices? %s", len(set(indices)))
 
@@ -306,7 +306,7 @@ def jointly_sample_batch(learner_loss, ref_loss, N=16, filter_ratio=0.8,
         log.debug(*get_debug_log("Probabilities", probabilities))
         log.debug("Sum of Probabilities = %s", sum_of_probs)
         probabilities = probabilities / sum_of_probs
-        new_indices = np.random.choice(np.arange(B), b_over_N, replace=False, p=probabilities)
+        new_indices = generator.choice(np.arange(B), b_over_N, replace=False, p=probabilities)
         log.debug("Any repeated indices? %s", any([i in indices for i in new_indices]))
         log.debug("Number of unique new indices? %s", len(set(new_indices)))
         all_sum_of_probs.append(sum_of_probs)
@@ -330,7 +330,8 @@ def jointly_sample_batch(learner_loss, ref_loss, N=16, filter_ratio=0.8,
 
 @logs.errors
 def do_train(
-    classes='A', num_layers=4, hidden_dim=64, batch_size=4<<10, total_iter=4<<10, seed=0,
+    classes='A', num_layers=4, hidden_dim=64, batch_size=4<<10, total_iter=4<<10, 
+    train_seed=0, val_seed=17, test_seed=7, acid_seed=199,
     P_mean=-2.3, P_std=1.5, sigma_data=0.5, lr_ref=1e-2, lr_iter=512, ema_std=0.010,
     guidance=False, guidance_weight=3, guide_path=None, guide_interpolation=False,
     validation=False, val_batch_size=4<<7, sigma_max=5,
@@ -355,12 +356,28 @@ def do_train(
     set_up_logger(verbosity, log_filename)
 
     # Set random seed, if specified
-    if seed is not None:
-        log.info("Seed = %s", seed)
-        torch.manual_seed(seed)
-        generator = torch.Generator(device).manual_seed(seed)
-        np.random.seed(seed)
-    else: generator = torch.Generator(device)
+    if train_seed is not None:
+        if train_seed>10000: 
+            raise ValueError("Training seed must be less than 10000 to avoid using training data for validation")
+        if test_seed == train_seed:
+            raise ValueError("Training seed must be different to test seed")
+        gen = torch.Generator(device).manual_seed(train_seed)  # For sigma on samples
+        gen_s = torch.Generator(device).manual_seed(train_seed+421) # To do GT sampling
+    else: # If no seed, then use the one set by the system by default
+        gen = gen_s = None
+        val_seed = test_seed = None
+        if acid: gen_a = np.random
+    log.info("Training Seed = %s", train_seed)
+    if acid: 
+        acid_training_seed = acid_seed+train_seed*3+47
+        log.info("ACID Seed = %s ==> %s", acid_seed, acid_training_seed)
+        gen_a = np.random.default_rng(seed=acid_training_seed)
+    if test_seed is not None:
+        if test_seed>10000:
+            raise ValueError("Test seed must be less than 10000 to avoid using test data for validation")
+    log.info("Validation Seed = %s", val_seed)
+    gen_val = np.random.default_rng(seed=val_seed)
+    log.info("Test Seed = %s", test_seed)
     
     # Log basic parameters
     log.info("Device = %s", device)
@@ -452,7 +469,7 @@ def do_train(
         plt.rcParams['figure.subplot.left'] = plt.rcParams['figure.subplot.bottom'] = 0
         plt.rcParams['figure.subplot.right'] = plt.rcParams['figure.subplot.top'] = 1
         fig, ax = plt.subplots(figsize=[12, 12], dpi=75)
-        do_plot(ema, elems={'gt_uncond', 'gt_outline'}, ax=ax, device=device)
+        do_plot(ema, elems={'gt_uncond', 'gt_outline'}, ax=ax, device=device) # Plot's default seed is 1
         plt.gcf().canvas.flush_events()
         if saving_checkpoint_plots:
             plt_path = plt_pattern % 0
@@ -466,8 +483,8 @@ def do_train(
         # Run forward-pass
         opt.param_groups[0]['lr'] = lr_ref / np.sqrt(max(iter_idx / lr_iter, 1))
         opt.zero_grad()
-        sigma = (torch.randn(batch_size, device=device) * P_std + P_mean).exp()
-        samples = gtd.sample(batch_size, sigma)
+        sigma = (torch.randn(batch_size, device=device, generator=gen)*P_std + P_mean).exp()
+        samples = gtd.sample(batch_size, sigma, generator=gen_s)
         gt_scores = gtd.score(samples, sigma)
         net_scores = net.score(samples, sigma, graph=True)
         if run_acid or is_acid_waiting: ref_scores = ref.score(samples, sigma)
@@ -502,7 +519,8 @@ def do_train(
                 indices = jointly_sample_batch(acid_loss, ref_loss, 
                     N=acid_N, filter_ratio=acid_f,
                     learnability=acid_diff, inverted=acid_inverted,
-                    numeric_stability_trick=acid_stability_trick)
+                    numeric_stability_trick=acid_stability_trick,
+                    generator=gen_a)
                 loss = acid_loss[indices] # Use indices of the ACID mini-batch
             except ValueError:
                 log.warning("ACID has crashed, so it has been deactivated")
@@ -534,12 +552,13 @@ def do_train(
 
         # Evaluate average loss and L2 metric on validation batch
         if validation:
+            iter_val_seed = gen_val.integers(10000,2**22)
             val_results = run_test(net, ema, guide, ref, acid=run_acid,
                 classes=classes, P_mean=P_mean, P_std=P_std, sigma_max=sigma_max,
                 n_samples=val_batch_size, batch_size=val_batch_size, 
                 test_outer=test_outer, test_mandala=test_mandala,
                 guidance_weight=guidance_weight,
-                generator=generator, device=device)
+                seed=iter_val_seed, device=device)
 
             # Log validation loss
             log.info("Average Validation Learner Loss = %s", val_results["learner_loss"])
@@ -601,7 +620,7 @@ def do_train(
             classes=classes, P_mean=P_mean, P_std=P_std, sigma_max=sigma_max,
             n_samples=n_test_samples, batch_size=test_batch_size, test_outer=test_outer,
             guidance_weight=guidance_weight,
-            generator=generator, device=device)
+            seed=test_seed, device=device)
 
         # Log test loss
         log.warning("Average Test Learner Loss = %s", test_results["learner_loss"])
@@ -1042,9 +1061,21 @@ def run_test(net, ema=None, guide=None, ref=None, acid=False,
              classes='A', P_mean=-2.3, P_std=1.5, sigma_max=5, depth_sep=5,
              n_samples=4<<8, batch_size=4<<8, test_outer=False, test_mandala=False,
              guidance_weight=3,
-             generator=None,
+             seed=None,
              device=torch.device('cuda'),
              logging=False):
+
+    # Set random seed, if specified
+    if seed is not None:
+        gen = torch.Generator(device).manual_seed(seed) # For sigma on main test samples
+        gen_s = torch.Generator(device).manual_seed(seed+421) # To do GT sampling from those sigmas
+        gen_s_max = torch.Generator(device).manual_seed(seed+71) # To do GT sampling from pure Gaussian noise
+        if test_outer:
+            gen_s_outer = torch.Generator(device).manual_seed(seed+421) # To do GT sampling from those sigmas
+            gen_s_max_outer = torch.Generator(device).manual_seed(seed+71) # To do GT sampling from pure Gaussian noise
+    else: # If no seed, then use the one set by the system by default
+        gen = gen_s = gen_o = None
+        if test_outer: gen_s_outer = gen_s_max_outer = None
 
     # Basic configuration
     test_ema = ema is not None
@@ -1098,11 +1129,11 @@ def run_test(net, ema=None, guide=None, ref=None, acid=False,
         n_i_samples = min(n_samples - i_epoch*batch_size, batch_size)
 
         # Sample as in training
-        test_sigma = (torch.randn(n_i_samples, device=device) * P_std + P_mean).exp()
-        test_samples = gtd.sample(n_i_samples, test_sigma, generator=generator)
+        test_sigma = (torch.randn(n_i_samples, device=device, generator=gen)*P_std + P_mean).exp()
+        test_samples = gtd.sample(n_i_samples, test_sigma, generator=gen_s)
 
         # Also sample from the outer branches of the distribution
-        if test_outer: out_test_samples = outd.sample(n_i_samples, test_sigma, generator=generator)
+        if test_outer: out_test_samples = outd.sample(n_i_samples, test_sigma, generator=gen_s_outer)
 
         # Evaluate scores
         gt_test_scores = gtd.score(test_samples, test_sigma)
@@ -1159,10 +1190,10 @@ def run_test(net, ema=None, guide=None, ref=None, acid=False,
                     results["ref_out_loss"] += float(ref_out_test_loss.mean())/n_epochs
 
         # Sample from pure Gaussian noise
-        test_samples = gtd.sample(n_i_samples, sigma_max, generator=generator)
+        test_samples = gtd.sample(n_i_samples, sigma_max, generator=gen_s_max)
 
         # Sample also from the outer branches of the distribution
-        if test_outer: out_test_samples = outd.sample(n_i_samples, sigma_max, generator=generator)
+        if test_outer: out_test_samples = outd.sample(n_i_samples, sigma_max, generator=gen_s_max_outer)
 
         # Create full EMA samples using net for guidance
         gt_test_outputs = do_sample(net=gtd, x_init=test_samples, sigma_max=sigma_max)[-1]
@@ -1230,7 +1261,7 @@ def do_test(net_path, ema_path=None, guide_path=None, acid=False,
             classes='A', P_mean=-2.3, P_std=1.5, sigma_max=5, depth_sep=5,
             n_samples=4<<8, batch_size=4<<8, test_outer=False, test_mandala=False,
             guidance_weight=3,
-            seed=None, generator=None,
+            seed=None,
             device=torch.device('cuda'),
             log_filename=None):
 
@@ -1246,11 +1277,7 @@ def do_test(net_path, ema_path=None, guide_path=None, acid=False,
     set_up_logger(log_filename)
     
     # Set random seed, if specified
-    if generator is None and seed is not None:
-        torch.manual_seed(seed)
-        generator = torch.Generator(device).manual_seed(seed)
-        np.random.seed(seed)
-        log.info("Seed = %s", seed)
+    log.info("Test Seed = %s", seed)
     
     # Log basic parameters
     n_epochs = n_samples//batch_size
@@ -1294,7 +1321,7 @@ def do_test(net_path, ema_path=None, guide_path=None, acid=False,
         n_samples=n_samples, batch_size=batch_size, 
         test_outer=test_outer, test_mandala=test_mandala,
         guidance_weight=guidance_weight,
-        generator=generator,
+        seed=seed,
         device=device, logging=True)
 
     # Log test loss
@@ -1592,7 +1619,7 @@ def train(outdir, cls, layers, dim, total_iter, batch_size, val, test, viz,
     device = torch.device("cuda:"+str(device))
     log.info('Training...')
     do_train(classes=cls, num_layers=layers, hidden_dim=dim, 
-             total_iter=total_iter, batch_size=batch_size, seed=seed, 
+             total_iter=total_iter, batch_size=batch_size, train_seed=seed, 
              validation=val, testing=test, 
              guidance=guidance, guide_path=guide_path, guide_interpolation=interpol,
              acid=acid, acid_N=n, acid_f=filt, acid_diff=diff, acid_inverted=invert, 
