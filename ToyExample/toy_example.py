@@ -363,6 +363,7 @@ def do_train(
             raise ValueError("Training seed must be different to test seed")
         gen = torch.Generator(device).manual_seed(train_seed)  # For sigma on samples
         gen_s = torch.Generator(device).manual_seed(train_seed+421) # To do GT sampling
+        torch.manual_seed(train_seed+89) # To initialize the network with seeded weights
     else: # If no seed, then use the one set by the system by default
         gen = gen_s = None
         val_seed = test_seed = None
@@ -372,9 +373,8 @@ def do_train(
         acid_training_seed = acid_seed+train_seed*3+47
         log.info("ACID Seed = %s ==> %s", acid_seed, acid_training_seed)
         gen_a = np.random.default_rng(seed=acid_training_seed)
-    if test_seed is not None:
-        if test_seed>10000:
-            raise ValueError("Test seed must be less than 10000 to avoid using test data for validation")
+    if test_seed is not None and test_seed>10000:
+        raise ValueError("Test seed must be less than 10000 to avoid using test data for validation")
     log.info("Validation Seed = %s", val_seed)
     gen_val = np.random.default_rng(seed=val_seed)
     log.info("Test Seed = %s", test_seed)
@@ -552,7 +552,7 @@ def do_train(
 
         # Evaluate average loss and L2 metric on validation batch
         if validation:
-            iter_val_seed = gen_val.integers(10000,2**22)
+            iter_val_seed = int(gen_val.integers(10000,2**22))
             val_results = run_test(net, ema, guide, ref, acid=run_acid,
                 classes=classes, P_mean=P_mean, P_std=P_std, sigma_max=sigma_max,
                 n_samples=val_batch_size, batch_size=val_batch_size, 
