@@ -1,9 +1,11 @@
 # Custom
 train.sh
 Backup*
+.vscode/
+*.txt
 
 # Custom, needed for pyvdirs
-dirs.json
+dirs*.json
 models/
 data/
 results/
@@ -179,3 +181,7 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+
+# dont commit outputs
+**/*.png

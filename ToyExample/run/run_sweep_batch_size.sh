@@ -1,0 +1,14 @@
+ref="/00_PreTrained"; subdir="/26_BatchSize"; series="EarlyACIDNonInverted"; device=1
+# Remember that changing the series name doesn't change the algorithm; you also need to change the flags!
+
+# Run for different batch size
+python ToyExample/toy_example.py train --guidance --guide-path "ToyExample"$ref"/Ref/iter0512.pkl" --batch-size 512 --early --acid --outdir "ToyExample"$subdir"/"$series"_size_0512" --seed 0 --val --test --verbose --logging "ToyExample"$subdir"/log_"$series"_size_0512.txt" --device $device
+python ToyExample/toy_example.py train --guidance --guide-path "ToyExample"$ref"/Ref/iter0512.pkl" --batch-size 1024 --early --acid --outdir "ToyExample"$subdir"/"$series"_size_1024" --seed 0 --val --test --verbose --logging "ToyExample"$subdir"/log_"$series"_size_1024.txt" --device $device
+python ToyExample/toy_example.py train --guidance --guide-path "ToyExample"$ref"/Ref/iter0512.pkl" --batch-size 2048 --early --acid --outdir "ToyExample"$subdir"/"$series"_size_2048" --seed 0 --val --test --verbose --logging "ToyExample"$subdir"/log_"$series"_size_2048.txt" --device $device
+python ToyExample/toy_example.py train --guidance --guide-path "ToyExample"$ref"/Ref/iter0512.pkl" --batch-size 8192 --early --acid --outdir "ToyExample"$subdir"/"$series"_size_8192" --seed 0 --val --test --verbose --logging "ToyExample"$subdir"/log_"$series"_size_8192.txt" --device $device
+
+# Run for different batch size, but adjusting also the total number of iterations to see the same amount of data points
+python ToyExample/toy_example.py train --guidance --guide-path "ToyExample"$ref"/Ref/iter0512.pkl" --batch-size 512 --total-iter 32768 --early --acid --outdir "ToyExample"$subdir"/"$series"_size_0512_Adjusted" --seed 0 --val --test --verbose --logging "ToyExample"$subdir"/log_"$series"_size_0512_Adjusted.txt" --device $device
+python ToyExample/toy_example.py train --guidance --guide-path "ToyExample"$ref"/Ref/iter0512.pkl" --batch-size 1024 --total-iter 16384 --early --acid --outdir "ToyExample"$subdir"/"$series"_size_1024_Adjusted" --seed 0 --val --test --verbose --logging "ToyExample"$subdir"/log_"$series"_size_1024_Adjusted.txt" --device $device
+python ToyExample/toy_example.py train --guidance --guide-path "ToyExample"$ref"/Ref/iter0512.pkl" --batch-size 2048 --total-iter 8192 --early --acid --outdir "ToyExample"$subdir"/"$series"_size_2048_Adjusted" --seed 0 --val --test --verbose --logging "ToyExample"$subdir"/log_"$series"_size_2048_Adjusted.txt" --device $device
+python ToyExample/toy_example.py train --guidance --guide-path "ToyExample"$ref"/Ref/iter0512.pkl" --batch-size 8192 --total-iter 2048 --early --acid --outdir "ToyExample"$subdir"/"$series"_size_8192_Adjusted" --seed 0 --val --test --verbose --logging "ToyExample"$subdir"/log_"$series"_size_8192_Adjusted.txt" --device $device
