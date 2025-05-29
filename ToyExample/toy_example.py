@@ -1687,7 +1687,7 @@ def plot(net, gnet, guidance, save, device=torch.device('cuda')):
     # Save or display.
     if save is not None:
         log.info('Saving to %s inside of results home folder', save)
-        save = os.path.join(dirs.RESULTS_HOME, save)
+        save = os.path.join(dirs.RESULTS_HOME, "ToyExample", save)
         if os.path.dirname(save):
             os.makedirs(os.path.dirname(save), exist_ok=True)
         plt.savefig(save, dpi=80)
