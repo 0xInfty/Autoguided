@@ -322,6 +322,7 @@ def cmdline(preset, **opts):
         opts.gnet = None
     elif opts.gnet is None:
         raise click.ClickException('Please specify --gnet when using guidance')
+    opts.outdir = os.path.join(dirs.RESULTS_HOME, opts.outdir)
 
     # Generate.
     dist.init()
