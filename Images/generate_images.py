@@ -24,8 +24,12 @@ import PIL.Image
 from karras.dnnlib.util import EasyDict, construct_class_by_name, open_url, call_func_by_name
 import karras.torch_utils.distributed as dist
 
+import logs
+
 PRETRAINED_HOME = os.path.join(dirs.MODELS_HOME, "Images", "00_PreTrained")
 if not os.path.isdir(PRETRAINED_HOME): os.mkdir(PRETRAINED_HOME)
+
+log = logs.create_logger("errors")
 
 warnings.filterwarnings('ignore', '`resume_download` is deprecated')
 warnings.filterwarnings('ignore', 'You are using `torch.load` with `weights_only=False`')
@@ -53,26 +57,26 @@ config_presets = {
     'edm2-img64-m-fid':                EasyDict(net=f'{model_root}/edm2-img64-m-2147483-0.060.pkl'),        # fid = 1.43
     'edm2-img64-l-fid':                EasyDict(net=f'{model_root}/edm2-img64-l-1073741-0.040.pkl'),        # fid = 1.33
     'edm2-img64-xl-fid':               EasyDict(net=f'{model_root}/edm2-img64-xl-0671088-0.040.pkl'),       # fid = 1.33
-    'edm2-img512-xs-guid-fid':         EasyDict(net=f'{model_root}/edm2-img512-xs-2147483-0.045.pkl',       gnet=f'{model_root}/edm2-img512-xs-uncond-2147483-0.045.pkl', guidance=1.40), # fid = 2.91
-    'edm2-img512-xs-guid-dino':        EasyDict(net=f'{model_root}/edm2-img512-xs-2147483-0.150.pkl',       gnet=f'{model_root}/edm2-img512-xs-uncond-2147483-0.150.pkl', guidance=1.70), # fd_dinov2 = 79.94
-    'edm2-img512-s-guid-fid':          EasyDict(net=f'{model_root}/edm2-img512-s-2147483-0.025.pkl',        gnet=f'{model_root}/edm2-img512-xs-uncond-2147483-0.025.pkl', guidance=1.40), # fid = 2.23
-    'edm2-img512-s-guid-dino':         EasyDict(net=f'{model_root}/edm2-img512-s-2147483-0.085.pkl',        gnet=f'{model_root}/edm2-img512-xs-uncond-2147483-0.085.pkl', guidance=1.90), # fd_dinov2 = 52.32
-    'edm2-img512-m-guid-fid':          EasyDict(net=f'{model_root}/edm2-img512-m-2147483-0.030.pkl',        gnet=f'{model_root}/edm2-img512-xs-uncond-2147483-0.030.pkl', guidance=1.20), # fid = 2.01
-    'edm2-img512-m-guid-dino':         EasyDict(net=f'{model_root}/edm2-img512-m-2147483-0.015.pkl',        gnet=f'{model_root}/edm2-img512-xs-uncond-2147483-0.015.pkl', guidance=2.00), # fd_dinov2 = 41.98
-    'edm2-img512-l-guid-fid':          EasyDict(net=f'{model_root}/edm2-img512-l-1879048-0.015.pkl',        gnet=f'{model_root}/edm2-img512-xs-uncond-2147483-0.015.pkl', guidance=1.20), # fid = 1.88
-    'edm2-img512-l-guid-dino':         EasyDict(net=f'{model_root}/edm2-img512-l-1879048-0.035.pkl',        gnet=f'{model_root}/edm2-img512-xs-uncond-2147483-0.035.pkl', guidance=1.70), # fd_dinov2 = 38.20
-    'edm2-img512-xl-guid-fid':         EasyDict(net=f'{model_root}/edm2-img512-xl-1342177-0.020.pkl',       gnet=f'{model_root}/edm2-img512-xs-uncond-2147483-0.020.pkl', guidance=1.20), # fid = 1.85
-    'edm2-img512-xl-guid-dino':        EasyDict(net=f'{model_root}/edm2-img512-xl-1342177-0.030.pkl',       gnet=f'{model_root}/edm2-img512-xs-uncond-2147483-0.030.pkl', guidance=1.70), # fd_dinov2 = 35.67
-    'edm2-img512-xxl-guid-fid':        EasyDict(net=f'{model_root}/edm2-img512-xxl-0939524-0.015.pkl',      gnet=f'{model_root}/edm2-img512-xs-uncond-2147483-0.015.pkl', guidance=1.20), # fid = 1.81
-    'edm2-img512-xxl-guid-dino':       EasyDict(net=f'{model_root}/edm2-img512-xxl-0939524-0.015.pkl',      gnet=f'{model_root}/edm2-img512-xs-uncond-2147483-0.015.pkl', guidance=1.70), # fd_dinov2 = 33.09
-    'edm2-img512-s-autog-fid':         EasyDict(net=f'{model_root}/edm2-img512-s-2147483-0.070.pkl',        gnet=f'{model_root}/edm2-img512-xs-0134217-0.125.pkl',        guidance=2.10), # fid = 1.34
-    'edm2-img512-s-autog-dino':        EasyDict(net=f'{model_root}/edm2-img512-s-2147483-0.120.pkl',        gnet=f'{model_root}/edm2-img512-xs-0134217-0.165.pkl',        guidance=2.45), # fd_dinov2 = 36.67
-    'edm2-img512-xxl-autog-fid':       EasyDict(net=f'{model_root}/edm2-img512-xxl-0939524-0.075.pkl',      gnet=f'{model_root}/edm2-img512-m-0268435-0.155.pkl',         guidance=2.05), # fid = 1.25
-    'edm2-img512-xxl-autog-dino':      EasyDict(net=f'{model_root}/edm2-img512-xxl-0939524-0.130.pkl',      gnet=f'{model_root}/edm2-img512-m-0268435-0.205.pkl',         guidance=2.30), # fd_dinov2 = 24.18
-    'edm2-img512-s-uncond-autog-fid':  EasyDict(net=f'{model_root}/edm2-img512-s-uncond-2147483-0.070.pkl', gnet=f'{model_root}/edm2-img512-xs-uncond-0134217-0.110.pkl', guidance=2.85), # fid = 3.86
-    'edm2-img512-s-uncond-autog-dino': EasyDict(net=f'{model_root}/edm2-img512-s-uncond-2147483-0.090.pkl', gnet=f'{model_root}/edm2-img512-xs-uncond-0134217-0.125.pkl', guidance=2.90), # fd_dinov2 = 90.39
-    'edm2-img64-s-autog-fid':          EasyDict(net=f'{model_root}/edm2-img64-s-1073741-0.045.pkl',         gnet=f'{model_root}/edm2-img64-xs-0134217-0.110.pkl',         guidance=1.70), # fid = 1.01
-    'edm2-img64-s-autog-dino':         EasyDict(net=f'{model_root}/edm2-img64-s-1073741-0.105.pkl',         gnet=f'{model_root}/edm2-img64-xs-0134217-0.175.pkl',         guidance=2.20), # fd_dinov2 = 31.85
+    'edm2-img512-xs-guid-fid':         EasyDict(net=f'{model_root}/edm2-img512-xs-2147483-0.045.pkl',       gnet=f'{model_root}/edm2-img512-xs-uncond-2147483-0.045.pkl', guidance_weight=1.40), # fid = 2.91
+    'edm2-img512-xs-guid-dino':        EasyDict(net=f'{model_root}/edm2-img512-xs-2147483-0.150.pkl',       gnet=f'{model_root}/edm2-img512-xs-uncond-2147483-0.150.pkl', guidance_weight=1.70), # fd_dinov2 = 79.94
+    'edm2-img512-s-guid-fid':          EasyDict(net=f'{model_root}/edm2-img512-s-2147483-0.025.pkl',        gnet=f'{model_root}/edm2-img512-xs-uncond-2147483-0.025.pkl', guidance_weight=1.40), # fid = 2.23
+    'edm2-img512-s-guid-dino':         EasyDict(net=f'{model_root}/edm2-img512-s-2147483-0.085.pkl',        gnet=f'{model_root}/edm2-img512-xs-uncond-2147483-0.085.pkl', guidance_weight=1.90), # fd_dinov2 = 52.32
+    'edm2-img512-m-guid-fid':          EasyDict(net=f'{model_root}/edm2-img512-m-2147483-0.030.pkl',        gnet=f'{model_root}/edm2-img512-xs-uncond-2147483-0.030.pkl', guidance_weight=1.20), # fid = 2.01
+    'edm2-img512-m-guid-dino':         EasyDict(net=f'{model_root}/edm2-img512-m-2147483-0.015.pkl',        gnet=f'{model_root}/edm2-img512-xs-uncond-2147483-0.015.pkl', guidance_weight=2.00), # fd_dinov2 = 41.98
+    'edm2-img512-l-guid-fid':          EasyDict(net=f'{model_root}/edm2-img512-l-1879048-0.015.pkl',        gnet=f'{model_root}/edm2-img512-xs-uncond-2147483-0.015.pkl', guidance_weight=1.20), # fid = 1.88
+    'edm2-img512-l-guid-dino':         EasyDict(net=f'{model_root}/edm2-img512-l-1879048-0.035.pkl',        gnet=f'{model_root}/edm2-img512-xs-uncond-2147483-0.035.pkl', guidance_weight=1.70), # fd_dinov2 = 38.20
+    'edm2-img512-xl-guid-fid':         EasyDict(net=f'{model_root}/edm2-img512-xl-1342177-0.020.pkl',       gnet=f'{model_root}/edm2-img512-xs-uncond-2147483-0.020.pkl', guidance_weight=1.20), # fid = 1.85
+    'edm2-img512-xl-guid-dino':        EasyDict(net=f'{model_root}/edm2-img512-xl-1342177-0.030.pkl',       gnet=f'{model_root}/edm2-img512-xs-uncond-2147483-0.030.pkl', guidance_weight=1.70), # fd_dinov2 = 35.67
+    'edm2-img512-xxl-guid-fid':        EasyDict(net=f'{model_root}/edm2-img512-xxl-0939524-0.015.pkl',      gnet=f'{model_root}/edm2-img512-xs-uncond-2147483-0.015.pkl', guidance_weight=1.20), # fid = 1.81
+    'edm2-img512-xxl-guid-dino':       EasyDict(net=f'{model_root}/edm2-img512-xxl-0939524-0.015.pkl',      gnet=f'{model_root}/edm2-img512-xs-uncond-2147483-0.015.pkl', guidance_weight=1.70), # fd_dinov2 = 33.09
+    'edm2-img512-s-autog-fid':         EasyDict(net=f'{model_root}/edm2-img512-s-2147483-0.070.pkl',        gnet=f'{model_root}/edm2-img512-xs-0134217-0.125.pkl',        guidance_weight=2.10), # fid = 1.34
+    'edm2-img512-s-autog-dino':        EasyDict(net=f'{model_root}/edm2-img512-s-2147483-0.120.pkl',        gnet=f'{model_root}/edm2-img512-xs-0134217-0.165.pkl',        guidance_weight=2.45), # fd_dinov2 = 36.67
+    'edm2-img512-xxl-autog-fid':       EasyDict(net=f'{model_root}/edm2-img512-xxl-0939524-0.075.pkl',      gnet=f'{model_root}/edm2-img512-m-0268435-0.155.pkl',         guidance_weight=2.05), # fid = 1.25
+    'edm2-img512-xxl-autog-dino':      EasyDict(net=f'{model_root}/edm2-img512-xxl-0939524-0.130.pkl',      gnet=f'{model_root}/edm2-img512-m-0268435-0.205.pkl',         guidance_weight=2.30), # fd_dinov2 = 24.18
+    'edm2-img512-s-uncond-autog-fid':  EasyDict(net=f'{model_root}/edm2-img512-s-uncond-2147483-0.070.pkl', gnet=f'{model_root}/edm2-img512-xs-uncond-0134217-0.110.pkl', guidance_weight=2.85), # fid = 3.86
+    'edm2-img512-s-uncond-autog-dino': EasyDict(net=f'{model_root}/edm2-img512-s-uncond-2147483-0.090.pkl', gnet=f'{model_root}/edm2-img512-xs-uncond-0134217-0.125.pkl', guidance_weight=2.90), # fd_dinov2 = 90.39
+    'edm2-img64-s-autog-fid':          EasyDict(net=f'{model_root}/edm2-img64-s-1073741-0.045.pkl',         gnet=f'{model_root}/edm2-img64-xs-0134217-0.110.pkl',         guidance_weight=1.70), # fid = 1.01
+    'edm2-img64-s-autog-dino':         EasyDict(net=f'{model_root}/edm2-img64-s-1073741-0.105.pkl',         gnet=f'{model_root}/edm2-img64-xs-0134217-0.175.pkl',         guidance_weight=2.20), # fd_dinov2 = 31.85
 }
 
 #----------------------------------------------------------------------------
@@ -284,11 +288,13 @@ def parse_int_list(s):
 @click.option('--sigma_min',                help='Lowest noise level', metavar='FLOAT',                             type=click.FloatRange(min=0, min_open=True), default=0.002, show_default=True)
 @click.option('--sigma_max',                help='Highest noise level', metavar='FLOAT',                            type=click.FloatRange(min=0, min_open=True), default=80, show_default=True)
 @click.option('--rho',                      help='Time step exponent', metavar='FLOAT',                             type=click.FloatRange(min=0, min_open=True), default=7, show_default=True)
-@click.option('--guidance',                 help='Guidance strength  [default: 1; no guidance]', metavar='FLOAT',   type=float, default=None)
+@click.option('--guidance_weight',          help='Guidance weight  [default: 1; no guidance]', metavar='FLOAT',     type=float, default=None)
 @click.option('--S_churn', 'S_churn',       help='Stochasticity strength', metavar='FLOAT',                         type=click.FloatRange(min=0), default=0, show_default=True)
 @click.option('--S_min', 'S_min',           help='Stoch. min noise level', metavar='FLOAT',                         type=click.FloatRange(min=0), default=0, show_default=True)
 @click.option('--S_max', 'S_max',           help='Stoch. max noise level', metavar='FLOAT',                         type=click.FloatRange(min=0), default='inf', show_default=True)
 @click.option('--S_noise', 'S_noise',       help='Stoch. noise inflation', metavar='FLOAT',                         type=float, default=1, show_default=True)
+
+@click.option('--guidance/--no-guidance',   help='Apply guidance, if possible?', metavar='BOOL',                    type=bool, default=True)
 
 def cmdline(preset, **opts):
     """Generate random images using the given model.
@@ -317,11 +323,19 @@ def cmdline(preset, **opts):
     # Validate options.
     if opts.net is None:
         raise click.ClickException('Please specify either --preset or --net')
-    if opts.guidance is None or opts.guidance == 1:
-        opts.guidance = 1
+    if opts.guidance_weight is None or opts.guidance_weight == 1:
+        opts.guidance_weight = 1
         opts.gnet = None
     elif opts.gnet is None:
         raise click.ClickException('Please specify --gnet when using guidance')
+    
+    # Make changes, if needed
+    if opts.guidance_weight != 1 and not opts.guidance:
+        opts.guidance_weight = 1
+        log.info("Guidance deactivated due to --no-guidance flag")
+    elif opts.guidance and opts.guidance_weight == 1:
+        log.info("Guidance cannot be activated: no guidance weight in configuration preset")
+    del opts.guidance_weight
     opts.outdir = os.path.join(dirs.RESULTS_HOME, opts.outdir)
 
     # Generate.
