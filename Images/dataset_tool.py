@@ -22,7 +22,7 @@ import PIL.Image
 import torch
 from tqdm import tqdm
 
-# from training.encoders import StabilityVAEEncoder
+from karras.training.encoders import StabilityVAEEncoder
 
 #----------------------------------------------------------------------------
 

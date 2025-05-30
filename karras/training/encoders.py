@@ -10,8 +10,8 @@ import os
 import warnings
 import numpy as np
 import torch
-from torch_utils import persistence
-from torch_utils import misc
+import karras.torch_utils.persistence as persistence
+import karras.torch_utils.misc as misc
 
 warnings.filterwarnings('ignore', 'torch.utils._pytree._register_pytree_node is deprecated.')
 warnings.filterwarnings('ignore', '`resume_download` is deprecated')
