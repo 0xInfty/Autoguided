@@ -2,6 +2,8 @@ import logging
 from colorlog import ColoredFormatter
 import functools
 
+import utils
+
 DEBUG = logging.DEBUG
 INFO = logging.INFO
 WARNING = logging.WARNING
@@ -67,3 +69,5 @@ def errors(function):
                 log.critical("Interrupted execution")
             raise
     return wrapper
+
+get_stats_log = lambda name, array : (f"{name} = [ %s | %s | %s ] %s", *utils.get_stats(array))

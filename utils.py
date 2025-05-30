@@ -4,6 +4,7 @@ import os
 sys.path.insert(0, dirs.SYSTEM_HOME)
 sys.path.insert(0, os.path.join(dirs.SYSTEM_HOME, "ToyExample"))
 
+import numpy as np
 import torch
 from re import finditer
 
@@ -90,3 +91,9 @@ def split_camel_case(identifier):
     """https://stackoverflow.com/questions/29916065/how-to-do-camelcase-split-in-python"""
     matches = finditer('.+?(?:(?<=[a-z])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])|$)', identifier)
     return [m.group(0) for m in matches]
+
+def get_stats(array):
+    if isinstance(array, np.ndarray):
+        return (float(array.min()), float(array.sum())/array.size, float(array.max()), array.shape)
+    else:
+        return (float(array.min()), float(array.sum())/array.numel(), float(array.max()), tuple(array.shape))

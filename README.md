@@ -58,7 +58,9 @@ Following this index...
 
 You can manually open the file and change the `system_name` attribute to create your own nickname, to know which one is your entry. You can also manually modify each of the other path variables.
 
-### Running the toy model
+## Toy example implementation
+
+### Running autoguidance on the toy example
 
 This repository contains a working adaptation of the toy model from Karras et al's ["Guiding a diffusion model with a bad version of itself"](https://arxiv.org/abs/2406.02507).
 
@@ -83,6 +85,20 @@ A toy model can be trained using ACID batch selection running...
 ```
 python ToyExample/toy_example.py train --acid
 ```
+
+## Images implementation
+
+### Running autoguidance on images
+
+Pre-trained models can be automatically downloaded and tested to generate ImageNet-like images by running...
+
+```
+python Images/generate_images.py --preset=edm2-img512-s-autog-dino --outdir="images_test"
+```
+
+The preset configuration will determine which models and guidance weight to use according to Karras et al's results. In general...
+- "autog" stands for autoguidance
+- "guid" stands for classifier-free guidance
 
 ## Additional information
 
