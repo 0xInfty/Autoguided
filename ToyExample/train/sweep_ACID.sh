@@ -1,4 +1,4 @@
-ref="/00_PreTrained"; subdir="/25_ACIDParams"; series="EarlyACIDNonInverted"; device=2
+ref="/00_PreTrained"; subdir="/99_ACIDParams"; series="EarlyACIDNonInverted"; device=2
 
 # Change n, compare to the default value n = 16 
 python ToyExample/toy_example.py train --n 4 --outdir "ToyExample"$subdir"/"$series"_N_4_F_0.80_L_1" --early --acid --guidance --guide-path "ToyExample"$ref"/Ref/iter0512.pkl" --seed 0 --verbose --logging "ToyExample"$subdir"/log_"$series"_N_4_F_0.80_L_1.txt" --device $device

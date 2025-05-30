@@ -1,4 +1,4 @@
-ref="/00_PreTrained"; subdir="/26_BatchSize"; series="EarlyACIDNonInverted"; device=1
+ref="/00_PreTrained"; subdir="/99_BatchSize"; series="EarlyACIDNonInverted"; device=1
 # Remember that changing the series name doesn't change the algorithm; you also need to change the flags!
 
 # Run for different batch size

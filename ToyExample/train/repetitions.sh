@@ -1,4 +1,4 @@
-ref="/00_PreTrained"; subdir="/25_Repetitions"
+ref="/00_PreTrained"; subdir="/99_Repetitions"
 
 python ToyExample/toy_example.py train --guidance --guide-path "ToyExample"$ref"/Ref/iter0512.pkl" --no-acid --outdir "ToyExample"$subdir"/NoACID_00" --val --test --verbose --logging "ToyExample"$subdir"/log_NoACID_00.txt"
 python ToyExample/toy_example.py train --guidance --guide-path "ToyExample"$ref"/Ref/iter0512.pkl" --no-acid --outdir "ToyExample"$subdir"/NoACID_01" --val --test --verbose --logging "ToyExample"$subdir"/log_NoACID_01.txt"
