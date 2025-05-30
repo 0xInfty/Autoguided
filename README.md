@@ -58,7 +58,9 @@ Following this index...
 
 You can manually open the file and change the `system_name` attribute to create your own nickname, to know which one is your entry. You can also manually modify each of the other path variables.
 
-### Running the toy model
+## Toy example implementation
+
+### Running autoguidance on the toy example
 
 This repository contains a working adaptation of the toy model from Karras et al's ["Guiding a diffusion model with a bad version of itself"](https://arxiv.org/abs/2406.02507).
 
