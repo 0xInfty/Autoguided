@@ -93,10 +93,12 @@ python ToyExample/toy_example.py train --acid
 Pre-trained models can be automatically downloaded and tested to generate ImageNet-like images by running...
 
 ```
-python Images/generate_images.py --preset=edm2-img512-s-guid-dino --outdir="images_test"  
+python Images/generate_images.py --preset=edm2-img512-s-autog-dino --outdir="images_test"
 ```
 
-The preset configuration will determine which models and guidance weight to use according to Karras et al's resutls.
+The preset configuration will determine which models and guidance weight to use according to Karras et al's results. In general...
+- "autog" stands for autoguidance
+- "guid" stands for classifier-free guidance
 
 ## Additional information
 
