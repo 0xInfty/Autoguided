@@ -86,6 +86,18 @@ A toy model can be trained using ACID batch selection running...
 python ToyExample/toy_example.py train --acid
 ```
 
+## Images implementation
+
+### Running autoguidance on images
+
+Pre-trained models can be automatically downloaded and tested to generate ImageNet-like images by running...
+
+```
+python Images/generate_images.py --preset=edm2-img512-s-guid-dino --outdir="images_test"  
+```
+
+The preset configuration will determine which models and guidance weight to use according to Karras et al's resutls.
+
 ## Additional information
 
 ### Authors
