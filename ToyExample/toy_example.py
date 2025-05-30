@@ -39,13 +39,6 @@ if not os.path.isdir(PRETRAINED_HOME): os.mkdir(PRETRAINED_HOME)
 
 log = logs.create_logger("errors")
 
-def get_stats(array):
-    if isinstance(array, np.ndarray):
-        return (float(array.min()), float(array.sum())/array.size, float(array.max()), array.shape)
-    else:
-        return (float(array.min()), float(array.sum())/array.numel(), float(array.max()), tuple(array.shape))
-get_debug_log = lambda name, array : (f"{name} = [ %s | %s | %s ] %s", *get_stats(array))
-
 #----------------------------------------------------------------------------
 # Multivariate mixture of Gaussians. Allows efficient evaluation of the
 # probability density function (PDF) and score vector, as well as sampling,
@@ -254,7 +247,7 @@ def jointly_sample_batch(learner_loss, ref_loss, N=16, filter_ratio=0.8,
     learner_loss = learner_loss.reshape((B,1))
     ref_loss = ref_loss.reshape((1,B))
     scores = learner_loss - ref_loss if learnability else - ref_loss  # Shape (B,B)
-    log.debug(*get_debug_log("Scores", scores))
+    log.debug(*logs.get_stats_log("Scores", scores))
     if inverted: scores = - scores
     device = scores.get_device()
     # Rows use different learner loss ==> i is the learner/student's index
@@ -265,7 +258,7 @@ def jointly_sample_batch(learner_loss, ref_loss, N=16, filter_ratio=0.8,
     # Extract basic score for each element of the super-batch
     logits_ii = torch.diag(scores) # Elements from the diagonal of the scores matrix
     #Q: Is this associated to the probability of picking learner i and ref j?
-    log.debug(*get_debug_log("Logits ii", logits_ii))
+    log.debug(*logs.get_stats_log("Logits ii", logits_ii))
     
     # Draw the first mini-batch chunk using a uniform probability distribution
     indices = np.random.choice(B, b_over_N, replace=False)
@@ -284,12 +277,12 @@ def jointly_sample_batch(learner_loss, ref_loss, N=16, filter_ratio=0.8,
         
         # Mask scores to only keep learner rows k that have already been sampled
         logits_kj = (scores * is_sampled.view(B, 1)).sum(axis=0) # Sum over columns (B,)
-        log.debug(*get_debug_log("Logits kj", logits_kj))
+        log.debug(*logs.get_stats_log("Logits kj", logits_kj))
         #Q: Associated to prob of picking learner i and an ref k that was already selected?
 
         # Mask scores to only keep ref columns k that have already been sampled
         logits_ik = (scores * is_sampled.view(1, B)).sum(axis=1) # Sum over rows (B,)
-        log.debug(*get_debug_log("Logits ik", logits_ik))
+        log.debug(*logs.get_stats_log("Logits ik", logits_ik))
         #Q: Associated to prob of picking learner i and an ref k that was already selected?
         
         # Get conditional scores given past samples
@@ -299,11 +292,11 @@ def jointly_sample_batch(learner_loss, ref_loss, N=16, filter_ratio=0.8,
         #Q: Why subtract that value, instead of setting all these to 0?
 
         # Sample new mini-batch chunk using the conditional probability distribution
-        log.debug(*get_debug_log("Logits", logits))
+        log.debug(*logs.get_stats_log("Logits", logits))
         if numeric_stability_trick: logits = logits - max(logits)
         probabilities = np.exp(logits.detach().cpu().numpy())
         sum_of_probs = sum(probabilities)
-        log.debug(*get_debug_log("Probabilities", probabilities))
+        log.debug(*logs.get_stats_log("Probabilities", probabilities))
         log.debug("Sum of Probabilities = %s", sum_of_probs)
         probabilities = probabilities / sum_of_probs
         new_indices = np.random.choice(np.arange(B), b_over_N, replace=False, p=probabilities)
@@ -519,12 +512,12 @@ def do_train(
         # Update learner parameters
         params = dict({"Old_params."+k: p for k, p in net.named_parameters() if p.requires_grad})
         for k,v in params.items(): 
-            try: log.debug(*get_debug_log(k, v))
+            try: log.debug(*logs.get_stats_log(k, v))
             except: log.debug("%s = %s", k, float(v))
         opt.step()
         new_params = dict({"New_params."+k: p for k, p in net.named_parameters() if p.requires_grad})
         for k,v in new_params.items(): 
-            try: log.debug(*get_debug_log(k, v))
+            try: log.debug(*logs.get_stats_log(k, v))
             except: log.debug("%s = %s", k, float(v))
 
         # Update reference EMA parameters
