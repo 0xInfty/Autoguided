@@ -1,4 +1,4 @@
-ref="/00_PreTrained"; subdir="/23_NormalizedLogits"; device=1
+ref="/00_PreTrained"; subdir="/99_Once"; device=1
 
 # # No ACID, for comparison
 # python ToyExample/toy_example.py train --guidance --guide-path "ToyExample"$ref"/Ref/iter0512.pkl"  --no-acid --outdir "ToyExample"$subdir"/NoACID" --seed 0 --val --test --verbose --logging "ToyExample"$subdir"/log_NoACID.txt" --device $device

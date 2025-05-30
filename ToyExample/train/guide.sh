@@ -1,0 +1,1 @@
+python ToyExample/toy_example.py train --dim 32 --total-iter 512 --outdir "ToyExample/99_Ref/Ref" --seed 0 --val --test --verbose --logging "ToyExample/99_Ref/log_Ref.txt"
