@@ -29,8 +29,8 @@ import karras.dnnlib.util as util
 import karras.torch_utils.persistence as persistence
 import karras.training.phema as phema
 
-from utils import FIG1_KWARGS, FIG2_KWARGS, GT_ORIGIN, GT_LOGP_LEVEL
-from utils import is_sample_in_fractal, get_grid_params, create_grid_samples
+from ours.utils import FIG1_KWARGS, FIG2_KWARGS, GT_ORIGIN, GT_LOGP_LEVEL
+from ours.utils import is_sample_in_fractal, get_grid_params, create_grid_samples
 import mandala_exploration.fractal_step_by_step as mand
 import logs
 
