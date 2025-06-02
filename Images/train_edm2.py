@@ -1,21 +1,25 @@
-# Copyright (c) 2024, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# This is an adaptation from code found at "EDM2 and Autoguidance" by Tero Karras et al
+# https://github.com/NVlabs/edm2/blob/main/train_edm2.py licensed under CC BY-NC-SA 4.0
 #
-# This work is licensed under a Creative Commons
-# Attribution-NonCommercial-ShareAlike 4.0 International License.
-# You should have received a copy of the license along with this
-# work. If not, see http://creativecommons.org/licenses/by-nc-sa/4.0/
+# Original copyright disclaimer:
+# Copyright (c) 2024, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 
 """Train diffusion models according to the EDM2 recipe from the paper
 "Analyzing and Improving the Training Dynamics of Diffusion Models"."""
+
+import pyvdirs.dirs as dirs
+import sys
+sys.path.insert(0, dirs.SYSTEM_HOME)
 
 import os
 import json
 import warnings
 import click
 import torch
-import dnnlib
-from torch_utils import distributed as dist
-import training.training_loop
+
+import karras.dnnlib as dnnlib
+import karras.torch_utils.distributed as dist
+import karras.training.training_loop as trn
 
 warnings.filterwarnings('ignore', 'You are using `torch.load` with `weights_only=False`')
 
@@ -117,7 +121,7 @@ def launch_training(run_dir, c):
 
     torch.distributed.barrier()
     dnnlib.util.Logger(file_name=os.path.join(run_dir, 'log.txt'), file_mode='a', should_flush=True)
-    training.training_loop.training_loop(run_dir=run_dir, **c)
+    trn.training_loop(run_dir=run_dir, **c)
 
 #----------------------------------------------------------------------------
 # Parse an integer with optional power-of-two suffix:

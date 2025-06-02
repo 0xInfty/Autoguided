@@ -1,11 +1,14 @@
-# Copyright (c) 2024, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# This is an adaptation from code found at "EDM2 and Autoguidance" by Tero Karras et al
+# https://github.com/NVlabs/edm2/blob/main/training/training_loop.py licensed under CC BY-NC-SA 4.0
 #
-# This work is licensed under a Creative Commons
-# Attribution-NonCommercial-ShareAlike 4.0 International License.
-# You should have received a copy of the license along with this
-# work. If not, see http://creativecommons.org/licenses/by-nc-sa/4.0/
+# Original copyright disclaimer:
+# Copyright (c) 2024, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 
 """Main training loop."""
+
+import pyvdirs.dirs as dirs
+import sys
+sys.path.insert(0, dirs.SYSTEM_HOME)
 
 import os
 import time
@@ -14,11 +17,12 @@ import pickle
 import psutil
 import numpy as np
 import torch
-import dnnlib
-from torch_utils import distributed as dist
-from torch_utils import training_stats
-from torch_utils import persistence
-from torch_utils import misc
+
+import karras.dnnlib as dnnlib
+import karras.torch_utils.distributed as dist
+import karras.torch_utils.training_stats as training_stats
+import karras.torch_utils.persistence as persistence
+import karras.torch_utils.misc as misc
 
 #----------------------------------------------------------------------------
 # Uncertainty-based loss function (Equations 14,15,16,21) proposed in the
