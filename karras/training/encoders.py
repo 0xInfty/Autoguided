@@ -6,6 +6,10 @@
 
 """Converting between pixel and latent representations of image data."""
 
+import pyvdirs.dirs as dirs
+import sys
+sys.path.insert(0, dirs.SYSTEM_HOME)
+
 import os
 import warnings
 import numpy as np

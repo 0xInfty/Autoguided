@@ -6,6 +6,10 @@
 
 """Tool for creating ZIP/PNG based datasets."""
 
+import pyvdirs.dirs as dirs
+import sys
+sys.path.insert(0, dirs.SYSTEM_HOME)
+
 from collections.abc import Iterator
 from dataclasses import dataclass
 import functools
@@ -429,6 +433,8 @@ def decode(
     PIL.Image.init()
     if dest == '':
         raise click.ClickException('--dest output filename or directory must not be an empty string')
+    source = os.path.join(dirs.DATA_HOME, source)
+    dest = os.path.join(dirs.DATA_HOME, dest)
 
     vae = StabilityVAEEncoder(vae_name=model_url, batch_size=1)
     num_files, input_iter = open_dataset(source, max_images=max_images)
