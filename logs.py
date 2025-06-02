@@ -2,7 +2,7 @@ import logging
 from colorlog import ColoredFormatter
 import functools
 
-import utils
+import ours.utils as utils
 
 DEBUG = logging.DEBUG
 INFO = logging.INFO
