@@ -1,11 +1,14 @@
-# Copyright (c) 2024, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# This is an adaptation from code found at "EDM2 and Autoguidance" by Tero Karras et al
+# https://github.com/NVlabs/edm2/blob/main/training/dataset.py licensed under CC BY-NC-SA 4.0
 #
-# This work is licensed under a Creative Commons
-# Attribution-NonCommercial-ShareAlike 4.0 International License.
-# You should have received a copy of the license along with this
-# work. If not, see http://creativecommons.org/licenses/by-nc-sa/4.0/
+# Original copyright disclaimer:
+# Copyright (c) 2024, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 
 """Streaming images and labels from datasets created with dataset_tool.py."""
+
+import pyvdirs.dirs as dirs
+import sys
+sys.path.insert(0, dirs.SYSTEM_HOME)
 
 import os
 import numpy as np
@@ -13,7 +16,8 @@ import zipfile
 import PIL.Image
 import json
 import torch
-import dnnlib
+
+import karras.dnnlib as dnnlib
 
 try:
     import pyspng
