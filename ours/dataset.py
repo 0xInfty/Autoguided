@@ -11,6 +11,8 @@ import karras.dnnlib as dnnlib
 from karras.training.dataset import Dataset
 # import pyvtorch.huggingface as vhfdat
 
+DATASET_HOME = os.path.join(dirs.DATA_HOME, "Images")
+
 class HuggingFaceDataset(Dataset):
 
     def __init__(self,
@@ -95,12 +97,10 @@ class HuggingFaceDataset(Dataset):
 
 if __name__ == '__ main __':
 
-    cache_dir = os.path.join(dirs.DATA_HOME, "Images")
-    
     # split = vhfdat.get_splits_combination("uoft-cs/cifar10", cache_dir=cache_dir)
     # dataset = hfdat.load_dataset("uoft-cs/cifar10", split="train", cache_dir=cache_dir)
     # dataset.set_format(type="torch", columns=["img","label"])
     # print(dataset[0])
 
-    dataset = HuggingFaceDataset("uoft-cs/cifar10", 10, cache_dir=cache_dir)
+    dataset = HuggingFaceDataset("uoft-cs/cifar10", 10, cache_dir=DATASET_HOME)
     print(dataset[0])
