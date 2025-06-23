@@ -181,7 +181,7 @@ def generate_images(
         if encoder is None:
             encoder = data.get('encoder', None)
             if encoder is None:
-                encoder = construct_class_by_name(class_name='training.encoders.StandardRGBEncoder')
+                encoder = construct_class_by_name(class_name='karras.training.encoders.StandardRGBEncoder')
     assert net is not None
 
     # Load guidance network.

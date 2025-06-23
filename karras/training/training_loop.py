@@ -60,14 +60,14 @@ def learning_rate_schedule(cur_nimg, batch_size, ref_lr=100e-4, ref_batches=70e3
 # Main training loop.
 
 def training_loop(
-    dataset_kwargs      = dict(class_name='training.dataset.ImageFolderDataset', path=None),
-    encoder_kwargs      = dict(class_name='training.encoders.StabilityVAEEncoder'),
+    dataset_kwargs      = dict(class_name='karras.training.dataset.ImageFolderDataset', path=None),
+    encoder_kwargs      = dict(class_name='karras.training.encoders.StabilityVAEEncoder'),
     data_loader_kwargs  = dict(class_name='torch.utils.data.DataLoader', pin_memory=True, num_workers=2, prefetch_factor=2),
-    network_kwargs      = dict(class_name='training.networks_edm2.Precond'),
-    loss_kwargs         = dict(class_name='training.training_loop.EDM2Loss'),
+    network_kwargs      = dict(class_name='karras.training.networks_edm2.Precond'),
+    loss_kwargs         = dict(class_name='karras.training.training_loop.EDM2Loss'),
     optimizer_kwargs    = dict(class_name='torch.optim.Adam', betas=(0.9, 0.99)),
-    lr_kwargs           = dict(func_name='training.training_loop.learning_rate_schedule'),
-    ema_kwargs          = dict(class_name='training.phema.PowerFunctionEMA'),
+    lr_kwargs           = dict(func_name='karras.training.training_loop.learning_rate_schedule'),
+    ema_kwargs          = dict(class_name='karras.training.phema.PowerFunctionEMA'),
 
     run_dir             = '.',      # Output directory.
     seed                = 0,        # Global random seed.

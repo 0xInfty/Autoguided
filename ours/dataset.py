@@ -17,10 +17,10 @@ DATASET_HOME = os.path.join(dirs.DATA_HOME, "Images")
 class HuggingFaceDataset(Dataset):
 
     def __init__(self,
-        path,                   # Path to directory to be used as cache_dir
+        path,                   # Path to Hugging Face dataset
         n_classes,              # Specify number of classes for one hot encoding
         resolution      = None, # Ensure specific resolution, None = anything goes.
-        cache_dir       = None, # Cache dir to store the Hugging Face dataset
+        cache_dir       = DATASET_HOME, # Cache dir to store the Hugging Face dataset
         **super_kwargs,         # Additional arguments for the Dataset base class.
     ):
         self._path = path        
@@ -93,7 +93,7 @@ class HuggingFaceDataset(Dataset):
     def _load_raw_image(self, raw_idx):
         raw_idx = np.array([raw_idx], dtype=int)
         # print("Image Raw Index", type(raw_idx), raw_idx)
-        img = self.data[raw_idx][self.key_image].float()
+        img = self.data[raw_idx][self.key_image].squeeze().float() # CHW
         # print("Image", type(img), img.dtype, img.shape, img)
         return img # Return float32 Torch tensor
 
@@ -126,6 +126,6 @@ if __name__ == "__main__":
     # dataset.set_format(type="torch", columns=["img","label"])
     # print(dataset[0])
 
-    dataset = HuggingFaceDataset("uoft-cs/cifar10", 10, cache_dir=DATASET_HOME)
+    dataset = HuggingFaceDataset("uoft-cs/cifar10", 10)
     # print("Dataset Raw Index", type(dataset._raw_idx), dataset._raw_idx.shape, dataset._raw_idx)
     print(dataset[0])

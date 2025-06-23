@@ -41,6 +41,11 @@ config_presets = {
     'edm2-img64-xl':    dnnlib.EasyDict(duration=640<<20,  batch=2048, channels=384, lr=0.0070, decay=35000, dropout=0.10, P_mean=-0.8, P_std=1.6),
 }
 
+DATASET_OPTIONS = {
+    "imagenet": dict(class_name='karras.training.dataset.ImageFolderDataset'),
+    "cifar10": dict(class_name='ours.dataset.HuggingFaceDataset', path="uoft-cs/cifar10", n_classes=10),
+}
+
 #----------------------------------------------------------------------------
 # Setup arguments for training.training_loop.training_loop().
 
@@ -56,7 +61,11 @@ def setup_training_config(preset='edm2-img512-s', **opts):
             opts[key] = value
 
     # Dataset.
-    c.dataset_kwargs = dnnlib.EasyDict(class_name='training.dataset.ImageFolderDataset', path=opts.data, use_labels=opts.get('cond', True))
+    if opts.dataset == "imagenet":
+        c.dataset_kwargs = dnnlib.EasyDict(class_name=DATASET_OPTIONS[opts.dataset][opts.dataset], path=opts.data)
+    else:
+        c.dataset_kwargs = dnnlib.EasyDict(DATASET_OPTIONS[opts.dataset])
+    c.dataset_kwargs.use_labels = opts.get('cond', True)
     try:
         dataset_obj = dnnlib.util.construct_class_by_name(**c.dataset_kwargs)
         dataset_channels = dataset_obj.num_channels
@@ -68,17 +77,17 @@ def setup_training_config(preset='edm2-img512-s', **opts):
 
     # Encoder.
     if dataset_channels == 3:
-        c.encoder_kwargs = dnnlib.EasyDict(class_name='training.encoders.StandardRGBEncoder')
+        c.encoder_kwargs = dnnlib.EasyDict(class_name='karras.training.encoders.StandardRGBEncoder')
     elif dataset_channels == 8:
-        c.encoder_kwargs = dnnlib.EasyDict(class_name='training.encoders.StabilityVAEEncoder')
+        c.encoder_kwargs = dnnlib.EasyDict(class_name='karras.training.encoders.StabilityVAEEncoder')
     else:
         raise click.ClickException(f'--data: Unsupported channel count {dataset_channels}')
 
     # Hyperparameters.
     c.update(total_nimg=opts.duration, batch_size=opts.batch)
-    c.network_kwargs = dnnlib.EasyDict(class_name='training.networks_edm2.Precond', model_channels=opts.channels, dropout=opts.dropout)
-    c.loss_kwargs = dnnlib.EasyDict(class_name='training.training_loop.EDM2Loss', P_mean=opts.P_mean, P_std=opts.P_std)
-    c.lr_kwargs = dnnlib.EasyDict(func_name='training.training_loop.learning_rate_schedule', ref_lr=opts.lr, ref_batches=opts.decay)
+    c.network_kwargs = dnnlib.EasyDict(class_name='karras.training.networks_edm2.Precond', model_channels=opts.channels, dropout=opts.dropout)
+    c.loss_kwargs = dnnlib.EasyDict(class_name='karras.training.training_loop.EDM2Loss', P_mean=opts.P_mean, P_std=opts.P_std)
+    c.lr_kwargs = dnnlib.EasyDict(func_name='karras.training.training_loop.learning_rate_schedule', ref_lr=opts.lr, ref_batches=opts.decay)
 
     # Performance-related options.
     c.batch_gpu = opts.get('batch_gpu', 0) or None
@@ -147,7 +156,8 @@ def parse_nimg(s):
 
 # Main options.
 @click.option('--outdir',           help='Where to save the results', metavar='DIR',            type=str, required=True)
-@click.option('--data',             help='Path to the dataset', metavar='ZIP|DIR',              type=str, required=True)
+@click.option('--dataset',          help='Dataset to be used', metavar='STR',                   type=click.Choice(list(DATASET_OPTIONS.keys())), default="imagenet", show_default=True)
+@click.option('--data',             help='Path to the dataset', metavar='ZIP|DIR',              type=str)
 @click.option('--cond',             help='Train class-conditional model', metavar='BOOL',       type=bool, default=True, show_default=True)
 @click.option('--preset',           help='Configuration preset', metavar='STR',                 type=str, default='edm2-img512-s', show_default=True)
 
@@ -194,6 +204,12 @@ def cmdline(outdir, dry_run, **opts):
     torch.multiprocessing.set_start_method('spawn')
     dist.init()
     dist.print0('Setting up training config...')
+
+    outdir = os.path.join(dirs.RESULTS_HOME, outdir)
+    opts = dnnlib.EasyDict(opts)
+    try: opts.data = os.path.join(dirs.DATA_HOME, opts.data)
+    except AttributeError: opts.update(dict(data = dirs.DATA_HOME))
+
     c = setup_training_config(**opts)
     print_training_config(run_dir=outdir, c=c)
     if dry_run:
