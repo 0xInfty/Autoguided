@@ -9,8 +9,8 @@
 
 import numpy as np
 import torch
-from torch_utils import persistence
-from torch_utils import misc
+import karras.torch_utils.persistence as persistence
+import karras.torch_utils.misc as misc
 
 #----------------------------------------------------------------------------
 # Normalize given tensor to unit magnitude with respect to the given
