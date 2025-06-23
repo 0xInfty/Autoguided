@@ -97,6 +97,11 @@ def training_loop(
     if batch_gpu is None or batch_gpu > batch_gpu_total:
         batch_gpu = batch_gpu_total
     num_accumulation_rounds = batch_gpu_total // batch_gpu
+    dist.print0("\nBatch size calculation")
+    dist.print0(">>> World size", dist.get_world_size())
+    dist.print0(">>> Batch GPU", batch_gpu)
+    dist.print0(">>> Batch size total", batch_gpu_total)
+    dist.print0(">>> Num accumulation rounds", num_accumulation_rounds, "\n")
     assert batch_size == batch_gpu * num_accumulation_rounds * dist.get_world_size()
     assert total_nimg % batch_size == 0
     assert slice_nimg is None or slice_nimg % batch_size == 0
