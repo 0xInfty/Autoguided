@@ -208,7 +208,7 @@ def cmdline(outdir, dry_run, **opts):
     outdir = os.path.join(dirs.RESULTS_HOME, outdir)
     opts = dnnlib.EasyDict(opts)
     try: opts.data = os.path.join(dirs.DATA_HOME, opts.data)
-    except AttributeError: opts.update(dict(data = dirs.DATA_HOME))
+    except: opts.update(dict(data = dirs.DATA_HOME))
 
     c = setup_training_config(**opts)
     print_training_config(run_dir=outdir, c=c)
