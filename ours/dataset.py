@@ -5,6 +5,7 @@ sys.path.insert(0, dirs.SYSTEM_HOME)
 
 import os
 import numpy as np
+import torch
 import datasets as hfdat
 
 import karras.dnnlib as dnnlib
@@ -61,7 +62,7 @@ class HuggingFaceDataset(Dataset):
 
     @property
     def label_shape(self):
-        return list(self.n_classes+1)
+        return [self.n_classes+1]
     
     @property
     def key_image(self):
@@ -71,15 +72,38 @@ class HuggingFaceDataset(Dataset):
     def key_label(self):
         return self._key_label
 
+    def __getitem__(self, idx):
+        raw_idx = self._raw_idx[idx]
+        image = self._cached_images.get(raw_idx, None)
+        if image is None:
+            image = self._load_raw_image(raw_idx)
+            if self._cache:
+                self._cached_images[raw_idx] = image
+        else:
+            if isinstance(image, torch.Tensor):
+                image = image.copy()
+            else:
+                image = image.detach().clone()
+        assert list(image.shape) == self._raw_shape[1:]
+        if self._xflip[idx]:
+            assert image.ndim == 3 # CHW
+            image = image[:, :, ::-1]
+        return image, self.get_label(idx)
+
     def _load_raw_image(self, raw_idx):
-        return self.data[raw_idx][self.key_image]
+        raw_idx = np.array([raw_idx], dtype=int)
+        # print("Image Raw Index", type(raw_idx), raw_idx)
+        img = self.data[raw_idx][self.key_image].float()
+        # print("Image", type(img), img.dtype, img.shape, img)
+        return img # Return float32 Torch tensor
 
     def _load_raw_label(self, raw_idx):
+        raw_idx = np.array([raw_idx], dtype=int)
         return self.data[raw_idx][self.key_label]
     
     def get_label(self, idx):
         raw_idx = self._raw_idx[idx]
-        label = self._load_raw_label()[raw_idx] # Assume this is an int
+        label = self._load_raw_label(raw_idx) # Assume this is an int
         onehot = np.zeros(self.label_shape, dtype=np.float32)
         onehot[label] = 1
         return onehot.copy()
@@ -95,7 +119,7 @@ class HuggingFaceDataset(Dataset):
         d.raw_label = self._load_raw_label(d.raw_idx).copy()
         return d
 
-if __name__ == '__ main __':
+if __name__ == "__main__":
 
     # split = vhfdat.get_splits_combination("uoft-cs/cifar10", cache_dir=cache_dir)
     # dataset = hfdat.load_dataset("uoft-cs/cifar10", split="train", cache_dir=cache_dir)
@@ -103,4 +127,5 @@ if __name__ == '__ main __':
     # print(dataset[0])
 
     dataset = HuggingFaceDataset("uoft-cs/cifar10", 10, cache_dir=DATASET_HOME)
+    # print("Dataset Raw Index", type(dataset._raw_idx), dataset._raw_idx.shape, dataset._raw_idx)
     print(dataset[0])
