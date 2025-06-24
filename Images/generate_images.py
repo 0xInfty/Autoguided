@@ -23,11 +23,9 @@ import PIL.Image
 
 from karras.dnnlib.util import EasyDict, construct_class_by_name, open_url, call_func_by_name
 import karras.torch_utils.distributed as dist
+from karras.training.encoders import PRETRAINED_HOME
 
 import logs
-
-PRETRAINED_HOME = os.path.join(dirs.MODELS_HOME, "Images", "00_PreTrained")
-if not os.path.isdir(PRETRAINED_HOME): os.mkdir(PRETRAINED_HOME)
 
 log = logs.create_logger("errors")
 
@@ -183,7 +181,7 @@ def generate_images(
         if encoder is None:
             encoder = data.get('encoder', None)
             if encoder is None:
-                encoder = construct_class_by_name(class_name='training.encoders.StandardRGBEncoder')
+                encoder = construct_class_by_name(class_name='karras.training.encoders.StandardRGBEncoder')
     assert net is not None
 
     # Load guidance network.
