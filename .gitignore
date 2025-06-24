@@ -3,6 +3,7 @@ train.sh
 Backup*
 .vscode/
 *.txt
+*.yml
 
 # Custom, needed for pyvdirs
 dirs*.json
