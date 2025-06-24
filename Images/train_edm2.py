@@ -160,7 +160,7 @@ def parse_nimg(s):
 @click.option('--dataset',          help='Dataset to be used', metavar='STR',                   type=click.Choice(list(DATASET_OPTIONS.keys())), default="imagenet", show_default=True)
 @click.option('--data',             help='Path to the dataset', metavar='ZIP|DIR',              type=str)
 @click.option('--cond',             help='Train class-conditional model', metavar='BOOL',       type=bool, default=True, show_default=True)
-@click.option('--preset',           help='Configuration preset', metavar='STR',                 type=str, default='edm2-img512-s', show_default=True)
+@click.option('--preset',           help='Configuration preset', metavar='STR',                 type=str, required=True)
 
 # Hyperparameters.
 @click.option('--duration',         help='Training duration', metavar='NIMG',                   type=parse_nimg, default=None)
