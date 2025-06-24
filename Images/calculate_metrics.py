@@ -1,9 +1,8 @@
-# Copyright (c) 2024, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# This is an adaptation from code found at "EDM2 and Autoguidance" by Tero Karras et al
+# https://github.com/NVlabs/edm2/blob/main/calculate_metrics.py licensed under CC BY-NC-SA 4.0
 #
-# This work is licensed under a Creative Commons
-# Attribution-NonCommercial-ShareAlike 4.0 International License.
-# You should have received a copy of the license along with this
-# work. If not, see http://creativecommons.org/licenses/by-nc-sa/4.0/
+# Original copyright disclaimer:
+# Copyright (c) 2024, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 
 """Calculate evaluation metrics (FID and FD_DINOv2)."""
 
