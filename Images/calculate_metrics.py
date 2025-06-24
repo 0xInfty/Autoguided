@@ -6,6 +6,10 @@
 
 """Calculate evaluation metrics (FID and FD_DINOv2)."""
 
+import pyvdirs.dirs as dirs
+import sys
+sys.path.insert(0, dirs.SYSTEM_HOME)
+
 import os
 import click
 import tqdm
@@ -14,10 +18,12 @@ import numpy as np
 import scipy.linalg
 import torch
 import PIL.Image
-import dnnlib
-from torch_utils import distributed as dist
-from torch_utils import misc
-from training import dataset
+
+import karras.dnnlib as dnnlib
+import karras.torch_utils.distributed as dist
+import karras.torch_utils.misc as misc
+import karras.training.dataset as dataset
+
 import generate_images
 
 #----------------------------------------------------------------------------
