@@ -23,7 +23,7 @@ import karras.dnnlib as dnnlib
 import karras.torch_utils.distributed as dist
 import karras.torch_utils.misc as misc
 import karras.training.dataset as dataset
-
+from karras.training.encoders import PRETRAINED_HOME
 import generate_images
 
 #----------------------------------------------------------------------------
@@ -44,7 +44,7 @@ class InceptionV3Detector(Detector):
     def __init__(self):
         super().__init__(feature_dim=2048)
         url = 'https://api.ngc.nvidia.com/v2/models/nvidia/research/stylegan3/versions/1/files/metrics/inception-2015-12-05.pkl'
-        with dnnlib.util.open_url(url, verbose=False) as f:
+        with dnnlib.util.open_url(url, verbose=False, cache_dir=PRETRAINED_HOME) as f:
             self.model = pickle.load(f)
 
     def __call__(self, x):
@@ -125,7 +125,7 @@ def get_detector(metric, verbose=True):
 def load_stats(path, verbose=True):
     if verbose:
         print(f'Loading feature statistics from {path} ...')
-    with dnnlib.util.open_url(path, verbose=verbose) as f:
+    with dnnlib.util.open_url(path, verbose=verbose, cache_dir=PRETRAINED_HOME) as f:
         if path.lower().endswith('.npz'): # backwards compatibility with https://github.com/NVlabs/edm
             return {'fid': dict(np.load(f))}
         return pickle.load(f)
