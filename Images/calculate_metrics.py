@@ -231,7 +231,7 @@ def calculate_stats_for_files(
         torch.distributed.barrier()
 
     # List images.
-    if dataset_name == "imagenet":
+    if dataset_name in ["imagenet", "folder"]:
         dataset_kwargs = dnnlib.EasyDict(class_name=DATASET_OPTIONS[dataset_name]["class_name"], path=image_path)
     else:
         dataset_kwargs = dnnlib.EasyDict(DATASET_OPTIONS[dataset_name])
@@ -329,8 +329,8 @@ def cmdline():
 # 'calc' subcommand.
 
 @cmdline.command()
-@click.option('--dataset', 'dataset_name',  help='Dataset to be used', metavar='STR',                       type=click.Choice(list(DATASET_OPTIONS.keys())), default="imagenet", show_default=True)
-@click.option('--images', 'image_path',     help='Path to the images', metavar='PATH|ZIP',                  type=str)
+@click.option('--dataset', 'dataset_name',  help='Dataset to be used', metavar='STR',                       type=click.Choice(list(DATASET_OPTIONS.keys())), default="folder", show_default=True)
+@click.option('--images', 'image_path',     help='Path to the images', metavar='PATH|ZIP',                  type=str, required=True)
 @click.option('--ref', 'ref_path',          help='Dataset reference statistics ', metavar='PKL|NPZ|URL',    type=str, required=True)
 @click.option('--metrics',                  help='List of metrics to compute', metavar='LIST',              type=parse_metric_list, default='fid,fd_dinov2', show_default=True)
 @click.option('--num', 'num_images',        help='Number of images to use', metavar='INT',                  type=click.IntRange(min=2), default=50000, show_default=True)
@@ -344,7 +344,7 @@ def calc(ref_path, metrics, **opts):
     dist.init()
     opts = dnnlib.EasyDict(opts)
     if opts.dataset_name != "imagenet":
-        try: opts.image_path = os.path.join(dirs.DATA_HOME, opts.image_path)
+        try: opts.image_path = os.path.join(dirs.DATA_HOME, "Images", opts.image_path)
         except: opts.update(dict(image_path = dirs.DATA_HOME))
     ref_path = os.path.join(dirs.DATA_HOME, "Images", "dataset_refs", ref_path)
     if dist.get_rank() == 0:

@@ -339,7 +339,7 @@ def cmdline(preset, **opts):
         log.info("Guidance cannot be activated: no guidance weight in configuration preset")
     opts.guidance = opts.guidance_weight # Rename for `generate_images` to work
     del opts.guidance_weight
-    opts.outdir = os.path.join(dirs.RESULTS_HOME, opts.outdir)
+    opts.outdir = os.path.join(dirs.RESULTS_HOME, "Images", opts.outdir)
 
     # Generate.
     dist.init()
