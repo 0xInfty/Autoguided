@@ -20,6 +20,7 @@ import torch
 import karras.dnnlib as dnnlib
 import karras.torch_utils.distributed as dist
 import karras.training.training_loop as trn
+from ours.dataset import DATASET_OPTIONS
 
 warnings.filterwarnings('ignore', 'You are using `torch.load` with `weights_only=False`')
 
@@ -42,11 +43,6 @@ config_presets = {
     'edm2-cifar10-xxs': dnnlib.EasyDict(duration=2048<<20, batch=2048, channels=64, lr=0.0170, decay=70000, dropout=0.00, P_mean=-0.4, P_std=1.0),
 }
 
-DATASET_OPTIONS = {
-    "imagenet": dict(class_name='karras.training.dataset.ImageFolderDataset'),
-    "cifar10": dict(class_name='ours.dataset.HuggingFaceDataset', path="uoft-cs/cifar10", n_classes=10),
-}
-
 #----------------------------------------------------------------------------
 # Setup arguments for training.training_loop.training_loop().
 
@@ -63,7 +59,7 @@ def setup_training_config(preset='edm2-img512-s', **opts):
 
     # Dataset.
     if opts.dataset == "imagenet":
-        c.dataset_kwargs = dnnlib.EasyDict(class_name=DATASET_OPTIONS[opts.dataset][opts.dataset], path=opts.data)
+        c.dataset_kwargs = dnnlib.EasyDict(class_name=DATASET_OPTIONS[opts.dataset]["class_name"], path=opts.data)
     else:
         c.dataset_kwargs = dnnlib.EasyDict(DATASET_OPTIONS[opts.dataset])
     c.dataset_kwargs.use_labels = opts.get('cond', True)
@@ -208,8 +204,9 @@ def cmdline(outdir, dry_run, **opts):
 
     outdir = os.path.join(dirs.MODELS_HOME, outdir)
     opts = dnnlib.EasyDict(opts)
-    try: opts.data = os.path.join(dirs.DATA_HOME, opts.data)
-    except: opts.update(dict(data = dirs.DATA_HOME))
+    if opts.dataset != "imagenet":
+        try: opts.data = os.path.join(dirs.DATA_HOME, opts.data)
+        except: opts.update(dict(data = dirs.DATA_HOME))
 
     c = setup_training_config(**opts)
     print_training_config(run_dir=outdir, c=c)

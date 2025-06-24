@@ -14,6 +14,11 @@ from karras.training.dataset import Dataset
 
 DATASET_HOME = os.path.join(dirs.DATA_HOME, "Images")
 
+DATASET_OPTIONS = {
+    "imagenet": dict(class_name='karras.training.dataset.ImageFolderDataset'),
+    "cifar10": dict(class_name='ours.dataset.HuggingFaceDataset', path="uoft-cs/cifar10", n_classes=10),
+}
+
 class HuggingFaceDataset(Dataset):
 
     def __init__(self,

@@ -25,6 +25,7 @@ import karras.torch_utils.misc as misc
 import karras.training.dataset as dataset
 from karras.training.encoders import PRETRAINED_HOME
 import generate_images
+from ours.dataset import DATASET_OPTIONS
 
 #----------------------------------------------------------------------------
 # Abstract base class for feature detectors.
@@ -215,7 +216,8 @@ def calculate_stats_for_iterable(
 # dnnlib.EasyDict(stats, images, batch_idx, num_batches)
 
 def calculate_stats_for_files(
-    image_path,             # Path to a directory or ZIP file containing the images.
+    dataset_name,           # Dataset to be used
+    image_path      = None, # Path to a directory or ZIP file containing the images.
     num_images      = None, # Number of images to use. None = all available images.
     seed            = 0,    # Random seed for selecting the images.
     max_batch_size  = 64,   # Maximum batch size.
@@ -229,9 +231,13 @@ def calculate_stats_for_files(
         torch.distributed.barrier()
 
     # List images.
+    if dataset_name == "imagenet":
+        dataset_kwargs = dnnlib.EasyDict(class_name=DATASET_OPTIONS[dataset_name]["class_name"], path=image_path)
+    else:
+        dataset_kwargs = dnnlib.EasyDict(DATASET_OPTIONS[dataset_name])
     if verbose:
         dist.print0(f'Loading images from {image_path} ...')
-    dataset_obj = dataset.ImageFolderDataset(path=image_path, max_size=num_images, random_seed=seed)
+    dataset_obj = dataset.ImageFolderDataset(**dataset_kwargs, max_size=num_images, random_seed=seed)
     if num_images is not None and len(dataset_obj) < num_images:
         raise click.ClickException(f'Found {len(dataset_obj)} images, but expected at least {num_images}')
     if len(dataset_obj) < 2:
@@ -323,7 +329,8 @@ def cmdline():
 # 'calc' subcommand.
 
 @cmdline.command()
-@click.option('--images', 'image_path',     help='Path to the images', metavar='PATH|ZIP',                  type=str, required=True)
+@click.option('--dataset', 'dataset_name',  help='Dataset to be used', metavar='STR',                       type=click.Choice(list(DATASET_OPTIONS.keys())), default="imagenet", show_default=True)
+@click.option('--images', 'image_path',     help='Path to the images', metavar='PATH|ZIP',                  type=str)
 @click.option('--ref', 'ref_path',          help='Dataset reference statistics ', metavar='PKL|NPZ|URL',    type=str, required=True)
 @click.option('--metrics',                  help='List of metrics to compute', metavar='LIST',              type=parse_metric_list, default='fid,fd_dinov2', show_default=True)
 @click.option('--num', 'num_images',        help='Number of images to use', metavar='INT',                  type=click.IntRange(min=2), default=50000, show_default=True)
@@ -335,6 +342,11 @@ def calc(ref_path, metrics, **opts):
     """Calculate metrics for a given set of images."""
     torch.multiprocessing.set_start_method('spawn')
     dist.init()
+    opts = dnnlib.EasyDict(opts)
+    if opts.dataset_name != "imagenet":
+        try: opts.image_path = os.path.join(dirs.DATA_HOME, opts.image_path)
+        except: opts.update(dict(image_path = dirs.DATA_HOME))
+    ref_path = os.path.join(dirs.DATA_HOME, "Images", "dataset_refs", ref_path)
     if dist.get_rank() == 0:
         ref = load_stats(path=ref_path) # do this first, just in case it fails
     stats_iter = calculate_stats_for_files(metrics=metrics, **opts)
@@ -358,6 +370,9 @@ def calc(ref_path, metrics, **opts):
 def gen(net, ref_path, metrics, num_images, seed, **opts):
     """Calculate metrics for a given model using default sampler settings."""
     dist.init()
+    opts = dnnlib.EasyDict(opts)
+    if "http" not in net: net = os.join(dirs.MODELS_HOME, net)
+    ref_path = os.path.join(dirs.DATA_HOME, "Images", "dataset_refs", ref_path)
     if dist.get_rank() == 0:
         ref = load_stats(path=ref_path) # do this first, just in case it fails
     image_iter = generate_images.generate_images(net=net, seeds=range(seed, seed + num_images), **opts)
@@ -372,7 +387,8 @@ def gen(net, ref_path, metrics, num_images, seed, **opts):
 # 'ref' subcommand.
 
 @cmdline.command()
-@click.option('--data', 'image_path',       help='Path to the dataset', metavar='PATH|ZIP',             type=str, required=True)
+@click.option('--dataset', 'dataset_name',  help='Dataset to be used', metavar='STR',                   type=click.Choice(list(DATASET_OPTIONS.keys())), default="imagenet", show_default=True)
+@click.option('--data', 'image_path',       help='Path to the dataset', metavar='PATH|ZIP',             type=str)
 @click.option('--dest', 'dest_path',        help='Destination file', metavar='PKL',                     type=str, required=True)
 @click.option('--metrics',                  help='List of metrics to compute', metavar='LIST',          type=parse_metric_list, default='fid,fd_dinov2', show_default=True)
 @click.option('--batch', 'max_batch_size',  help='Maximum batch size', metavar='INT',                   type=click.IntRange(min=1), default=64, show_default=True)
@@ -382,6 +398,11 @@ def ref(**opts):
     """Calculate dataset reference statistics for 'calc' and 'gen'."""
     torch.multiprocessing.set_start_method('spawn')
     dist.init()
+    opts = dnnlib.EasyDict(opts)
+    if opts.dataset_name != "imagenet":
+        try: opts.image_path = os.path.join(dirs.DATA_HOME, opts.image_path)
+        except: opts.update(dict(image_path = dirs.DATA_HOME))
+    opts.dest_path = os.path.join(dirs.DATA_HOME, "Images", "dataset_refs", opts.dest_path)
     stats_iter = calculate_stats_for_files(**opts)
     for _r in tqdm.tqdm(stats_iter, unit='batch', disable=(dist.get_rank() != 0)):
         pass
