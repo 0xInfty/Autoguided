@@ -34,7 +34,7 @@ from ours.utils import is_sample_in_fractal, get_grid_params, create_grid_sample
 import ours.mandala_exploration.fractal_step_by_step as mand
 import logs
 
-PRETRAINED_HOME = os.path.join(dirs.DATA_HOME, "ToyExample")
+PRETRAINED_HOME = os.path.join(dirs.MODELS_HOME, "ToyExample", "00_PreTrained")
 if not os.path.isdir(PRETRAINED_HOME): os.mkdir(PRETRAINED_HOME)
 
 log = logs.create_logger("errors")

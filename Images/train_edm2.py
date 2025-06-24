@@ -202,7 +202,7 @@ def cmdline(outdir, dry_run, **opts):
     dist.init()
     dist.print0('Setting up training config...')
 
-    outdir = os.path.join(dirs.MODELS_HOME, outdir)
+    outdir = os.path.join(dirs.MODELS_HOME, "Images", outdir)
     opts = dnnlib.EasyDict(opts)
     if opts.dataset != "imagenet":
         try: opts.data = os.path.join(dirs.DATA_HOME, opts.data)

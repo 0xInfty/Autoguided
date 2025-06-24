@@ -344,9 +344,9 @@ def calc(ref_path, metrics, **opts):
     dist.init()
     opts = dnnlib.EasyDict(opts)
     if opts.dataset_name != "imagenet":
-        try: opts.image_path = os.path.join(dirs.DATA_HOME, "Images", opts.image_path)
-        except: opts.update(dict(image_path = dirs.DATA_HOME))
-    ref_path = os.path.join(dirs.DATA_HOME, "Images", "dataset_refs", ref_path)
+        try: opts.image_path = os.path.join(dirs.DATA_HOME, opts.image_path)
+        except: opts.update(dict(image_path=dirs.DATA_HOME))
+    ref_path = os.path.join(dirs.DATA_HOME, "dataset_refs", ref_path)
     if dist.get_rank() == 0:
         ref = load_stats(path=ref_path) # do this first, just in case it fails
     stats_iter = calculate_stats_for_files(metrics=metrics, **opts)
@@ -371,8 +371,8 @@ def gen(net, ref_path, metrics, num_images, seed, **opts):
     """Calculate metrics for a given model using default sampler settings."""
     dist.init()
     opts = dnnlib.EasyDict(opts)
-    if "http" not in net: net = os.join(dirs.MODELS_HOME, net)
-    ref_path = os.path.join(dirs.DATA_HOME, "Images", "dataset_refs", ref_path)
+    if "http" not in net: net = os.join(dirs.MODELS_HOME, "Images", net)
+    ref_path = os.path.join(dirs.DATA_HOME, "dataset_refs", ref_path)
     if dist.get_rank() == 0:
         ref = load_stats(path=ref_path) # do this first, just in case it fails
     image_iter = generate_images.generate_images(net=net, seeds=range(seed, seed + num_images), **opts)
@@ -401,8 +401,8 @@ def ref(**opts):
     opts = dnnlib.EasyDict(opts)
     if opts.dataset_name != "imagenet":
         try: opts.image_path = os.path.join(dirs.DATA_HOME, opts.image_path)
-        except: opts.update(dict(image_path = dirs.DATA_HOME))
-    opts.dest_path = os.path.join(dirs.DATA_HOME, "Images", "dataset_refs", opts.dest_path)
+        except: opts.update(dict(image_path=dirs.DATA_HOME))
+    opts.dest_path = os.path.join(dirs.DATA_HOME, "dataset_refs", opts.dest_path)
     stats_iter = calculate_stats_for_files(**opts)
     for _r in tqdm.tqdm(stats_iter, unit='batch', disable=(dist.get_rank() != 0)):
         pass

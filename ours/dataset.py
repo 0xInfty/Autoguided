@@ -12,8 +12,6 @@ import karras.dnnlib as dnnlib
 from karras.training.dataset import Dataset
 # import pyvtorch.huggingface as vhfdat
 
-DATASET_HOME = os.path.join(dirs.DATA_HOME, "Images")
-
 DATASET_OPTIONS = {
     "imagenet": dict(class_name='karras.training.dataset.ImageFolderDataset'),
     "cifar10": dict(class_name='ours.dataset.HuggingFaceDataset', path="uoft-cs/cifar10", n_classes=10),
@@ -26,7 +24,7 @@ class HuggingFaceDataset(Dataset):
         path,                   # Path to Hugging Face dataset
         n_classes,              # Specify number of classes for one hot encoding
         resolution      = None, # Ensure specific resolution, None = anything goes.
-        cache_dir       = DATASET_HOME, # Cache dir to store the Hugging Face dataset
+        cache_dir       = dirs.DATA_HOME, # Cache dir to store the Hugging Face dataset
         **super_kwargs,         # Additional arguments for the Dataset base class.
     ):
         self._path = path        
