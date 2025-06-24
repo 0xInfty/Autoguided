@@ -206,7 +206,7 @@ def cmdline(outdir, dry_run, **opts):
     dist.init()
     dist.print0('Setting up training config...')
 
-    outdir = os.path.join(dirs.RESULTS_HOME, outdir)
+    outdir = os.path.join(dirs.MODELS_HOME, outdir)
     opts = dnnlib.EasyDict(opts)
     try: opts.data = os.path.join(dirs.DATA_HOME, opts.data)
     except: opts.update(dict(data = dirs.DATA_HOME))

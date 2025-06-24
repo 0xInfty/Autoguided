@@ -37,6 +37,7 @@ warnings.filterwarnings('ignore', '1Torch was not compiled with flash attention'
 # Configuration presets.
 
 model_root = 'https://nvlabs-fi-cdn.nvidia.com/edm2/posthoc-reconstructions'
+models_dir = os.path.join(dirs.MODELS_HOME, "Images")
 
 config_presets = {
     'edm2-img512-xs-fid':              EasyDict(net=f'{model_root}/edm2-img512-xs-2147483-0.135.pkl'),      # fid = 3.53
@@ -75,6 +76,8 @@ config_presets = {
     'edm2-img512-s-uncond-autog-dino': EasyDict(net=f'{model_root}/edm2-img512-s-uncond-2147483-0.090.pkl', gnet=f'{model_root}/edm2-img512-xs-uncond-0134217-0.125.pkl', guidance_weight=2.90), # fd_dinov2 = 90.39
     'edm2-img64-s-autog-fid':          EasyDict(net=f'{model_root}/edm2-img64-s-1073741-0.045.pkl',         gnet=f'{model_root}/edm2-img64-xs-0134217-0.110.pkl',         guidance_weight=1.70), # fid = 1.01
     'edm2-img64-s-autog-dino':         EasyDict(net=f'{model_root}/edm2-img64-s-1073741-0.105.pkl',         gnet=f'{model_root}/edm2-img64-xs-0134217-0.175.pkl',         guidance_weight=2.20), # fd_dinov2 = 31.85
+    'edm2-CIFAR10-xxs':                EasyDict(net=os.path.join(models_dir, "01_CIFAR10", 'network-snapshot-0117440-0.100.pkl')),       # fid = unknown
+    'edm2-CIFAR10-xxs-0':              EasyDict(net=os.path.join(models_dir, "01_CIFAR10", 'network-snapshot-0000000-0.100.pkl')),       # fid = unknown
 }
 
 #----------------------------------------------------------------------------
