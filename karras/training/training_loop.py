@@ -24,6 +24,8 @@ import karras.torch_utils.training_stats as training_stats
 import karras.torch_utils.persistence as persistence
 import karras.torch_utils.misc as misc
 
+import ours.selection as sel
+
 #----------------------------------------------------------------------------
 # Uncertainty-based loss function (Equations 14,15,16,21) proposed in the
 # paper "Analyzing and Improving the Training Dynamics of Diffusion Models".
@@ -68,6 +70,7 @@ def training_loop(
     optimizer_kwargs    = dict(class_name='torch.optim.Adam', betas=(0.9, 0.99)),
     lr_kwargs           = dict(func_name='karras.training.training_loop.learning_rate_schedule'),
     ema_kwargs          = dict(class_name='karras.training.phema.PowerFunctionEMA'),
+    selection_kwargs    = dict(func_name='ours.selection.jointly_sample_batch', N=8, filter_ratio=0.8),
 
     run_dir             = '.',      # Output directory.
     seed                = 0,        # Global random seed.
@@ -75,6 +78,13 @@ def training_loop(
     batch_gpu           = None,     # Limit batch size per GPU. None = no limit.
     total_nimg          = 8<<30,    # Train for a total of N training images.
     slice_nimg          = None,     # Train for a maximum of N training images in one invocation. None = no limit.
+
+    ref_path            = None,     # Reference model path - will be used for data selection if needed
+
+    selection           = False,    # Run data selection
+    selection_late      = False,    # Run data selection once the learner becomes better than the ref
+    selection_early     = False,    # Run data selection only while the learner is worse than the ref
+
     status_nimg         = 128<<10,  # Report status every N training images. None = disable.
     snapshot_nimg       = 8<<20,    # Save network snapshot every N training images. None = disable.
     checkpoint_nimg     = 128<<20,  # Save state checkpoint every N training images. None = disable.
@@ -109,6 +119,26 @@ def training_loop(
     assert snapshot_nimg is None or (snapshot_nimg % batch_size == 0 and snapshot_nimg % 1024 == 0)
     assert checkpoint_nimg is None or (checkpoint_nimg % batch_size == 0 and checkpoint_nimg % 1024 == 0)
 
+    # Set up data selection
+    dist.print0("Data selection =", selection)
+    if selection:
+        if selection_late:
+            run_selection = False
+            is_selection_waiting = True
+            dist.print0("Data selection with delayed execution strategy")
+        elif selection_early:
+            run_selection = True
+            is_selection_waiting = True
+            dist.print0("Data selection programmed stop strategy")
+        else:
+            run_selection = True
+            is_selection_waiting = False
+            dist.print0("Data selection with early-start execution strategy")
+        dist.print0("Data selection configuration =", selection_kwargs)
+    else: 
+        run_selection = False
+        is_selection_waiting = False
+    
     # Setup dataset, encoder, and network.
     dist.print0('Loading dataset...')
     dataset_obj = dnnlib.util.construct_class_by_name(**dataset_kwargs)
@@ -120,6 +150,12 @@ def training_loop(
     interface_kwargs = dict(img_resolution=ref_image.shape[-1], img_channels=ref_image.shape[1], label_dim=ref_label.shape[-1])
     net = dnnlib.util.construct_class_by_name(**network_kwargs, **interface_kwargs)
     net.train().requires_grad_(True).to(device)
+    is_ref_available = ref_path is not None
+    if is_ref_available:
+        dist.print0('Constructing reference network...')
+        interface_kwargs = dict(img_resolution=ref_image.shape[-1], img_channels=ref_image.shape[1], label_dim=ref_label.shape[-1])
+        ref = dnnlib.util.construct_class_by_name(**network_kwargs, **interface_kwargs)
+        ref.eval().requires_grad_(False).to(device)
 
     # Print network summary.
     if dist.get_rank() == 0:
@@ -129,17 +165,33 @@ def training_loop(
             torch.zeros([batch_gpu, net.label_dim], device=device),
         ], max_nesting=2)
 
+    # Print reference network summary.
+    if dist.get_rank() == 0:
+        misc.print_module_summary(ref, [
+            torch.zeros([batch_gpu, ref.img_channels, ref.img_resolution, ref.img_resolution], device=device),
+            torch.ones([batch_gpu], device=device),
+            torch.zeros([batch_gpu, ref.label_dim], device=device),
+        ], max_nesting=2)
+
     # Setup training state.
     dist.print0('Setting up training state...')
     state = dnnlib.EasyDict(cur_nimg=0, total_elapsed_time=0)
     ddp = torch.nn.parallel.DistributedDataParallel(net, device_ids=[device])
     loss_fn = dnnlib.util.construct_class_by_name(**loss_kwargs)
+    if is_ref_available: 
+        ref_ddp = torch.nn.parallel.DistributedDataParallel(ref, device_ids=[device])
+        ref_loss_fn = dnnlib.util.construct_class_by_name(**loss_kwargs)
     optimizer = dnnlib.util.construct_class_by_name(params=net.parameters(), **optimizer_kwargs)
     ema = dnnlib.util.construct_class_by_name(net=net, **ema_kwargs) if ema_kwargs is not None else None
 
-    # Load previous checkpoint and decide how long to train.
+    # Load previous checkpoint
     checkpoint = dist.CheckpointIO(state=state, net=net, loss_fn=loss_fn, optimizer=optimizer, ema=ema)
     checkpoint.load_latest(run_dir)
+    if is_ref_available: 
+        ref_checkpoint = dist.CheckpointIO(state=state, net=ref, loss_fn=ref_loss_fn)
+        ref_checkpoint.load(ref_path)
+    
+    # Decide how long to train.
     stop_at_nimg = total_nimg
     if slice_nimg is not None:
         granularity = checkpoint_nimg if checkpoint_nimg is not None else snapshot_nimg if snapshot_nimg is not None else batch_size
@@ -227,10 +279,41 @@ def training_loop(
         optimizer.zero_grad(set_to_none=True)
         for round_idx in range(num_accumulation_rounds):
             with misc.ddp_sync(ddp, (round_idx == num_accumulation_rounds - 1)):
+
+                # Evaluate loss
                 images, labels = next(dataset_iterator)
                 images = encoder.encode_latents(images.to(device))
                 loss = loss_fn(net=ddp, images=images, labels=labels.to(device))
                 training_stats.report('Loss/loss', loss)
+
+                # Calculate reference loss
+                if run_selection or is_selection_waiting:
+                    with misc.ddp_sync(ref_ddp, (round_idx == num_accumulation_rounds - 1)):
+                        ref_loss = loss_fn(net=ref_ddp, images=images, labels=labels.to(device))
+                        training_stats.report('RefLoss/ref_loss', ref_loss)
+                        if not net_beats_ref and loss.mean() < ref_loss.mean():
+                            net_beats_ref = True
+                            dist.print0("Network has beaten the reference")
+                            if is_selection_waiting:
+                                run_selection = not(run_selection)
+                                if run_selection: dist.print0("Selection will now be run")
+                                else: dist.print0("Selection will now be stopped")
+                                is_selection_waiting = False
+                
+                # Calculate overall loss
+                if run_selection:
+                    try:
+                        dist.print0("Using selection")
+                        dist.print0("Average Super-Batch Learner Loss =", float(loss.mean()))
+                        dist.print0("Average Super-Batch Reference Loss =", float(ref_loss.mean()))
+                        indices = sel.jointly_sample_batch(loss, ref_loss, **selection_kwargs)
+                        loss = loss[indices] # Use indices of the selection mini-batch
+                    except ValueError:
+                        dist.print0("Selection has crashed, so it has been deactivated")
+                        run_selection = False
+                        is_selection_waiting = False
+
+                # Accumulate loss
                 loss.sum().mul(loss_scaling / batch_gpu_total).backward()
 
         # Run optimizer and update weights.
