@@ -166,12 +166,13 @@ def training_loop(
         ], max_nesting=2)
 
     # Print reference network summary.
-    if dist.get_rank() == 0:
-        misc.print_module_summary(ref, [
-            torch.zeros([batch_gpu, ref.img_channels, ref.img_resolution, ref.img_resolution], device=device),
-            torch.ones([batch_gpu], device=device),
-            torch.zeros([batch_gpu, ref.label_dim], device=device),
-        ], max_nesting=2)
+    if is_ref_available:
+        if dist.get_rank() == 0:
+            misc.print_module_summary(ref, [
+                torch.zeros([batch_gpu, ref.img_channels, ref.img_resolution, ref.img_resolution], device=device),
+                torch.ones([batch_gpu], device=device),
+                torch.zeros([batch_gpu, ref.label_dim], device=device),
+            ], max_nesting=2)
 
     # Setup training state.
     dist.print0('Setting up training state...')
