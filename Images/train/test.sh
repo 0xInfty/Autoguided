@@ -1,1 +1,6 @@
-CUDA_VISIBLE_DEVICES=1,2 torchrun --standalone --nproc_per_node=2 Images/train_edm2.py --outdir=01_CIFAR10/test --dataset cifar10 --preset=edm2-cifar10-xxs --batch-gpu=512 --acid --guide-path 01_CIFAR10/network-snapshot-0025165-0.050.pkl
+preset="edm2-cifar10-xxs"; dataset="cifar10"
+subdir="01_CIFAR10/test"; ref="network-snapshot-0025165-0.050.pkl"
+batchsize=512
+devices=1,2; ndevices=2
+
+CUDA_VISIBLE_DEVICES=$devices torchrun --standalone --nproc_per_node=$ndevices Images/train_edm2.py --outdir=$subdir --dataset $dataset --preset=$preset --batch-gpu=$batchsize
