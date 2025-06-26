@@ -86,6 +86,15 @@ def setup_training_config(preset='edm2-img512-s', **opts):
     c.loss_kwargs = dnnlib.EasyDict(class_name='karras.training.training_loop.EDM2Loss', P_mean=opts.P_mean, P_std=opts.P_std)
     c.lr_kwargs = dnnlib.EasyDict(func_name='karras.training.training_loop.learning_rate_schedule', ref_lr=opts.lr, ref_batches=opts.decay)
 
+    # Data selection.
+    c.ref_path = opts.get('ref_path', 0) or None
+    c.selection = opts.get('selection', 0) or None
+    c.selection_early = opts.get('selection_early', 0) or None
+    c.selection_late = opts.get('selection_late', 0) or None
+    c.selection_kwargs = dnnlib.EasyDict(func_name='ours.selection.jointly_sample_batch',
+                                         N=opts.N, filter_ratio=opts.filter_ratio, learnability=opts.learnability,
+                                         inverted=opts.inverted, numeric_stability_trick=opts.numeric_stability_trick)
+    
     # Performance-related options.
     c.batch_gpu = opts.get('batch_gpu', 0) or None
     c.network_kwargs.use_fp16 = opts.get('fp16', True)
@@ -168,6 +177,26 @@ def parse_nimg(s):
 @click.option('--lr',               help='Learning rate max. (alpha_ref)', metavar='FLOAT',     type=click.FloatRange(min=0, min_open=True), default=None)
 @click.option('--decay',            help='Learning rate decay (t_ref)', metavar='BATCHES',      type=click.FloatRange(min=0), default=None)
 
+# Data selection.
+@click.option('--guide-path', 'ref_path',
+                help='Use auto-guidance?', metavar='PATH', type=str, default=None, show_default=True)
+@click.option('--acid/--no-acid', 'selection',
+                help='Use ACID batch selection?', metavar='BOOL', type=bool, default=False, show_default=True)
+@click.option('--filt',  'filter_ratio',
+                help='ACID filter ratio', metavar='FLOAT', type=float, default=0.8, show_default=True)
+@click.option('--n', 'N', 
+                help='ACID chunk size', metavar='INT', type=int, default=8, show_default=True)
+@click.option('--diff/--no-diff', 'learnability',
+                help='Use ACID learnability score?', metavar='BOOL', type=bool, default=True, show_default=True)
+@click.option('--invert/--no-invert', 'inverted',
+                help='Use inverted ACID scores?', metavar='BOOL', type=bool, default=False, show_default=True)
+@click.option('--late/--no-late', 'selection_late',
+                help='Delay ACID start?', metavar='BOOL', type=bool, default=False, show_default=True)
+@click.option('--early/--no-early', 'selection_early',
+                help='Run ACID just at the beginning?', metavar='BOOL', type=bool, default=False, show_default=True)
+@click.option('--trick/--no-trick', 'numeric_stability_trick',  
+                help='Use the softmax stability trick?', metavar='BOOL', type=bool, default=False, show_default=True)
+
 # Performance-related options.
 @click.option('--batch-gpu',        help='Limit batch size per GPU', metavar='NIMG',            type=parse_nimg, default=0, show_default=True)
 @click.option('--fp16',             help='Enable mixed-precision training', metavar='BOOL',     type=bool, default=True, show_default=True)
@@ -203,9 +232,11 @@ def cmdline(outdir, dry_run, **opts):
     dist.print0('Setting up training config...')
 
     outdir = os.path.join(dirs.MODELS_HOME, "Images", outdir)
-    opts = dnnlib.EasyDict(opts)    
+    opts = dnnlib.EasyDict(opts)
     try: opts.data = os.path.join(dirs.DATA_HOME, opts.data)
     except: opts.update(dict(data = dirs.DATA_HOME))
+    try: opts.ref_path = os.path.join(dirs.MODELS_HOME, "Images", opts.ref_path)
+    except TypeError: opts.ref_path = None
 
     c = setup_training_config(**opts)
     print_training_config(run_dir=outdir, c=c)

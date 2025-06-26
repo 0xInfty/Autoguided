@@ -121,6 +121,9 @@ def training_loop(
 
     # Set up data selection
     dist.print0("Data selection =", selection)
+    is_ref_available = ref_path is not None
+    if not is_ref_available and selection:
+        raise ValueError("Missing reference model")
     if selection:
         if selection_late:
             run_selection = False
@@ -150,7 +153,6 @@ def training_loop(
     interface_kwargs = dict(img_resolution=ref_image.shape[-1], img_channels=ref_image.shape[1], label_dim=ref_label.shape[-1])
     net = dnnlib.util.construct_class_by_name(**network_kwargs, **interface_kwargs)
     net.train().requires_grad_(True).to(device)
-    is_ref_available = ref_path is not None
     if is_ref_available:
         dist.print0('Constructing reference network...')
         interface_kwargs = dict(img_resolution=ref_image.shape[-1], img_channels=ref_image.shape[1], label_dim=ref_label.shape[-1])
@@ -180,7 +182,6 @@ def training_loop(
     ddp = torch.nn.parallel.DistributedDataParallel(net, device_ids=[device])
     loss_fn = dnnlib.util.construct_class_by_name(**loss_kwargs)
     if is_ref_available: 
-        ref_ddp = torch.nn.parallel.DistributedDataParallel(ref, device_ids=[device])
         ref_loss_fn = dnnlib.util.construct_class_by_name(**loss_kwargs)
     optimizer = dnnlib.util.construct_class_by_name(params=net.parameters(), **optimizer_kwargs)
     ema = dnnlib.util.construct_class_by_name(net=net, **ema_kwargs) if ema_kwargs is not None else None
@@ -289,18 +290,17 @@ def training_loop(
 
                 # Calculate reference loss
                 if run_selection or is_selection_waiting:
-                    with misc.ddp_sync(ref_ddp, (round_idx == num_accumulation_rounds - 1)):
-                        ref_loss = loss_fn(net=ref_ddp, images=images, labels=labels.to(device))
-                        training_stats.report('RefLoss/ref_loss', ref_loss)
-                        if not net_beats_ref and loss.mean() < ref_loss.mean():
-                            net_beats_ref = True
-                            dist.print0("Network has beaten the reference")
-                            if is_selection_waiting:
-                                run_selection = not(run_selection)
-                                if run_selection: dist.print0("Selection will now be run")
-                                else: dist.print0("Selection will now be stopped")
-                                is_selection_waiting = False
-                
+                    ref_loss = loss_fn(net=ref, images=images, labels=labels.to(device))
+                    training_stats.report('RefLoss/ref_loss', ref_loss)
+                    if not net_beats_ref and loss.mean() < ref_loss.mean():
+                        net_beats_ref = True
+                        dist.print0("Network has beaten the reference")
+                        if is_selection_waiting:
+                            run_selection = not(run_selection)
+                            if run_selection: dist.print0("Selection will now be run")
+                            else: dist.print0("Selection will now be stopped")
+                            is_selection_waiting = False
+            
                 # Calculate overall loss
                 if run_selection:
                     try:
