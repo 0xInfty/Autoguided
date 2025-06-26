@@ -34,7 +34,7 @@ from ours.utils import is_sample_in_fractal, get_grid_params, create_grid_sample
 import ours.mandala_exploration.fractal_step_by_step as mand
 import logs
 
-PRETRAINED_HOME = os.path.join(dirs.DATA_HOME, "ToyExample")
+PRETRAINED_HOME = os.path.join(dirs.MODELS_HOME, "ToyExample", "00_PreTrained")
 if not os.path.isdir(PRETRAINED_HOME): os.mkdir(PRETRAINED_HOME)
 
 log = logs.create_logger("errors")
@@ -390,6 +390,7 @@ def do_train(
     else: 
         run_acid = False
         is_acid_waiting = False
+    net_beats_ref = False # Assume reference is always better than the model at first
 
     # Log other parameters
     if guidance and guide_interpolation:
@@ -423,6 +424,7 @@ def do_train(
         if guide_path is not None:
             with builtins.open(guide_path, "rb") as f:
                 guide = pickle.load(f).to(device)
+                guide.eval().requires_grad_(False)
             set_up_logger(verbosity, log_filename) # No idea why, but builtins.open or pickle.load break the logger's setup
             log.warning("Guide model loaded from %s", guide_path)
         else:
@@ -435,8 +437,6 @@ def do_train(
         ref = ema
         log.warning("EMA assigned as ACID reference")
     else: ref = None
-    if ref is not None: 
-        net_beats_ref = False # Assume reference is always better than the model at first
 
     # Initialize plot.
     if viz_iter is not None:
