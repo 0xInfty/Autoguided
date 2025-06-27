@@ -1,6 +1,7 @@
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
+import copy
 
 import logs
 
@@ -11,7 +12,7 @@ log = logs.create_logger("errors")
 
 def jointly_sample_batch(learner_loss, ref_loss, N=16, filter_ratio=0.8, 
                          learnability=True, inverted=False, numeric_stability_trick=False, 
-                         plotting=False, log=log):
+                         device=None, plotting=False, log=log, **kwargs):
     """Joint sampling batch selection method used in JEST and ACID
 
     Adapted from Evans & Parthasarathy et al's publication titled 
@@ -26,13 +27,19 @@ def jointly_sample_batch(learner_loss, ref_loss, N=16, filter_ratio=0.8,
     # Each mini-batch of size b will be split in n chunks
     b_over_N = int(B * (1 - filter_ratio) / N) # Size b/N of each mini-batch chunk
 
+    # Change device, if needed
+    if device is None: 
+        device = learner_loss.get_device()
+    else:
+        learner_loss = learner_loss.detach().to(device)
+        ref_loss = learner_loss.detach().to(device)
+
     # Construct the scores matrix
     learner_loss = learner_loss.reshape((B,1))
     ref_loss = ref_loss.reshape((1,B))
     scores = learner_loss - ref_loss if learnability else - ref_loss  # Shape (B,B)
     log.debug(*logs.get_stats_log("Scores", scores))
     if inverted: scores = - scores
-    device = scores.get_device()
     # Rows use different learner loss ==> i is the learner/student's index
     # Columns use different reference loss ==> j is the reference/teacher's index
     
