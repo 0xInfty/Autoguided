@@ -309,7 +309,6 @@ def training_loop(
                         dist.print0("Using selection")
                         dist.print0("Average Super-Batch Learner Loss =", float(loss.mean()))
                         dist.print0("Average Super-Batch Reference Loss =", float(ref_loss.mean()))
-                        dist.print0("Loss shape =", loss.shape)
                         mean_loss = torch.mean(loss, dim=(1,2,3))
                         mean_ref_loss = torch.mean(ref_loss, dim=(1,2,3))
                         indices = dnnlib.util.call_func_by_name(mean_loss, mean_ref_loss, 
