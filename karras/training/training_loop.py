@@ -311,8 +311,7 @@ def training_loop(
                         dist.print0("Average Super-Batch Reference Loss =", float(ref_loss.mean()))
                         mean_loss = torch.mean(loss, dim=(1,2,3))
                         mean_ref_loss = torch.mean(ref_loss, dim=(1,2,3))
-                        indices = dnnlib.util.call_func_by_name(mean_loss, mean_ref_loss, 
-                                                                device=torch.device("cpu"), **selection_kwargs)
+                        indices = dnnlib.util.call_func_by_name(mean_loss, mean_ref_loss, **selection_kwargs)
                         loss = loss[indices] # Use indices of the selection mini-batch
                     except ValueError:
                         dist.print0("Selection has crashed, so it has been deactivated")
