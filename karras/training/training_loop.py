@@ -17,6 +17,7 @@ import pickle
 import psutil
 import numpy as np
 import torch
+import builtins
 
 import karras.dnnlib as dnnlib
 import karras.torch_utils.distributed as dist
@@ -141,6 +142,7 @@ def training_loop(
     else: 
         run_selection = False
         is_selection_waiting = False
+    net_beats_ref = False
     
     # Setup dataset, encoder, and network.
     dist.print0('Loading dataset...')
@@ -181,8 +183,6 @@ def training_loop(
     state = dnnlib.EasyDict(cur_nimg=0, total_elapsed_time=0)
     ddp = torch.nn.parallel.DistributedDataParallel(net, device_ids=[device])
     loss_fn = dnnlib.util.construct_class_by_name(**loss_kwargs)
-    if is_ref_available: 
-        ref_loss_fn = dnnlib.util.construct_class_by_name(**loss_kwargs)
     optimizer = dnnlib.util.construct_class_by_name(params=net.parameters(), **optimizer_kwargs)
     ema = dnnlib.util.construct_class_by_name(net=net, **ema_kwargs) if ema_kwargs is not None else None
 
@@ -190,8 +190,10 @@ def training_loop(
     checkpoint = dist.CheckpointIO(state=state, net=net, loss_fn=loss_fn, optimizer=optimizer, ema=ema)
     checkpoint.load_latest(run_dir)
     if is_ref_available: 
-        ref_checkpoint = dist.CheckpointIO(state=state, net=ref, loss_fn=ref_loss_fn)
-        ref_checkpoint.load(ref_path)
+        with builtins.open(ref_path, "rb") as f:
+            data = dnnlib.EasyDict(pickle.load(f))
+        ref = data.ema.to(device)
+        ref.eval().requires_grad_(False)
     
     # Decide how long to train.
     stop_at_nimg = total_nimg
@@ -307,7 +309,7 @@ def training_loop(
                         dist.print0("Using selection")
                         dist.print0("Average Super-Batch Learner Loss =", float(loss.mean()))
                         dist.print0("Average Super-Batch Reference Loss =", float(ref_loss.mean()))
-                        indices = sel.jointly_sample_batch(loss, ref_loss, **selection_kwargs)
+                        indices = dnnlib.util.call_func_by_name(loss, ref_loss, **selection_kwargs)
                         loss = loss[indices] # Use indices of the selection mini-batch
                     except ValueError:
                         dist.print0("Selection has crashed, so it has been deactivated")
