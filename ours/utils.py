@@ -4,6 +4,7 @@ import os
 sys.path.insert(0, dirs.SYSTEM_HOME)
 sys.path.insert(0, os.path.join(dirs.SYSTEM_HOME, "ToyExample"))
 
+import shutil
 import numpy as np
 import torch
 from re import finditer
@@ -84,6 +85,40 @@ def is_sample_in_fractal(samples, ground_truth_distribution, sigma=0):
     logp = ground_truth_distribution.logp(samples, sigma=sigma)
 
     return logp >= GT_LOGP_LEVEL
+
+### Tools for Weights & Biases ###################################################################
+
+def get_wandb_name(wandb_dir):
+    first, last = os.path.split(wandb_dir)
+    accumulated = last
+    iteration = 0
+    while True:
+        first, new_last = os.path.split(first)
+        if new_last not in ["ToyExample", "Images"]:
+            accumulated = "_".join([new_last, accumulated])
+            last = new_last
+            iteration += 1
+        else: break
+        if iteration >= 3: raise RecursionError("W&B name could not be determined")
+    return accumulated
+
+def move_wandb_files(origin, destination):
+    if os.path.isdir(os.path.join(origin, "wandb")):
+        origin = os.path.join(origin, "wandb")
+    if os.path.isfile(os.path.join(origin, "latest-run")): 
+        os.remove(os.path.join(origin, "latest-run"))
+    if os.path.isfile(os.path.join(origin, "debug.log")): 
+        os.remove(os.path.join(origin, "debug.log"))
+    if os.path.isfile(os.path.join(origin, "debug-internal.log")): 
+        os.remove(os.path.join(origin, "debug-internal.log"))
+    folder = [c for c in os.listdir(origin) if c.startswith("run-")][0]
+    if os.path.isdir(os.path.join(origin, folder, "tmp")): 
+        shutil.rmtree(os.path.join(origin, folder, "tmp"))
+    contents = os.listdir(os.path.join(origin, folder))
+    for c in contents:
+        os.rename(os.path.join(origin, folder, c), os.path.join(destination, c))
+    shutil.rmtree(origin)
+    return
 
 ### Basic utilities ##############################################################################
 
