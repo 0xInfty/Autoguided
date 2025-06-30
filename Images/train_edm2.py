@@ -163,7 +163,6 @@ def parse_nimg(s):
 # Main options.
 @click.option('--outdir',           help='Where to save the results', metavar='DIR',            type=str, required=True)
 @click.option('--dataset',          help='Dataset to be used', metavar='STR',                   type=click.Choice(list(DATASET_OPTIONS.keys())), default="imagenet", show_default=True)
-@click.option('--data',             help='Path to the dataset', metavar='ZIP|DIR',              type=str)
 @click.option('--cond',             help='Train class-conditional model', metavar='BOOL',       type=bool, default=True, show_default=True)
 @click.option('--preset',           help='Configuration preset', metavar='STR',                 type=str, required=True)
 
@@ -233,8 +232,12 @@ def cmdline(outdir, dry_run, **opts):
 
     outdir = os.path.join(dirs.MODELS_HOME, "Images", outdir)
     opts = dnnlib.EasyDict(opts)
-    try: opts.data = os.path.join(dirs.DATA_HOME, opts.data)
-    except: opts.update(dict(data = dirs.DATA_HOME))
+    if opts.dataset=="imagenet":
+        if "img512" in opts.preset:
+            opts.update(dict(data=os.path.join(dirs.DATA_HOME, "img512.zip")))
+        elif "img64" in opts.preset:
+            opts.update(dict(data=os.path.join(dirs.DATA_HOME, "img512-sd.zip")))
+        else: raise ValueError("Unknown ImageNet dataset")
     try: opts.ref_path = os.path.join(dirs.MODELS_HOME, "Images", opts.ref_path)
     except TypeError: opts.ref_path = None
 
