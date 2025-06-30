@@ -17,12 +17,15 @@ import pickle
 import psutil
 import numpy as np
 import torch
+import wandb
 
 import karras.dnnlib as dnnlib
 import karras.torch_utils.distributed as dist
 import karras.torch_utils.training_stats as training_stats
 import karras.torch_utils.persistence as persistence
 import karras.torch_utils.misc as misc
+
+from ours.utils import move_wandb_files, get_wandb_name
 
 #----------------------------------------------------------------------------
 # Uncertainty-based loss function (Equations 14,15,16,21) proposed in the
@@ -149,6 +152,17 @@ def training_loop(
     dist.print0(f'Training from {state.cur_nimg // 1000} kimg to {stop_at_nimg // 1000} kimg:')
     dist.print0()
 
+    # Set up a W&B experiment
+    os.environ["WANDB_DIR"] = run_dir
+    run = wandb.init(
+        entity="ajest", project="Images", name=get_wandb_name(run_dir),
+        config=dict(dataset_kwargs=dataset_kwargs, encoder_kwargs=encoder_kwargs,
+                    data_loader_kwargs=data_loader_kwargs, network_kwargs=network_kwargs,
+                    loss_kwargs=loss_kwargs, optimizer_kwargs=optimizer_kwargs,
+                    lr_kwargs=lr_kwargs, ema_kwargs=ema_kwargs,
+                    seed=seed, batch_size=batch_size, batch_gpu=batch_gpu, 
+                    total_nimg=total_nimg, loss_scaling=loss_scaling, device=device))
+
     # Main training loop.
     dataset_sampler = misc.InfiniteSampler(dataset=dataset_obj, rank=dist.get_rank(), num_replicas=dist.get_world_size(), seed=seed, start_idx=state.cur_nimg)
     dataset_iterator = iter(dnnlib.util.construct_class_by_name(dataset=dataset_obj, sampler=dataset_sampler, batch_size=batch_gpu, **data_loader_kwargs))
@@ -156,10 +170,42 @@ def training_loop(
     cumulative_training_time = 0
     start_nimg = state.cur_nimg
     stats_jsonl = None
+    tr_round = 1
     while True:
-        done = (state.cur_nimg >= stop_at_nimg)
+        dist.print0(f"Training round {tr_round}")
+
+        # Evaluate loss and accumulate gradients.
+        batch_start_time = time.time()
+        misc.set_random_seed(seed, dist.get_rank(), state.cur_nimg)
+        optimizer.zero_grad(set_to_none=True)
+        for round_idx in range(num_accumulation_rounds):
+            dist.print0(f"Accumulating {round_idx+1}")
+            with misc.ddp_sync(ddp, (round_idx == num_accumulation_rounds - 1)):
+                images, labels = next(dataset_iterator)
+                images = encoder.encode_latents(images.to(device))
+                loss = loss_fn(net=ddp, images=images, labels=labels.to(device))
+                training_stats.report('Loss/loss', loss)
+                loss.sum().mul(loss_scaling / batch_gpu_total).backward()
+
+        # Run optimizer and update weights.
+        lr = dnnlib.util.call_func_by_name(cur_nimg=state.cur_nimg, batch_size=batch_size, **lr_kwargs)
+        training_stats.report('Loss/learning_rate', lr)
+        for g in optimizer.param_groups:
+            g['lr'] = lr
+        if force_finite:
+            for param in net.parameters():
+                if param.grad is not None:
+                    torch.nan_to_num(param.grad, nan=0, posinf=0, neginf=0, out=param.grad)
+        optimizer.step()
+
+        # Update EMA and training state.
+        state.cur_nimg += batch_size
+        if ema is not None:
+            ema.update(cur_nimg=state.cur_nimg, batch_size=batch_size)
+        cumulative_training_time += time.time() - batch_start_time        
 
         # Report status.
+        done = (state.cur_nimg >= stop_at_nimg)
         if status_nimg is not None and (done or state.cur_nimg % status_nimg == 0) and (state.cur_nimg != start_nimg or start_nimg == 0):
             cur_time = time.time()
             state.total_elapsed_time += cur_time - prev_status_time
@@ -175,6 +221,11 @@ def training_loop(
                 'gpumem',       f"{training_stats.report0('Resources/peak_gpu_mem_gb',                  torch.cuda.max_memory_allocated(device) / 2**30):<6.2f}",
                 'reserved',     f"{training_stats.report0('Resources/peak_gpu_mem_reserved_gb',         torch.cuda.max_memory_reserved(device) / 2**30):<6.2f}",
             ]))
+            iter_logs = {
+                'time' : state.total_elapsed_time,
+                'sec/tick' : cur_time - prev_status_time,
+                'sec/kimg' : cumulative_training_time / max(state.cur_nimg - prev_status_nimg, 1) * 1e3,
+            }
             cumulative_training_time = 0
             prev_status_nimg = state.cur_nimg
             prev_status_time = cur_time
@@ -220,34 +271,7 @@ def training_loop(
         # Done?
         if done:
             break
-
-        # Evaluate loss and accumulate gradients.
-        batch_start_time = time.time()
-        misc.set_random_seed(seed, dist.get_rank(), state.cur_nimg)
-        optimizer.zero_grad(set_to_none=True)
-        for round_idx in range(num_accumulation_rounds):
-            with misc.ddp_sync(ddp, (round_idx == num_accumulation_rounds - 1)):
-                images, labels = next(dataset_iterator)
-                images = encoder.encode_latents(images.to(device))
-                loss = loss_fn(net=ddp, images=images, labels=labels.to(device))
-                training_stats.report('Loss/loss', loss)
-                loss.sum().mul(loss_scaling / batch_gpu_total).backward()
-
-        # Run optimizer and update weights.
-        lr = dnnlib.util.call_func_by_name(cur_nimg=state.cur_nimg, batch_size=batch_size, **lr_kwargs)
-        training_stats.report('Loss/learning_rate', lr)
-        for g in optimizer.param_groups:
-            g['lr'] = lr
-        if force_finite:
-            for param in net.parameters():
-                if param.grad is not None:
-                    torch.nan_to_num(param.grad, nan=0, posinf=0, neginf=0, out=param.grad)
-        optimizer.step()
-
-        # Update EMA and training state.
-        state.cur_nimg += batch_size
-        if ema is not None:
-            ema.update(cur_nimg=state.cur_nimg, batch_size=batch_size)
-        cumulative_training_time += time.time() - batch_start_time
+        else:
+            tr_round += 1
 
 #----------------------------------------------------------------------------
