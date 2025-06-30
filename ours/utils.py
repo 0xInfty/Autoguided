@@ -88,6 +88,20 @@ def is_sample_in_fractal(samples, ground_truth_distribution, sigma=0):
 
 ### Tools for Weights & Biases ###################################################################
 
+def get_wandb_name(wandb_dir):
+    first, last = os.path.split(wandb_dir)
+    accumulated = last
+    iteration = 0
+    while True:
+        first, new_last = os.path.split(first)
+        if new_last not in ["ToyExample", "Images"]:
+            accumulated = "_".join([new_last, accumulated])
+            last = new_last
+            iteration += 1
+        else: break
+        if iteration >= 3: raise RecursionError("W&B name could not be determined")
+    return accumulated
+
 def move_wandb_files(origin, destination):
     if os.path.isdir(os.path.join(origin, "wandb")):
         origin = os.path.join(origin, "wandb")
