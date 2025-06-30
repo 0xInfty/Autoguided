@@ -31,7 +31,7 @@ import karras.torch_utils.persistence as persistence
 import karras.training.phema as phema
 
 from ours.utils import FIG1_KWARGS, FIG2_KWARGS, GT_ORIGIN, GT_LOGP_LEVEL
-from ours.utils import is_sample_in_fractal, get_grid_params, create_grid_samples
+from ours.utils import is_sample_in_fractal, get_grid_params, create_grid_samples, move_wandb_files
 import ours.mandala_exploration.fractal_step_by_step as mand
 import ours.selection as sel
 
@@ -360,8 +360,9 @@ def do_train(
             plt.savefig(plt_path)
 
     # Set up a W&B experiment
+    os.environ["WANDB_DIR"] = os.path.dirname(log_filename)
     run = wandb.init(
-        entity="ajest", project="ToyExample", name="99_Test_01",
+        entity="ajest", project="ToyExample", name="99_Test", #dir=os.path.dirname(log_filename),
         config=dict(architecture="ToyModel", dataset="ToyExample",
                     classes=classes, num_layers=num_layers, hidden_dim=hidden_dim, 
                     batch_size=batch_size, total_iter=total_iter, seed=seed,
@@ -588,6 +589,7 @@ def do_train(
             plot_loss(results, loss_plt_path);
 
     run.finish()
+    move_wandb_files(os.path.dirname(log_filename), os.path.dirname(log_filename))
 
 #----------------------------------------------------------------------------
 # Custom helper functions
