@@ -166,18 +166,33 @@ def training_loop(
     # Main training loop.
     dataset_sampler = misc.InfiniteSampler(dataset=dataset_obj, rank=dist.get_rank(), num_replicas=dist.get_world_size(), seed=seed, start_idx=state.cur_nimg)
     dataset_iterator = iter(dnnlib.util.construct_class_by_name(dataset=dataset_obj, sampler=dataset_sampler, batch_size=batch_gpu, **data_loader_kwargs))
+    prev_time = time.time()
     prev_status_nimg = state.cur_nimg
     cumulative_training_time = 0
     start_nimg = state.cur_nimg
     stats_jsonl = None
-    tr_round = 1
+    tr_round = 0
+    lr = dnnlib.util.call_func_by_name(cur_nimg=state.cur_nimg, batch_size=batch_size, **lr_kwargs)
+    kimg_logs = {"Epoch":0, "Loss":None, "Learning rate": lr,
+                 'Time':state.total_elapsed_time, 'Speed [sec/tick]':None, 'Speed [sec/kimg]':None}
+    epoch_logs = {"Epoch":0, "Epoch Loss":None, "Learning rate": lr}
+    round_logs = {"Epoch":0, "Round":0, "Total rounds":0, "Round Loss":None}
     while True:
         dist.print0(f"Training round {tr_round}")
+        kimg_logs.update({"Epoch": tr_round})
+        epoch_logs.update({"Epoch": tr_round})
+        round_logs.update({"Epoch": tr_round})
+
+        # Evaluate learning rate.
+        lr = dnnlib.util.call_func_by_name(cur_nimg=state.cur_nimg, batch_size=batch_size, **lr_kwargs)
+        training_stats.report('Loss/learning_rate', lr)
+        epoch_logs.update({"Learning rate": lr})
 
         # Evaluate loss and accumulate gradients.
         batch_start_time = time.time()
         misc.set_random_seed(seed, dist.get_rank(), state.cur_nimg)
         optimizer.zero_grad(set_to_none=True)
+        epoch_loss = []
         for round_idx in range(num_accumulation_rounds):
             dist.print0(f"Accumulating {round_idx+1}")
             with misc.ddp_sync(ddp, (round_idx == num_accumulation_rounds - 1)):
@@ -185,11 +200,16 @@ def training_loop(
                 images = encoder.encode_latents(images.to(device))
                 loss = loss_fn(net=ddp, images=images, labels=labels.to(device))
                 training_stats.report('Loss/loss', loss)
-                loss.sum().mul(loss_scaling / batch_gpu_total).backward()
+                run.log(round_logs)
+                loss = loss.sum().mul(loss_scaling / batch_gpu_total)
+                loss.backward()
+            round_logs.update({"Round Loss": float(loss), "Round":round_idx, 
+                               "Total Rounds":tr_round*num_accumulation_rounds+round_idx})
+            epoch_loss.append(float(loss))
+        epoch_loss = np.mean(epoch_loss)
+        epoch_logs.update({"Epoch Loss": epoch_loss})
 
         # Run optimizer and update weights.
-        lr = dnnlib.util.call_func_by_name(cur_nimg=state.cur_nimg, batch_size=batch_size, **lr_kwargs)
-        training_stats.report('Loss/learning_rate', lr)
         for g in optimizer.param_groups:
             g['lr'] = lr
         if force_finite:
@@ -202,10 +222,12 @@ def training_loop(
         state.cur_nimg += batch_size
         if ema is not None:
             ema.update(cur_nimg=state.cur_nimg, batch_size=batch_size)
-        cumulative_training_time += time.time() - batch_start_time        
+        cumulative_training_time += time.time() - batch_start_time
 
         # Report status.
         done = (state.cur_nimg >= stop_at_nimg)
+        epoch_logs.update({"Time": cumulative_training_time})
+        run.log(epoch_logs)
         if status_nimg is not None and (done or state.cur_nimg % status_nimg == 0) and (state.cur_nimg != start_nimg or start_nimg == 0):
             cur_time = time.time()
             state.total_elapsed_time += cur_time - prev_status_time
@@ -221,11 +243,13 @@ def training_loop(
                 'gpumem',       f"{training_stats.report0('Resources/peak_gpu_mem_gb',                  torch.cuda.max_memory_allocated(device) / 2**30):<6.2f}",
                 'reserved',     f"{training_stats.report0('Resources/peak_gpu_mem_reserved_gb',         torch.cuda.max_memory_reserved(device) / 2**30):<6.2f}",
             ]))
-            iter_logs = {
-                'time' : state.total_elapsed_time,
-                'sec/tick' : cur_time - prev_status_time,
-                'sec/kimg' : cumulative_training_time / max(state.cur_nimg - prev_status_nimg, 1) * 1e3,
-            }
+            kimg_logs.update({
+                'Loss': epoch_loss,
+                'Time' : state.total_elapsed_time,
+                'Speed [sec/tick]' : cur_time - prev_status_time,
+                'Speed [sec/kimg]' : cumulative_training_time / max(state.cur_nimg - prev_status_nimg, 1) * 1e3,
+            })
+            run.log(kimg_logs)
             cumulative_training_time = 0
             prev_status_nimg = state.cur_nimg
             prev_status_time = cur_time
