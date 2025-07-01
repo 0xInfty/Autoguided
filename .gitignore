@@ -4,6 +4,7 @@ Backup*
 .vscode/
 *.txt
 *.yml
+wandb/
 
 # Custom, needed for pyvdirs
 dirs*.json
