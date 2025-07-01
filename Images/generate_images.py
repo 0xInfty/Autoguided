@@ -280,6 +280,7 @@ def parse_int_list(s):
 @click.option('--net',                      help='Main network pickle filename', metavar='PATH|URL',                type=str, default=None)
 @click.option('--gnet',                     help='Guiding network pickle filename', metavar='PATH|URL',             type=str, default=None)
 @click.option('--outdir',                   help='Where to save the output images', metavar='DIR',                  type=str, required=True)
+@click.option('--results/--no-results',     help='Whether to send output to Results or to Data', metavar='BOOL',    type=bool, default=False, show_default=True)
 @click.option('--subdirs',                  help='Create subdirectory for every 1000 seeds',                        is_flag=True)
 @click.option('--seeds',                    help='List of random seeds (e.g. 1,2,5-10)', metavar='LIST',            type=parse_int_list, default='16-19', show_default=True)
 @click.option('--class', 'class_idx',       help='Class label  [default: random]', metavar='INT',                   type=click.IntRange(min=0), default=None)
@@ -339,7 +340,11 @@ def cmdline(preset, **opts):
         log.info("Guidance cannot be activated: no guidance weight in configuration preset")
     opts.guidance = opts.guidance_weight # Rename for `generate_images` to work
     del opts.guidance_weight
-    opts.outdir = os.path.join(dirs.DATA_HOME, opts.outdir)
+    if opts.results:
+        opts.outdir = os.path.join(dirs.RESULTS_HOME, "Images", opts.outdir)
+    else: 
+        opts.outdir = os.path.join(dirs.DATA_HOME, opts.outdir)
+    del opts.results
 
     # Generate.
     dist.init()
