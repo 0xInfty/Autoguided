@@ -169,13 +169,14 @@ def training_loop(
     prev_time = time.time()
     prev_status_nimg = state.cur_nimg
     cumulative_training_time = 0
+    prev_cumulative_training_time = 0
     start_nimg = state.cur_nimg
     stats_jsonl = None
     tr_round = 0
     lr = dnnlib.util.call_func_by_name(cur_nimg=state.cur_nimg, batch_size=batch_size, **lr_kwargs)
     kimg_logs = {"Epoch":0, "Loss":None, "Learning rate": lr,
-                 'Time':state.total_elapsed_time, 'Speed [sec/tick]':None, 'Speed [sec/kimg]':None}
-    epoch_logs = {"Epoch":0, "Epoch Loss":None, "Learning rate": lr}
+                 'Total Time':state.total_elapsed_time, 'Speed [sec/tick]':None, 'Speed [sec/kimg]':None}
+    epoch_logs = {"Epoch":0, "Epoch Loss":None, "Learning rate": lr, "Training Time":cumulative_training_time}
     round_logs = {"Epoch":0, "Round":0, "Total rounds":0, "Round Loss":None}
     while True:
         dist.print0(f"Training round {tr_round}")
@@ -226,7 +227,7 @@ def training_loop(
 
         # Report status.
         done = (state.cur_nimg >= stop_at_nimg)
-        epoch_logs.update({"Time": cumulative_training_time})
+        epoch_logs.update({"Training Time": cumulative_training_time})
         run.log(epoch_logs)
         if status_nimg is not None and (done or state.cur_nimg % status_nimg == 0) and (state.cur_nimg != start_nimg or start_nimg == 0):
             cur_time = time.time()
@@ -245,12 +246,12 @@ def training_loop(
             ]))
             kimg_logs.update({
                 'Loss': epoch_loss,
-                'Time' : state.total_elapsed_time,
+                'Total Time' : state.total_elapsed_time,
                 'Speed [sec/tick]' : cur_time - prev_status_time,
-                'Speed [sec/kimg]' : cumulative_training_time / max(state.cur_nimg - prev_status_nimg, 1) * 1e3,
+                'Speed [sec/kimg]' : (cumulative_training_time - prev_cumulative_training_time) / max(state.cur_nimg - prev_status_nimg, 1) * 1e3,
             })
             run.log(kimg_logs)
-            cumulative_training_time = 0
+            prev_cumulative_training_time = cumulative_training_time
             prev_status_nimg = state.cur_nimg
             prev_status_time = cur_time
             torch.cuda.reset_peak_memory_stats()
