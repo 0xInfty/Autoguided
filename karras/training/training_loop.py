@@ -108,6 +108,7 @@ def training_loop(
     if batch_gpu is None or batch_gpu > batch_gpu_total:
         batch_gpu = batch_gpu_total
     num_accumulation_rounds = batch_gpu_total // batch_gpu
+    batch_round = batch_gpu_total * dist.get_world_size()
     dist.print0("\nBatch size calculation")
     dist.print0(">>> World size", dist.get_world_size())
     dist.print0(">>> Batch GPU", batch_gpu)
@@ -139,6 +140,8 @@ def training_loop(
             is_selection_waiting = False
             dist.print0("Data selection with early-start execution strategy")
         dist.print0("Data selection configuration =", selection_kwargs)
+        selection_batch_round = int(batch_round * (1 - selection_kwargs.filter_ratio) / selection_kwargs.N)
+        selection_batch_round *= selection_kwargs.N
     else: 
         run_selection = False
         is_selection_waiting = False
@@ -313,10 +316,14 @@ def training_loop(
                         mean_ref_loss = torch.mean(ref_loss, dim=(1,2,3))
                         indices = dnnlib.util.call_func_by_name(mean_loss, mean_ref_loss, **selection_kwargs)
                         loss = loss[indices] # Use indices of the selection mini-batch
+                        state.cur_nimg += selection_batch_round
                     except ValueError:
                         dist.print0("Selection has crashed, so it has been deactivated")
                         run_selection = False
                         is_selection_waiting = False
+                        state.cur_nimg += batch_round
+                else:
+                    state.cur_nimg += batch_round
 
                 # Accumulate loss
                 loss.sum().mul(loss_scaling / batch_gpu_total).backward()
@@ -333,7 +340,6 @@ def training_loop(
         optimizer.step()
 
         # Update EMA and training state.
-        state.cur_nimg += batch_size
         if ema is not None:
             ema.update(cur_nimg=state.cur_nimg, batch_size=batch_size)
         cumulative_training_time += time.time() - batch_start_time
