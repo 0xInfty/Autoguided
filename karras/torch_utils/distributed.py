@@ -112,10 +112,10 @@ class CheckpointIO:
         if verbose:
             print0('done')
 
-    def load(self, pt_path, verbose=True):
+    def load(self, pt_path, verbose=True, weights_only=True):
         if verbose:
             print0(f'Loading {pt_path} ... ', end='', flush=True)
-        data = torch.load(pt_path, map_location=torch.device('cpu'))
+        data = torch.load(pt_path, map_location=torch.device('cpu'), weights_only=weights_only)
         for name, obj in self._state_objs.items():
             if obj is None:
                 pass

@@ -15,6 +15,7 @@ import time
 import copy
 import pickle
 import psutil
+import builtins
 import numpy as np
 import torch
 import wandb
@@ -24,7 +25,7 @@ import karras.torch_utils.distributed as dist
 import karras.torch_utils.training_stats as training_stats
 import karras.torch_utils.persistence as persistence
 import karras.torch_utils.misc as misc
-
+import ours.selection as sel
 from ours.utils import move_wandb_files, get_wandb_name
 
 #----------------------------------------------------------------------------
@@ -71,6 +72,7 @@ def training_loop(
     optimizer_kwargs    = dict(class_name='torch.optim.Adam', betas=(0.9, 0.99)),
     lr_kwargs           = dict(func_name='karras.training.training_loop.learning_rate_schedule'),
     ema_kwargs          = dict(class_name='karras.training.phema.PowerFunctionEMA'),
+    selection_kwargs    = dict(func_name='ours.selection.jointly_sample_batch', N=8, filter_ratio=0.8),
 
     run_dir             = '.',      # Output directory.
     seed                = 0,        # Global random seed.
@@ -78,6 +80,13 @@ def training_loop(
     batch_gpu           = None,     # Limit batch size per GPU. None = no limit.
     total_nimg          = 8<<30,    # Train for a total of N training images.
     slice_nimg          = None,     # Train for a maximum of N training images in one invocation. None = no limit.
+
+    ref_path            = None,     # Reference model path - will be used for data selection if needed
+
+    selection           = False,    # Run data selection
+    selection_late      = False,    # Run data selection once the learner becomes better than the ref
+    selection_early     = False,    # Run data selection only while the learner is worse than the ref
+
     status_nimg         = 128<<10,  # Report status every N training images. None = disable.
     snapshot_nimg       = 8<<20,    # Save network snapshot every N training images. None = disable.
     checkpoint_nimg     = 128<<20,  # Save state checkpoint every N training images. None = disable.
@@ -100,6 +109,7 @@ def training_loop(
     if batch_gpu is None or batch_gpu > batch_gpu_total:
         batch_gpu = batch_gpu_total
     num_accumulation_rounds = batch_gpu_total // batch_gpu
+    loss_factor = loss_scaling / batch_gpu_total
     dist.print0("\nBatch size calculation")
     dist.print0(">>> World size", dist.get_world_size())
     dist.print0(">>> Batch GPU", batch_gpu)
@@ -112,6 +122,31 @@ def training_loop(
     assert snapshot_nimg is None or (snapshot_nimg % batch_size == 0 and snapshot_nimg % 1024 == 0)
     assert checkpoint_nimg is None or (checkpoint_nimg % batch_size == 0 and checkpoint_nimg % 1024 == 0)
 
+    # Set up data selection
+    dist.print0("Data selection =", selection)
+    is_ref_available = ref_path is not None
+    if not is_ref_available and selection:
+        raise ValueError("Missing reference model")
+    if selection:
+        if selection_late:
+            run_selection = False
+            is_selection_waiting = True
+            dist.print0("Data selection with delayed execution strategy")
+        elif selection_early:
+            run_selection = True
+            is_selection_waiting = True
+            dist.print0("Data selection programmed stop strategy")
+        else:
+            run_selection = True
+            is_selection_waiting = False
+            dist.print0("Data selection with early-start execution strategy")
+        dist.print0("Data selection configuration =", selection_kwargs)
+        selection_loss_factor = 1/selection_kwargs.filter_ratio
+    else: 
+        run_selection = False
+        is_selection_waiting = False
+    net_beats_ref = False
+    
     # Setup dataset, encoder, and network.
     dist.print0('Loading dataset...')
     dataset_obj = dnnlib.util.construct_class_by_name(**dataset_kwargs)
@@ -123,6 +158,11 @@ def training_loop(
     interface_kwargs = dict(img_resolution=ref_image.shape[-1], img_channels=ref_image.shape[1], label_dim=ref_label.shape[-1])
     net = dnnlib.util.construct_class_by_name(**network_kwargs, **interface_kwargs)
     net.train().requires_grad_(True).to(device)
+    if is_ref_available:
+        dist.print0('Constructing reference network...')
+        interface_kwargs = dict(img_resolution=ref_image.shape[-1], img_channels=ref_image.shape[1], label_dim=ref_label.shape[-1])
+        ref = dnnlib.util.construct_class_by_name(**network_kwargs, **interface_kwargs)
+        ref.eval().requires_grad_(False).to(device)
 
     # Print network summary.
     if dist.get_rank() == 0:
@@ -132,6 +172,15 @@ def training_loop(
             torch.zeros([batch_gpu, net.label_dim], device=device),
         ], max_nesting=2)
 
+    # Print reference network summary.
+    if is_ref_available:
+        if dist.get_rank() == 0:
+            misc.print_module_summary(ref, [
+                torch.zeros([batch_gpu, ref.img_channels, ref.img_resolution, ref.img_resolution], device=device),
+                torch.ones([batch_gpu], device=device),
+                torch.zeros([batch_gpu, ref.label_dim], device=device),
+            ], max_nesting=2)
+
     # Setup training state.
     dist.print0('Setting up training state...')
     state = dnnlib.EasyDict(cur_nimg=0, total_elapsed_time=0)
@@ -140,9 +189,16 @@ def training_loop(
     optimizer = dnnlib.util.construct_class_by_name(params=net.parameters(), **optimizer_kwargs)
     ema = dnnlib.util.construct_class_by_name(net=net, **ema_kwargs) if ema_kwargs is not None else None
 
-    # Load previous checkpoint and decide how long to train.
+    # Load previous checkpoint
     checkpoint = dist.CheckpointIO(state=state, net=net, loss_fn=loss_fn, optimizer=optimizer, ema=ema)
     checkpoint.load_latest(run_dir)
+    if is_ref_available: 
+        with builtins.open(ref_path, "rb") as f:
+            data = dnnlib.EasyDict(pickle.load(f))
+        ref = data.ema.to(device)
+        ref.eval().requires_grad_(False)
+    
+    # Decide how long to train.
     stop_at_nimg = total_nimg
     if slice_nimg is not None:
         granularity = checkpoint_nimg if checkpoint_nimg is not None else snapshot_nimg if snapshot_nimg is not None else batch_size
@@ -166,7 +222,6 @@ def training_loop(
     # Main training loop.
     dataset_sampler = misc.InfiniteSampler(dataset=dataset_obj, rank=dist.get_rank(), num_replicas=dist.get_world_size(), seed=seed, start_idx=state.cur_nimg)
     dataset_iterator = iter(dnnlib.util.construct_class_by_name(dataset=dataset_obj, sampler=dataset_sampler, batch_size=batch_gpu, **data_loader_kwargs))
-    prev_time = time.time()
     prev_status_nimg = state.cur_nimg
     cumulative_training_time = 0
     prev_cumulative_training_time = 0
@@ -176,8 +231,13 @@ def training_loop(
     lr = dnnlib.util.call_func_by_name(cur_nimg=state.cur_nimg, batch_size=batch_size, **lr_kwargs)
     kimg_logs = {"Epoch":0, "Loss":None, "Learning rate": lr,
                  'Total Time':state.total_elapsed_time, 'Speed [sec/tick]':None, 'Speed [sec/kimg]':None}
-    epoch_logs = {"Epoch":0, "Epoch Loss":None, "Learning rate": lr, "Training Time":cumulative_training_time}
+    epoch_logs = {"Epoch":0, "Epoch Loss":None, "Learning rate": lr, "Training Time [sec]":cumulative_training_time*1000}
     round_logs = {"Epoch":0, "Round":0, "Total rounds":0, "Round Loss":None}
+    if selection:
+        epoch_logs.update({"Epoch Super-Batch Learner Loss": None, "Epoch Super-Batch Reference Loss": None,
+                           "Selection time [sec]":cumulative_selection_time*1000})
+        round_logs.update({"Round Super-Batch Learner Loss": None, "Round Super-Batch Reference Loss": None})
+        cumulative_selection_time = 0
     while True:
         dist.print0(f"Training round {tr_round}")
         kimg_logs.update({"Epoch": tr_round})
@@ -185,30 +245,86 @@ def training_loop(
         round_logs.update({"Epoch": tr_round})
 
         # Evaluate learning rate.
+        batch_start_time = time.time()
         lr = dnnlib.util.call_func_by_name(cur_nimg=state.cur_nimg, batch_size=batch_size, **lr_kwargs)
         training_stats.report('Loss/learning_rate', lr)
         epoch_logs.update({"Learning rate": lr})
 
         # Evaluate loss and accumulate gradients.
-        batch_start_time = time.time()
         misc.set_random_seed(seed, dist.get_rank(), state.cur_nimg)
         optimizer.zero_grad(set_to_none=True)
         epoch_loss = []
+        epoch_ref_loss, epoch_learner_loss = [], []
         for round_idx in range(num_accumulation_rounds):
             dist.print0(f"Accumulating {round_idx+1}")
             with misc.ddp_sync(ddp, (round_idx == num_accumulation_rounds - 1)):
+
+                # Evaluate loss
                 images, labels = next(dataset_iterator)
                 images = encoder.encode_latents(images.to(device))
                 loss = loss_fn(net=ddp, images=images, labels=labels.to(device))
+                loss = loss.sum(dim=(1,2,3)).mul(loss_factor)
                 training_stats.report('Loss/loss', loss)
-                run.log(round_logs)
-                loss = loss.sum().mul(loss_scaling / batch_gpu_total)
-                loss.backward()
-            round_logs.update({"Round Loss": float(loss), "Round":round_idx, 
+                
+                # Calculate reference loss
+                if run_selection or is_selection_waiting:
+                    selection_time_start = time.time()
+                    ref_loss = loss_fn(net=ref, images=images, labels=labels.to(device))
+                    ref_loss = loss.sum(dim=(1,2,3)).mul(loss_factor)
+                    training_stats.report('RefLoss/ref_loss', ref_loss)
+                    epoch_learner_loss.append(float(loss.mean()))
+                    epoch_ref_loss.append(float(ref_loss.mean()))
+                    if not net_beats_ref and loss.mean() < ref_loss.mean():
+                        net_beats_ref = True
+                        dist.print0("Network has beaten the reference")
+                        if is_selection_waiting:
+                            run_selection = not(run_selection)
+                            if run_selection: dist.print0("Selection will now be run")
+                            else: dist.print0("Selection will now be stopped")
+                            is_selection_waiting = False
+                    cumulative_selection_time += time.time() - selection_time_start
+
+                # Calculate overall loss
+                if run_selection:
+                    selection_time_start = time.time()
+                    try:
+                        dist.print0("Using selection")
+                        dist.print0("Average Super-Batch Learner Loss =", float(loss.mean()))
+                        dist.print0("Average Super-Batch Reference Loss =", float(ref_loss.mean()))
+                        indices = dnnlib.util.call_func_by_name(loss, ref_loss, **selection_kwargs)
+                        loss = loss[indices] # Use indices of the selection mini-batch
+                    except ValueError:
+                        dist.print0("Selection has crashed, so it has been deactivated")
+                        run_selection = False
+                        is_selection_waiting = False
+                    cumulative_selection_time += time.time() - selection_time_start
+                epoch_loss.append(float(loss.mean()))
+
+                # Accumulate loss and calculate gradients
+                if len(epoch_ref_loss)!=0:
+                    loss.sum().backward()
+                else:
+                    loss.sum().mul(selection_loss_factor).backward()
+                    # Instead of B, I'm only adding up f*B terms, so I multiply by 1/f
+
+            # Log on each round and each epoch
+            round_logs.update({"Round Loss": epoch_loss[-1], "Round":round_idx, 
                                "Total Rounds":tr_round*num_accumulation_rounds+round_idx})
-            epoch_loss.append(float(loss))
-        epoch_loss = np.mean(epoch_loss)
-        epoch_logs.update({"Epoch Loss": epoch_loss})
+            if len(epoch_ref_loss)!=0:
+                round_logs.update({"Round Super-Batch Learner Loss": epoch_learner_loss[-1],
+                                   "Round Super-Batch Reference Loss": epoch_ref_loss[-1]})
+            else:
+                round_logs.update({"Round Super-Batch Learner Loss": None,
+                                   "Round Super-Batch Reference Loss": None})
+            run.log(round_logs)
+        epoch_logs.update({"Epoch Loss": np.mean(epoch_loss)})
+        if len(epoch_ref_loss)!=0:
+            epoch_logs.update({"Epoch Super-Batch Learner Loss": np.mean(epoch_learner_loss),
+                               "Epoch Super-Batch Reference Loss": np.mean(epoch_ref_loss[-1]),
+                               "Selection time [sec]":cumulative_selection_time*1000})
+        else:
+            round_logs.update({"Epoch Super-Batch Learner Loss": None,
+                               "Epoch Super-Batch Reference Loss": None})
 
         # Run optimizer and update weights.
         for g in optimizer.param_groups:
@@ -227,7 +343,7 @@ def training_loop(
 
         # Report status.
         done = (state.cur_nimg >= stop_at_nimg)
-        epoch_logs.update({"Training Time": cumulative_training_time})
+        epoch_logs.update({"Training Time [sec]": cumulative_training_time})
         run.log(epoch_logs)
         if status_nimg is not None and (done or state.cur_nimg % status_nimg == 0) and (state.cur_nimg != start_nimg or start_nimg == 0):
             cur_time = time.time()
@@ -249,6 +365,7 @@ def training_loop(
                 'Total Time' : state.total_elapsed_time,
                 'Speed [sec/tick]' : cur_time - prev_status_time,
                 'Speed [sec/kimg]' : (cumulative_training_time - prev_cumulative_training_time) / max(state.cur_nimg - prev_status_nimg, 1) * 1e3,
+                'Seen images [kimg]': state.cur_nimg,
             })
             run.log(kimg_logs)
             prev_cumulative_training_time = cumulative_training_time
@@ -298,5 +415,8 @@ def training_loop(
             break
         else:
             tr_round += 1
+
+    run.finish()
+    move_wandb_files(run_dir, run_dir)
 
 #----------------------------------------------------------------------------
