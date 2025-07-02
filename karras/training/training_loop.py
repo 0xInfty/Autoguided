@@ -185,7 +185,7 @@ def training_loop(
 
     # Setup training state.
     dist.print0('Setting up training state...')
-    state = dnnlib.EasyDict(cur_nimg=0, total_elapsed_time=0)
+    state = dnnlib.EasyDict(cur_nimg=0, total_elapsed_time=0, cur_epoch=0)
     ddp = torch.nn.parallel.DistributedDataParallel(net, device_ids=[device])
     loss_fn = dnnlib.util.construct_class_by_name(**loss_kwargs)
     optimizer = dnnlib.util.construct_class_by_name(params=net.parameters(), **optimizer_kwargs)
@@ -222,29 +222,31 @@ def training_loop(
                     total_nimg=total_nimg, loss_scaling=loss_scaling, device=device))
 
     # Main training loop.
-    dataset_sampler = misc.InfiniteSampler(dataset=dataset_obj, rank=dist.get_rank(), num_replicas=dist.get_world_size(), seed=seed, start_idx=state.cur_nimg)
+    dataset_sampler = misc.InfiniteSampler(dataset=dataset_obj, rank=dist.get_rank(), num_replicas=dist.get_world_size(), 
+                                           seed=seed, start_idx=state.cur_epoch*batch_size)
     dataset_iterator = iter(dnnlib.util.construct_class_by_name(dataset=dataset_obj, sampler=dataset_sampler, batch_size=batch_gpu, **data_loader_kwargs))
     prev_status_nimg = state.cur_nimg
     cumulative_training_time = 0
     prev_cumulative_training_time = 0
     start_nimg = state.cur_nimg
     stats_jsonl = None
-    tr_round = 0
     lr = dnnlib.util.call_func_by_name(cur_nimg=state.cur_nimg, batch_size=batch_size, **lr_kwargs)
-    kimg_logs = {"Epoch":0, "Loss":None, "Learning rate": lr,
+    kimg_logs = {"Epoch":state.cur_epoch, "Loss":None, 'Seen images [kimg]': 0,
                  'Total Time':state.total_elapsed_time, 'Speed [sec/tick]':None, 'Speed [sec/kimg]':None}
-    epoch_logs = {"Epoch":0, "Epoch Loss":None, "Learning rate": lr, "Training Time [sec]":cumulative_training_time*1000}
-    round_logs = {"Epoch":0, "Round":0, "Total rounds":0, "Round Loss":None}
+    epoch_logs = {"Epoch":state.cur_epoch, "Epoch Loss":None, 
+                  "Learning rate": lr, "Training Time [sec]":cumulative_training_time*1000}
+    round_logs = {"Epoch":state.cur_epoch, "Round":0, "Total rounds":state.cur_epoch*num_accumulation_rounds, 
+                  "Round Loss":None}
     if selection:
         epoch_logs.update({"Epoch Super-Batch Learner Loss": None, "Epoch Super-Batch Reference Loss": None,
                            "Selection time [sec]":cumulative_selection_time*1000})
         round_logs.update({"Round Super-Batch Learner Loss": None, "Round Super-Batch Reference Loss": None})
         cumulative_selection_time = 0
     while True:
-        dist.print0(f"Training round {tr_round}")
-        kimg_logs.update({"Epoch": tr_round})
-        epoch_logs.update({"Epoch": tr_round})
-        round_logs.update({"Epoch": tr_round})
+        dist.print0(f"Training round {state.cur_epoch}")
+        kimg_logs.update({"Epoch": state.cur_epoch})
+        epoch_logs.update({"Epoch": state.cur_epoch})
+        round_logs.update({"Epoch": state.cur_epoch})
 
         # Evaluate learning rate.
         batch_start_time = time.time()
@@ -253,7 +255,7 @@ def training_loop(
         epoch_logs.update({"Learning rate": lr})
 
         # Evaluate loss and accumulate gradients.
-        misc.set_random_seed(seed, dist.get_rank(), tr_round*batch_size)
+        misc.set_random_seed(seed, dist.get_rank(), state.cur_epoch*batch_size)
         optimizer.zero_grad(set_to_none=True)
         epoch_loss = []
         epoch_ref_loss, epoch_learner_loss = [], []
@@ -315,7 +317,7 @@ def training_loop(
 
             # Log on each round and each epoch
             round_logs.update({"Round Loss": epoch_loss[-1], "Round":round_idx, 
-                               "Total Rounds":tr_round*num_accumulation_rounds+round_idx})
+                               "Total Rounds":state.cur_epoch*num_accumulation_rounds+round_idx})
             if len(epoch_ref_loss)!=0:
                 round_logs.update({"Round Super-Batch Learner Loss": epoch_learner_loss[-1],
                                    "Round Super-Batch Reference Loss": epoch_ref_loss[-1]})
@@ -329,7 +331,7 @@ def training_loop(
                                "Epoch Super-Batch Reference Loss": np.mean(epoch_ref_loss[-1]),
                                "Selection time [sec]":cumulative_selection_time*1000})
         else:
-            round_logs.update({"Epoch Super-Batch Learner Loss": None,
+            epoch_logs.update({"Epoch Super-Batch Learner Loss": None,
                                "Epoch Super-Batch Reference Loss": None})
 
         # Run optimizer and update weights.
@@ -371,7 +373,7 @@ def training_loop(
                 'Total Time' : state.total_elapsed_time,
                 'Speed [sec/tick]' : cur_time - prev_status_time,
                 'Speed [sec/kimg]' : (cumulative_training_time - prev_cumulative_training_time) / max(state.cur_nimg - prev_status_nimg, 1) * 1e3,
-                'Seen images [kimg]': state.cur_nimg,
+                'Seen images [kimg]': state.cur_nimg//1000,
             })
             run.log(kimg_logs)
             prev_cumulative_training_time = cumulative_training_time
@@ -404,7 +406,7 @@ def training_loop(
             for ema_net, ema_suffix in ema_list:
                 data = dnnlib.EasyDict(encoder=encoder, dataset_kwargs=dataset_kwargs, loss_fn=loss_fn)
                 data.ema = copy.deepcopy(ema_net).cpu().eval().requires_grad_(False).to(torch.float16)
-                fname = f'network-snapshot-{state.cur_nimg//1000:07d}{ema_suffix}.pkl'
+                fname = f'network-snapshot-{state.cur_epoch:07d}{ema_suffix}.pkl'
                 dist.print0(f'Saving {fname} ... ', end='', flush=True)
                 with open(os.path.join(run_dir, fname), 'wb') as f:
                     pickle.dump(data, f)
@@ -413,14 +415,14 @@ def training_loop(
 
         # Save state checkpoint.
         if checkpoint_nimg is not None and (done or state.cur_nimg % checkpoint_nimg == 0) and state.cur_nimg != start_nimg:
-            checkpoint.save(os.path.join(run_dir, f'training-state-{state.cur_nimg//1000:07d}.pt'))
+            checkpoint.save(os.path.join(run_dir, f'training-state-{state.cur_epoch:07d}.pt'))
             misc.check_ddp_consistency(net)
 
         # Done?
         if done:
             break
         else:
-            tr_round += 1
+            state.cur_epoch += 1
 
     run.finish()
     move_wandb_files(run_dir, run_dir)
