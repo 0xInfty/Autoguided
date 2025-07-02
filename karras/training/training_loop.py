@@ -19,6 +19,7 @@ import builtins
 import numpy as np
 import torch
 import wandb
+import pyvtorch.aux as taux
 
 import karras.dnnlib as dnnlib
 import karras.torch_utils.distributed as dist
@@ -212,8 +213,13 @@ def training_loop(
 
     # Set up a W&B experiment
     os.environ["WANDB_DIR"] = run_dir
+    group_name = get_wandb_name(run_dir)
+    if dist.get_world_size()>1:
+        run_name = f"{group_name}_R{dist.get_rank()}"
+    else:
+        run_name = group_name
     run = wandb.init(
-        entity="ajest", project="Images", name=get_wandb_name(run_dir),
+        entity="ajest", project="Images", name=run_name, group=group_name,
         config=dict(dataset_kwargs=dataset_kwargs, encoder_kwargs=encoder_kwargs,
                     data_loader_kwargs=data_loader_kwargs, network_kwargs=network_kwargs,
                     loss_kwargs=loss_kwargs, optimizer_kwargs=optimizer_kwargs,
@@ -221,7 +227,8 @@ def training_loop(
                     selection_kwargs=selection_kwargs,
                     selection=selection, selection_early=selection_early, selection_late=selection_late,
                     seed=seed, batch_size=batch_size, batch_gpu=batch_gpu, 
-                    total_nimg=total_nimg, loss_scaling=loss_scaling, device=device))
+                    total_nimg=total_nimg, loss_scaling=loss_scaling, device=device),
+        settings=wandb.Settings(x_stats_gpu_device_ids=[taux.get_device_number(device)]))
 
     # Main training loop.
     dataset_sampler = misc.InfiniteSampler(dataset=dataset_obj, rank=dist.get_rank(), num_replicas=dist.get_world_size(), 
@@ -309,11 +316,10 @@ def training_loop(
                 epoch_loss.append(float(loss.mean()))
 
                 # Accumulate loss and calculate gradients
-                if len(epoch_ref_loss)!=0:
-                    loss.sum().backward()
-                else:
+                if run_selection:
                     loss.sum().mul(selection_loss_factor).backward()
                     # Instead of B, I'm only adding up f*B terms, so I multiply by 1/f
+                else: loss.sum().backward()
 
             # Log on each round and each epoch
             round_logs.update({"Round Loss": epoch_loss[-1], "Round":round_idx, 

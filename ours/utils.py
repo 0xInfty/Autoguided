@@ -111,12 +111,13 @@ def move_wandb_files(origin, destination):
         os.remove(os.path.join(origin, "debug.log"))
     if os.path.isfile(os.path.join(origin, "debug-internal.log")): 
         os.remove(os.path.join(origin, "debug-internal.log"))
-    folder = [c for c in os.listdir(origin) if c.startswith("run-")][0]
-    if os.path.isdir(os.path.join(origin, folder, "tmp")): 
-        shutil.rmtree(os.path.join(origin, folder, "tmp"))
-    contents = os.listdir(os.path.join(origin, folder))
-    for c in contents:
-        os.rename(os.path.join(origin, folder, c), os.path.join(destination, c))
+    folders = [c for c in os.listdir(origin) if c.startswith("run-")]
+    for folder in folders:
+        if os.path.isdir(os.path.join(origin, folder, "tmp")): 
+            shutil.rmtree(os.path.join(origin, folder, "tmp"))
+        contents = os.listdir(os.path.join(origin, folder))
+        for c in contents:
+            os.rename(os.path.join(origin, folder, c), os.path.join(destination, c))
     shutil.rmtree(origin)
     return
 
