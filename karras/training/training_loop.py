@@ -253,7 +253,7 @@ def training_loop(
         epoch_logs.update({"Learning rate": lr})
 
         # Evaluate loss and accumulate gradients.
-        misc.set_random_seed(seed, dist.get_rank(), state.cur_nimg)
+        misc.set_random_seed(seed, dist.get_rank(), tr_round*batch_size)
         optimizer.zero_grad(set_to_none=True)
         epoch_loss = []
         epoch_ref_loss, epoch_learner_loss = [], []
