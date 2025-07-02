@@ -24,7 +24,6 @@ from matplotlib.colors import LinearSegmentedColormap, LogNorm
 import click
 import tqdm
 import pyvtools.text as vtext
-import wandb
 
 import karras.dnnlib.util as util
 import karras.torch_utils.persistence as persistence
@@ -32,7 +31,6 @@ import karras.training.phema as phema
 
 from ours.utils import FIG1_KWARGS, FIG2_KWARGS, GT_ORIGIN, GT_LOGP_LEVEL
 from ours.utils import is_sample_in_fractal, get_grid_params, create_grid_samples
-from ours.utils import move_wandb_files, get_wandb_name
 import ours.mandala_exploration.fractal_step_by_step as mand
 import ours.selection as sel
 
@@ -360,28 +358,9 @@ def do_train(
             plt_path = plt_pattern % 0
             plt.savefig(plt_path)
 
-    # Set up a W&B experiment
-    os.environ["WANDB_DIR"] = os.path.dirname(log_filename)
-    run = wandb.init(
-        entity="ajest", project="ToyExample", name=get_wandb_name(os.environ["WANDB_DIR"]),
-        config=dict(architecture="ToyModel", dataset="ToyExample",
-                    classes=classes, num_layers=num_layers, hidden_dim=hidden_dim, 
-                    batch_size=batch_size, total_iter=total_iter, seed=seed,
-                    P_mean=P_mean, P_std=P_std, sigma_data=sigma_data, 
-                    lr_ref=lr_ref, lr_iter=lr_iter, ema_std=ema_std,
-                    guidance=guidance, guidance_weight=guidance_weight, 
-                    guide_path=guide_path, guide_interpolation=guide_interpolation,
-                    validation=validation, val_batch_size=val_batch_size, sigma_max=sigma_max,
-                    testing=testing, n_test_samples=n_test_samples, test_batch_size=test_batch_size, 
-                    acid=acid, acid_N=acid_N, acid_f=acid_f, acid_diff=acid_diff, acid_inverted=acid_inverted, 
-                    acid_stability_trick=acid_stability_trick, acid_late=acid_late, acid_early=acid_early,
-                    device=device, log_filename=log_filename),
-        )
-
     # Training loop.
     progress_bar = tqdm.tqdm(range(total_iter))
     for iter_idx in progress_bar:
-        iter_logs = {"Epoch":iter_idx}
         if logging_to_file: log.info("Iteration = %i", iter_idx)
 
         # Run forward-pass
@@ -416,10 +395,10 @@ def do_train(
         if run_acid:
             try:
                 log.warning("Using ACID")
-                iter_logs.update({"Average Super-Batch Learner Loss": float(net_loss.mean()),
-                                  "Average Super-Batch Reference Loss": float(ref_loss.mean())})
+                log.info("Average Super-Batch Learner Loss = %s", float(net_loss.mean()))
                 if guide_interpolation: 
-                    iter_logs.update({"Average Super-Batch Guided Learner Loss": float(acid_loss.mean())})
+                    log.info("Average Super-Batch Guided Learner Loss = %s", float(acid_loss.mean()))
+                log.info("Average Super-Batch Reference Loss = %s", float(ref_loss.mean()))
                 indices = sel.jointly_sample_batch(acid_loss, ref_loss, 
                     N=acid_N, filter_ratio=acid_f,
                     learnability=acid_diff, inverted=acid_inverted,
@@ -434,7 +413,7 @@ def do_train(
             loss = net_loss
 
         # Backpropagate either on the full batch or only on ACID mini-batch
-        iter_logs.update({"Average Learner Loss": float(loss.mean())})
+        log.info("Average Learner Loss = %s", float(loss.mean()))
         loss.mean().backward()
 
         # Update learner parameters
@@ -463,42 +442,41 @@ def do_train(
                 generator=generator, device=device)
 
             # Log validation loss
-            iter_logs.update({"Average Validation Learner Loss": val_results["learner_loss"],
-                              "Average Validation EMA Loss": val_results["ema_loss"],
-                              "Average Validation Learner L2 Distance": val_results["learner_L2_metric"],
-                              "Average Validation EMA L2 Distance": val_results["ema_L2_metric"]})
-            if guidance: 
-                iter_logs.update({"Average Validation Guide Loss": val_results["guide_loss"],
-                                  "Average Validation Guided Learner L2 Distance": val_results["learner_guided_L2_metric"],
-                                  "Average Validation Guided EMA L2 Distance": val_results["ema_guided_L2_metric"]})
-            if run_acid: 
-                iter_logs.update({"Average Validation ACID Reference Loss": val_results["ref_loss"]})
+            log.info("Average Validation Learner Loss = %s", val_results["learner_loss"])
+            log.info("Average Validation EMA Loss = %s", val_results["ema_loss"])
+            if guidance: log.info("Average Validation Guide Loss = %s", val_results["guide_loss"])
+            if run_acid: log.info("Average Validation ACID Reference Loss = %s", val_results["ref_loss"])
 
+            # Log validation L2 metric
+            log.info("Average Validation Learner L2 Distance = %s", val_results["learner_L2_metric"])
+            log.info("Average Validation EMA L2 Distance = %s", val_results["ema_L2_metric"])
+            if guidance:
+                log.info("Average Validation Guided Learner L2 Distance = %s", val_results["learner_guided_L2_metric"])
+                log.info("Average Validation Guided EMA L2 Distance = %s", val_results["ema_guided_L2_metric"])
 
             # Log validation metrics in outer branches of the distribution
             if test_outer:
-                iter_logs.update({"Average Outer Validation Learner Loss": val_results["learner_out_loss"],
-                                  "Average Outer Validation EMA Loss": val_results["ema_out_loss"],
-                                  "Average Outer Validation Learner L2 Distance": val_results["learner_out_L2_metric"],
-                                  "Average Outer Validation EMA L2 Distance": val_results["ema_out_L2_metric"]})
-                if guidance: 
-                    iter_logs.update({"Average Outer Validation Guide Loss": val_results["guide_out_loss"],
-                                     "Average Outer Validation Guided Learner L2 Distance": val_results["learner_guided_out_L2_metric"],
-                                     "Average Outer Validation Guided EMA L2 Distance": val_results["ema_guided_out_L2_metric"]})
-                if run_acid: 
-                    iter_logs.update({"Average Outer Validation ACID Reference Loss": val_results["ref_out_loss"]})
+                log.info("Average Outer Validation Learner Loss = %s", val_results["learner_out_loss"])
+                log.info("Average Outer Validation EMA Loss = %s", val_results["ema_out_loss"])
+                if guidance: log.info("Average Outer Validation Guide Loss = %s", val_results["guide_out_loss"])
+                if run_acid: log.info("Average Outer Validation ACID Reference Loss = %s", val_results["ref_out_loss"])
+                log.info("Average Outer Validation Learner L2 Distance = %s", val_results["learner_out_L2_metric"])
+                log.info("Average Outer Validation EMA L2 Distance = %s", val_results["ema_out_L2_metric"])
+                if guidance:
+                    log.info("Average Outer Validation Guided Learner L2 Distance = %s", val_results["learner_guided_out_L2_metric"])
+                    log.info("Average Outer Validation Guided EMA L2 Distance = %s", val_results["ema_guided_out_L2_metric"])
             
             # Log validation mandala score
             if test_mandala:
-                iter_logs.update({"Validation Learner Mandala Score": val_results["learner_mandala_score"],
-                                  "Validation EMA Mandala Score": val_results["ema_mandala_score"],
-                                  "Validation Learner Classification Score": val_results["learner_classification_score"],
-                                  "Validation EMA Classification Score": val_results["ema_classification_score"]})
+                log.info("Validation Learner Mandala Score = %s", val_results["learner_mandala_score"])
+                log.info("Validation EMA Mandala Score = %s", val_results["ema_mandala_score"])
+                log.info("Validation Learner Classification Score = %s", val_results["learner_classification_score"])
+                log.info("Validation EMA Classification Score = %s", val_results["ema_classification_score"])
                 if guidance:
-                    iter_logs.update({"Validation Guided Learner Mandala Score": val_results["learner_guided_mandala_score"],
-                                      "Validation Guided EMA Mandala Score": val_results["ema_guided_mandala_score"],
-                                      "Validation Guided Learner Classification Score": val_results["learner_guided_classification_score"],
-                                      "Validation Guided EMA Classification Score": val_results["ema_guided_classification_score"]})
+                    log.info("Validation Guided Learner Mandala Score = %s", val_results["learner_guided_mandala_score"])
+                    log.info("Validation Guided EMA Mandala Score = %s", val_results["ema_guided_mandala_score"])
+                    log.info("Validation Guided Learner Classification Score = %s", val_results["learner_guided_classification_score"])
+                    log.info("Validation Guided EMA Classification Score = %s", val_results["ema_guided_classification_score"])
 
         # Visualize resulting sample distribution.
         if plotting_checkpoints and iter_idx % viz_iter == 0:
@@ -514,9 +492,6 @@ def do_train(
             if saving_checkpoint_plots:
                 plt_path = plt_pattern % (iter_idx + 1)
                 plt.savefig(plt_path)
-        
-        # Log everything calculated on this iteration
-        run.log(iter_logs)
     
     log.info("Finished training")
     
@@ -527,46 +502,43 @@ def do_train(
             n_samples=n_test_samples, batch_size=test_batch_size, test_outer=test_outer,
             guidance_weight=guidance_weight,
             generator=generator, device=device)
-        test_logs = {}
 
         # Log test loss
-        test_logs.update({"Average Test Learner Loss": test_results["learner_loss"],
-                          "Average Test EMA Loss": test_results["ema_loss"],
-                          "Average Test Learner L2 Distance": test_results["learner_L2_metric"],
-                          "Average Test EMA L2 Distance": test_results["ema_L2_metric"]})
-        if guidance: 
-            test_logs.update({"Average Test Guide Loss": test_results["guide_loss"],
-                              "Average Test Guided Learner L2 Distance": test_results["learner_guided_L2_metric"],
-                              "Average Test Guided EMA L2 Distance": test_results["ema_guided_L2_metric"]})
-        if run_acid: 
-            test_logs.update({"Average Test ACID Reference Loss": test_results["ref_loss"]})
+        log.warning("Average Test Learner Loss = %s", test_results["learner_loss"])
+        log.warning("Average Test EMA Loss = %s", test_results["ema_loss"])
+        if guidance: log.warning("Average Test Guide Loss = %s", test_results["guide_loss"])
+        if acid: log.warning("Average Test ACID Reference Loss = %s", test_results["ref_loss"])
 
+        # Log test L2 metric
+        log.warning("Average Test Learner L2 Distance = %s", test_results["learner_L2_metric"])
+        log.warning("Average Test EMA L2 Distance = %s", test_results["ema_L2_metric"])
+        if guidance:
+            log.warning("Average Test Guided Learner L2 Distance = %s", test_results["learner_guided_L2_metric"])
+            log.warning("Average Test Guided EMA L2 Distance = %s", test_results["ema_guided_L2_metric"])
 
-        # Log test metrics in outer branches of the distribution
+        # Log metrics on outer branches of the distribution
         if test_outer:
-            test_logs.update({"Average Outer Test Learner Loss": test_results["learner_out_loss"],
-                              "Average Outer Test EMA Loss": test_results["ema_out_loss"],
-                              "Average Outer Test Learner L2 Distance": test_results["learner_out_L2_metric"],
-                              "Average Outer Test EMA L2 Distance": test_results["ema_out_L2_metric"]})
-            if guidance: 
-                test_logs.update({"Average Outer Test Guide Loss": test_results["guide_out_loss"],
-                                    "Average Outer Test Guided Learner L2 Distance": test_results["learner_guided_out_L2_metric"],
-                                    "Average Outer Test Guided EMA L2 Distance": test_results["ema_guided_out_L2_metric"]})
-            if run_acid: 
-                test_logs.update({"Average Outer Test ACID Reference Loss": test_results["ref_out_loss"]})
-        
+            log.warning("Average Outer Test Learner Loss = %s", test_results["learner_out_loss"])
+            log.warning("Average Outer Test EMA Loss = %s", test_results["ema_out_loss"])
+            if guidance: log.warning("Average Outer Test Guide Loss = %s", test_results["guide_out_loss"])
+            if acid: log.warning("Average Outer Test ACID Reference Loss = %s", test_results["ref_out_loss"])
+            log.warning("Average Outer Test Learner L2 Distance = %s", test_results["learner_out_L2_metric"])
+            log.warning("Average Outer Test EMA L2 Distance = %s", test_results["ema_out_L2_metric"])
+            if guidance:
+                log.warning("Average Outer Test Guided Learner L2 Distance = %s", test_results["learner_guided_out_L2_metric"])
+                log.warning("Average Outer Test Guided EMA L2 Distance = %s", test_results["ema_guided_out_L2_metric"])
+
         # Log test mandala score
         if test_mandala:
-            test_logs.update({"Test Learner Mandala Score": test_results["learner_mandala_score"],
-                              "Test EMA Mandala Score": test_results["ema_mandala_score"],
-                              "Test Learner Classification Score": test_results["learner_classification_score"],
-                              "Test EMA Classification Score": test_results["ema_classification_score"]})
+            log.info("Test Learner Mandala Score = %s", test_results["learner_mandala_score"])
+            log.info("Test EMA Mandala Score = %s", test_results["ema_mandala_score"])
+            log.info("Test Learner Classification Score = %s", test_results["learner_classification_score"])
+            log.info("Test EMA Classification Score = %s", test_results["ema_classification_score"])
             if guidance:
-                test_logs.update({"Test Guided Learner Mandala Score": test_results["learner_guided_mandala_score"],
-                                  "Test Guided EMA Mandala Score": test_results["ema_guided_mandala_score"],
-                                  "Test Guided Learner Classification Score": test_results["learner_guided_classification_score"],
-                                  "Test Guided EMA Classification Score": test_results["ema_guided_classification_score"]})
-
+                log.info("Test Guided Learner Mandala Score = %s", test_results["learner_guided_mandala_score"])
+                log.info("Test Guided EMA Mandala Score = %s", test_results["ema_guided_mandala_score"])
+                log.info("Test Guided Learner Classification Score = %s", test_results["learner_guided_classification_score"])
+                log.info("Test Guided EMA Classification Score = %s", test_results["ema_guided_classification_score"])
 
     # Save and visualize last iteration
     if saving_checkpoints:
@@ -588,9 +560,6 @@ def do_train(
         if saving_checkpoint_plots and logging_to_file: 
             loss_plt_path = log_filename.replace("log", "plot").replace(".txt", ".png")
             plot_loss(results, loss_plt_path);
-
-    run.finish()
-    move_wandb_files(os.path.dirname(log_filename), os.path.dirname(log_filename))
 
 #----------------------------------------------------------------------------
 # Custom helper functions
