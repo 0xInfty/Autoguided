@@ -92,7 +92,7 @@ class HuggingFaceDataset(Dataset):
         if self._xflip[idx]:
             assert image.ndim == 3 # CHW
             image = image[:, :, ::-1]
-        return image, self.get_label(idx)
+        return idx, image, self.get_label(idx)
 
     def _load_raw_image(self, raw_idx):
         raw_idx = np.array([raw_idx], dtype=int)

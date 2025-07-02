@@ -152,7 +152,7 @@ def training_loop(
     # Setup dataset, encoder, and network.
     dist.print0('Loading dataset...')
     dataset_obj = dnnlib.util.construct_class_by_name(**dataset_kwargs)
-    ref_image, ref_label = dataset_obj[0]
+    _, ref_image, ref_label = dataset_obj[0]
     dist.print0('Setting up encoder...')
     encoder = dnnlib.util.construct_class_by_name(**encoder_kwargs)
     ref_image = encoder.encode_latents(torch.as_tensor(ref_image).to(device).unsqueeze(0))
@@ -218,6 +218,8 @@ def training_loop(
                     data_loader_kwargs=data_loader_kwargs, network_kwargs=network_kwargs,
                     loss_kwargs=loss_kwargs, optimizer_kwargs=optimizer_kwargs,
                     lr_kwargs=lr_kwargs, ema_kwargs=ema_kwargs,
+                    selection_kwargs=selection_kwargs,
+                    selection=selection, selection_early=selection_early, selection_late=selection_late,
                     seed=seed, batch_size=batch_size, batch_gpu=batch_gpu, 
                     total_nimg=total_nimg, loss_scaling=loss_scaling, device=device))
 
@@ -228,6 +230,7 @@ def training_loop(
     prev_status_nimg = state.cur_nimg
     cumulative_training_time = 0
     prev_cumulative_training_time = 0
+    cumulative_selection_time = 0
     start_nimg = state.cur_nimg
     stats_jsonl = None
     lr = dnnlib.util.call_func_by_name(cur_nimg=state.cur_nimg, batch_size=batch_size, **lr_kwargs)
@@ -241,7 +244,6 @@ def training_loop(
         epoch_logs.update({"Epoch Super-Batch Learner Loss": None, "Epoch Super-Batch Reference Loss": None,
                            "Selection time [sec]":cumulative_selection_time*1000})
         round_logs.update({"Round Super-Batch Learner Loss": None, "Round Super-Batch Reference Loss": None})
-        cumulative_selection_time = 0
     while True:
         dist.print0(f"Training round {state.cur_epoch}")
         kimg_logs.update({"Epoch": state.cur_epoch})
@@ -264,7 +266,7 @@ def training_loop(
             with misc.ddp_sync(ddp, (round_idx == num_accumulation_rounds - 1)):
 
                 # Evaluate loss
-                images, labels = next(dataset_iterator)
+                indices, images, labels = next(dataset_iterator)
                 images = encoder.encode_latents(images.to(device))
                 loss = loss_fn(net=ddp, images=images, labels=labels.to(device))
                 loss = loss.sum(dim=(1,2,3)).mul(loss_factor)
@@ -274,7 +276,7 @@ def training_loop(
                 if run_selection or is_selection_waiting:
                     selection_time_start = time.time()
                     ref_loss = loss_fn(net=ref, images=images, labels=labels.to(device))
-                    ref_loss = loss.sum(dim=(1,2,3)).mul(loss_factor)
+                    ref_loss = ref_loss.sum(dim=(1,2,3)).mul(loss_factor)
                     training_stats.report('RefLoss/ref_loss', ref_loss)
                     epoch_learner_loss.append(float(loss.mean()))
                     epoch_ref_loss.append(float(ref_loss.mean()))
@@ -293,10 +295,8 @@ def training_loop(
                     selection_time_start = time.time()
                     try:
                         dist.print0("Using selection")
-                        dist.print0("Average Super-Batch Learner Loss =", float(loss.mean()))
-                        dist.print0("Average Super-Batch Reference Loss =", float(ref_loss.mean()))
-                        indices = dnnlib.util.call_func_by_name(loss, ref_loss, **selection_kwargs)
-                        loss = loss[indices] # Use indices of the selection mini-batch
+                        selected_indices = dnnlib.util.call_func_by_name(loss, ref_loss, **selection_kwargs)
+                        loss = loss[selected_indices] # Use indices of the selection mini-batch
                         state.cur_nimg += selection_batch_round
                     except ValueError:
                         dist.print0("Selection has crashed, so it has been deactivated")
@@ -351,7 +351,7 @@ def training_loop(
 
         # Report status.
         done = (state.cur_nimg >= stop_at_nimg)
-        epoch_logs.update({"Training Time [sec]": cumulative_training_time})
+        epoch_logs.update({"Training Time [sec]": cumulative_training_time*1000})
         run.log(epoch_logs)
         if status_nimg is not None and (done or state.cur_nimg % status_nimg == 0) and (state.cur_nimg != start_nimg or start_nimg == 0):
             cur_time = time.time()
