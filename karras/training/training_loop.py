@@ -25,7 +25,6 @@ import karras.torch_utils.distributed as dist
 import karras.torch_utils.training_stats as training_stats
 import karras.torch_utils.persistence as persistence
 import karras.torch_utils.misc as misc
-import ours.selection as sel
 from ours.utils import move_wandb_files, get_wandb_name
 
 #----------------------------------------------------------------------------
@@ -110,6 +109,7 @@ def training_loop(
         batch_gpu = batch_gpu_total
     num_accumulation_rounds = batch_gpu_total // batch_gpu
     loss_factor = loss_scaling / batch_gpu_total
+    batch_round = batch_gpu_total * dist.get_world_size()
     dist.print0("\nBatch size calculation")
     dist.print0(">>> World size", dist.get_world_size())
     dist.print0(">>> Batch GPU", batch_gpu)
@@ -142,6 +142,8 @@ def training_loop(
             dist.print0("Data selection with early-start execution strategy")
         dist.print0("Data selection configuration =", selection_kwargs)
         selection_loss_factor = 1/selection_kwargs.filter_ratio
+        selection_batch_round = int(batch_round * (1 - selection_kwargs.filter_ratio) / selection_kwargs.N)
+        selection_batch_round *= selection_kwargs.N
     else: 
         run_selection = False
         is_selection_waiting = False
@@ -293,11 +295,15 @@ def training_loop(
                         dist.print0("Average Super-Batch Reference Loss =", float(ref_loss.mean()))
                         indices = dnnlib.util.call_func_by_name(loss, ref_loss, **selection_kwargs)
                         loss = loss[indices] # Use indices of the selection mini-batch
+                        state.cur_nimg += selection_batch_round
                     except ValueError:
                         dist.print0("Selection has crashed, so it has been deactivated")
                         run_selection = False
                         is_selection_waiting = False
+                        state.cur_nimg += batch_round
                     cumulative_selection_time += time.time() - selection_time_start
+                else:
+                    state.cur_nimg += batch_round
                 epoch_loss.append(float(loss.mean()))
 
                 # Accumulate loss and calculate gradients
