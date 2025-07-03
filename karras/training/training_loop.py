@@ -229,7 +229,7 @@ def training_loop(
                     selection=selection, selection_early=selection_early, selection_late=selection_late,
                     seed=seed, batch_size=batch_size, batch_gpu=batch_gpu, 
                     total_nimg=total_nimg, loss_scaling=loss_scaling, device=device),
-        settings=wandb.Settings(x_stats_gpu_device_ids=[taux.get_device_number(device)]))
+        settings=wandb.Settings(x_stats_gpu_device_ids=[taux.get_device_number(device)], console='off'))
 
     # Main training loop.
     dataset_sampler = misc.InfiniteSampler(dataset=dataset_obj, rank=dist.get_rank(), num_replicas=dist.get_world_size(), 
@@ -430,7 +430,9 @@ def training_loop(
         else:
             state.cur_epoch += 1
 
-    run.finish()
-    move_wandb_files(run_dir, run_dir)
+    try: run.finish()
+    except AttributeError: pass
+    torch.distributed.barrier()
+    if dist.get_rank()==0: move_wandb_files(run_dir, run_dir)
 
 #----------------------------------------------------------------------------

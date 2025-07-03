@@ -117,7 +117,9 @@ def move_wandb_files(origin, destination):
             shutil.rmtree(os.path.join(origin, folder, "tmp"))
         contents = os.listdir(os.path.join(origin, folder))
         for c in contents:
-            os.rename(os.path.join(origin, folder, c), os.path.join(destination, c))
+            os.rename(os.path.join(origin, folder, c), 
+                      os.path.join(destination, c+"-"+folder.split("run-")[-1]))
+        shutil.rmtree(os.path.join(origin, folder))
     shutil.rmtree(origin)
     return
 
