@@ -110,11 +110,12 @@ def training_loop(
         batch_gpu = batch_gpu_total
     num_accumulation_rounds = batch_gpu_total // batch_gpu
     loss_factor = loss_scaling / batch_gpu_total
-    batch_round = batch_gpu_total * dist.get_world_size()
+    batch_round = batch_gpu * dist.get_world_size()
     dist.print0("\nBatch size calculation")
+    dist.print0(">>> Batch size total", batch_size)
     dist.print0(">>> World size", dist.get_world_size())
-    dist.print0(">>> Batch GPU", batch_gpu)
-    dist.print0(">>> Batch size total", batch_gpu_total)
+    dist.print0(">>> Batch size total per GPU", batch_gpu_total)
+    dist.print0(">>> Maximum batch size per GPU", batch_gpu)
     dist.print0(">>> Num accumulation rounds", num_accumulation_rounds, "\n")
     assert batch_size == batch_gpu * num_accumulation_rounds * dist.get_world_size()
     assert total_nimg % batch_size == 0
@@ -350,7 +351,6 @@ def training_loop(
         optimizer.step()
 
         # Update EMA and training state.
-        state.cur_nimg += batch_size
         if ema is not None:
             ema.update(cur_nimg=state.cur_nimg, batch_size=batch_size)
         cumulative_training_time += time.time() - batch_start_time
