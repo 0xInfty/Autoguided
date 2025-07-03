@@ -262,6 +262,7 @@ def training_loop(
         epoch_nimg = 0
         epoch_loss = []
         epoch_ref_loss, epoch_learner_loss = [], []
+        epoch_indices, epoch_selected_indices = [], []
         for round_idx in range(num_accumulation_rounds):
             dist.print0(f"Accumulating {round_idx+1}")
             with misc.ddp_sync(ddp, (round_idx == num_accumulation_rounds - 1)):
@@ -272,6 +273,7 @@ def training_loop(
                 loss = loss_fn(net=ddp, images=images, labels=labels.to(device))
                 loss = loss.sum(dim=(1,2,3)).mul(loss_factor)
                 training_stats.report('Loss/loss', loss)
+                epoch_indices.append(list(indices))
                 
                 # Calculate reference loss
                 if run_selection or is_selection_waiting:
@@ -298,6 +300,7 @@ def training_loop(
                         dist.print0("Using selection")
                         selected_indices = dnnlib.util.call_func_by_name(loss, ref_loss, **selection_kwargs)
                         loss = loss[selected_indices] # Use indices of the selection mini-batch
+                        epoch_selected_indices.append(list(selected_indices))
                     except ValueError:
                         dist.print0("Selection has crashed, so it has been deactivated")
                         run_selection = False
@@ -325,15 +328,17 @@ def training_loop(
                                    "Round Super-Batch Reference Loss": None})
             run.log(round_logs)
         epoch_logs.update({"Loss": float(np.mean(epoch_loss)), 
-                           "Seen images [kimg]": state.cur_nimg/1000})
+                           "Seen images [kimg]": state.cur_nimg/1000,
+                           "Indices": epoch_indices})
         if len(epoch_ref_loss)!=0:
             epoch_logs.update({"Super-Batch Learner Loss": float(np.mean(epoch_learner_loss)),
                                "Super-Batch Reference Loss": float(np.mean(epoch_ref_loss)),
-                               "Selection time [sec]":cumulative_selection_time*1000})
+                               "Selection time [sec]": cumulative_selection_time*1000,
+                               "Selected indices": epoch_selected_indices})
         else:
             epoch_logs.update({"Super-Batch Learner Loss": None,
-                               "Super-Batch Reference Loss": None})
-        dist.print0(epoch_logs)
+                               "Super-Batch Reference Loss": None,
+                               "Selected indices": None})
 
         # Evaluate learning rate.
         lr = dnnlib.util.call_func_by_name(cur_nimg=state.cur_nimg, batch_size=epoch_nimg, **lr_kwargs)
