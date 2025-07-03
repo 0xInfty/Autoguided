@@ -27,6 +27,9 @@ warnings.filterwarnings('ignore', 'You are using `torch.load` with `weights_only
 #----------------------------------------------------------------------------
 # Configuration presets.
 
+def img_to_cifar(n, batch_size=2048):
+    return int(50000*n/1281167/batch_size)*batch_size
+
 config_presets = {
     'edm2-img512-xxs':  dnnlib.EasyDict(duration=2048<<20, batch=2048, channels=64,  lr=0.0170, decay=70000, dropout=0.00, P_mean=-0.4, P_std=1.0),
     'edm2-img512-xs':   dnnlib.EasyDict(duration=2048<<20, batch=2048, channels=128, lr=0.0120, decay=70000, dropout=0.00, P_mean=-0.4, P_std=1.0),
@@ -40,8 +43,10 @@ config_presets = {
     'edm2-img64-m':     dnnlib.EasyDict(duration=2048<<20, batch=2048, channels=256, lr=0.0090, decay=35000, dropout=0.10, P_mean=-0.8, P_std=1.6),
     'edm2-img64-l':     dnnlib.EasyDict(duration=1024<<20, batch=2048, channels=320, lr=0.0080, decay=35000, dropout=0.10, P_mean=-0.8, P_std=1.6),
     'edm2-img64-xl':    dnnlib.EasyDict(duration=640<<20,  batch=2048, channels=384, lr=0.0070, decay=35000, dropout=0.10, P_mean=-0.8, P_std=1.6),
-    'edm2-cifar10-xxs': dnnlib.EasyDict(duration=int(((50000*2048<<20)/1281167)/2048)*2048, batch=2048, channels=64, lr=0.0170, decay=70000, dropout=0.00, P_mean=-0.4, P_std=1.0),
-    'test-training':    dnnlib.EasyDict(duration=20*2048, batch=2048, channels=64, lr=0.0170, decay=70000, dropout=0.00, P_mean=-0.4, P_std=1.0)
+    'edm2-cifar10-xxs': dnnlib.EasyDict(duration=img_to_cifar(2048<<20), batch=2048, channels=64, lr=0.0170, decay=70000, dropout=0.00, P_mean=-0.4, P_std=1.0,
+                                        checkpoint_nimg=None, snapshot_nimg=40*2048),
+    'test-training':    dnnlib.EasyDict(duration=20*2048, batch=2048, channels=64, lr=0.0170, decay=70000, dropout=0.00, P_mean=-0.4, P_std=1.0,
+                                        checkpoint_nimg=None, snapshot_nimg=40*2048)
 }
 
 #----------------------------------------------------------------------------
@@ -104,8 +109,8 @@ def setup_training_config(preset='edm2-img512-s', **opts):
 
     # I/O-related options.
     c.status_nimg = opts.get('status', 0) or None
-    c.snapshot_nimg = opts.get('snapshot', 0) or None
-    c.checkpoint_nimg = opts.get('checkpoint', 0) or None
+    c.snapshot_nimg = config_presets[preset].get("snapshot_nimg", opts.get('snapshot', 0)) or None
+    c.checkpoint_nimg = config_presets[preset].get("checkpoint_nimg", opts.get('checkpoint', 0)) or None
     c.seed = opts.get('seed', 0)
     return c
 
