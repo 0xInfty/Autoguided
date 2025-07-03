@@ -105,19 +105,19 @@ def training_loop(
     torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction = False
 
     # Validate batch size.
-    batch_gpu_total = batch_size // dist.get_world_size()
+    world_size = dist.get_world_size()
+    batch_gpu_total = batch_size // world_size
     if batch_gpu is None or batch_gpu > batch_gpu_total:
         batch_gpu = batch_gpu_total
     num_accumulation_rounds = batch_gpu_total // batch_gpu
     loss_factor = loss_scaling / batch_gpu_total
-    batch_round = batch_gpu * dist.get_world_size()
     dist.print0("\nBatch size calculation")
     dist.print0(">>> Batch size total", batch_size)
-    dist.print0(">>> World size", dist.get_world_size())
+    dist.print0(">>> World size", world_size)
     dist.print0(">>> Batch size total per GPU", batch_gpu_total)
     dist.print0(">>> Maximum batch size per GPU", batch_gpu)
     dist.print0(">>> Num accumulation rounds", num_accumulation_rounds, "\n")
-    assert batch_size == batch_gpu * num_accumulation_rounds * dist.get_world_size()
+    assert batch_size == batch_gpu * num_accumulation_rounds * world_size
     assert total_nimg % batch_size == 0
     assert slice_nimg is None or slice_nimg % batch_size == 0
     assert status_nimg is None or status_nimg % batch_size == 0
@@ -144,8 +144,6 @@ def training_loop(
             dist.print0("Data selection with early-start execution strategy")
         dist.print0("Data selection configuration =", selection_kwargs)
         selection_loss_factor = 1/selection_kwargs.filter_ratio
-        selection_batch_round = int(batch_round * (1 - selection_kwargs.filter_ratio) / selection_kwargs.N)
-        selection_batch_round *= selection_kwargs.N
     else: 
         run_selection = False
         is_selection_waiting = False
@@ -215,7 +213,7 @@ def training_loop(
     # Set up a W&B experiment
     os.environ["WANDB_DIR"] = run_dir
     group_name = get_wandb_name(run_dir)
-    if dist.get_world_size()>1:
+    if world_size>1:
         run_name = f"{group_name}_R{dist.get_rank()}"
     else:
         run_name = group_name
@@ -229,10 +227,10 @@ def training_loop(
                     selection=selection, selection_early=selection_early, selection_late=selection_late,
                     seed=seed, batch_size=batch_size, batch_gpu=batch_gpu, 
                     total_nimg=total_nimg, loss_scaling=loss_scaling, device=device),
-        settings=wandb.Settings(x_stats_gpu_device_ids=[taux.get_device_number(device)], console='off'))
+        settings=wandb.Settings(x_stats_gpu_device_ids=[taux.get_device_number(device)]))
 
     # Main training loop.
-    dataset_sampler = misc.InfiniteSampler(dataset=dataset_obj, rank=dist.get_rank(), num_replicas=dist.get_world_size(), 
+    dataset_sampler = misc.InfiniteSampler(dataset=dataset_obj, rank=dist.get_rank(), num_replicas=world_size, 
                                            seed=seed, start_idx=state.cur_epoch*batch_size)
     dataset_iterator = iter(dnnlib.util.construct_class_by_name(dataset=dataset_obj, sampler=dataset_sampler, batch_size=batch_gpu, **data_loader_kwargs))
     prev_status_nimg = state.cur_nimg
@@ -242,11 +240,10 @@ def training_loop(
     start_nimg = state.cur_nimg
     stats_jsonl = None
     lr = dnnlib.util.call_func_by_name(cur_nimg=state.cur_nimg, batch_size=batch_size, **lr_kwargs)
-    kimg_logs = {"Epoch":state.cur_epoch, "Loss":None, 'Seen images [kimg]': 0,
-                 'Total Time':state.total_elapsed_time, 'Speed [sec/tick]':None, 'Speed [sec/kimg]':None}
-    epoch_logs = {"Epoch":state.cur_epoch, "Epoch Loss":None, 
+    kimg_logs = {"Stats' Epoch":state.cur_epoch, 'Speed [sec/tick]':None, 'Speed [sec/kimg]':None}
+    epoch_logs = {"Epoch":state.cur_epoch, "Loss":None, "Seen images [kimg]": 0,
                   "Learning rate": lr, "Training Time [sec]":cumulative_training_time*1000}
-    round_logs = {"Epoch":state.cur_epoch, "Round":0, "Total rounds":state.cur_epoch*num_accumulation_rounds, 
+    round_logs = {"Round's Epoch":state.cur_epoch, "Round":0, "Total Rounds":state.cur_epoch*num_accumulation_rounds, 
                   "Round Loss":None}
     if selection:
         epoch_logs.update({"Epoch Super-Batch Learner Loss": None, "Epoch Super-Batch Reference Loss": None,
@@ -254,19 +251,15 @@ def training_loop(
         round_logs.update({"Round Super-Batch Learner Loss": None, "Round Super-Batch Reference Loss": None})
     while True:
         dist.print0(f"Training round {state.cur_epoch}")
-        kimg_logs.update({"Epoch": state.cur_epoch})
+        kimg_logs.update({"Stats' Epoch": state.cur_epoch})
         epoch_logs.update({"Epoch": state.cur_epoch})
-        round_logs.update({"Epoch": state.cur_epoch})
-
-        # Evaluate learning rate.
+        round_logs.update({"Round's Epoch": state.cur_epoch})
         batch_start_time = time.time()
-        lr = dnnlib.util.call_func_by_name(cur_nimg=state.cur_nimg, batch_size=batch_size, **lr_kwargs)
-        training_stats.report('Loss/learning_rate', lr)
-        epoch_logs.update({"Learning rate": lr})
 
         # Evaluate loss and accumulate gradients.
         misc.set_random_seed(seed, dist.get_rank(), state.cur_epoch*batch_size)
         optimizer.zero_grad(set_to_none=True)
+        epoch_nimg = 0
         epoch_loss = []
         epoch_ref_loss, epoch_learner_loss = [], []
         for round_idx in range(num_accumulation_rounds):
@@ -305,15 +298,14 @@ def training_loop(
                         dist.print0("Using selection")
                         selected_indices = dnnlib.util.call_func_by_name(loss, ref_loss, **selection_kwargs)
                         loss = loss[selected_indices] # Use indices of the selection mini-batch
-                        state.cur_nimg += selection_batch_round
                     except ValueError:
                         dist.print0("Selection has crashed, so it has been deactivated")
                         run_selection = False
                         is_selection_waiting = False
-                        state.cur_nimg += batch_round
                     cumulative_selection_time += time.time() - selection_time_start
-                else:
-                    state.cur_nimg += batch_round
+                round_nimg = world_size * len(loss)
+                epoch_nimg += round_nimg
+                state.cur_nimg += round_nimg
                 epoch_loss.append(float(loss.mean()))
 
                 # Accumulate loss and calculate gradients
@@ -332,14 +324,21 @@ def training_loop(
                 round_logs.update({"Round Super-Batch Learner Loss": None,
                                    "Round Super-Batch Reference Loss": None})
             run.log(round_logs)
-        epoch_logs.update({"Epoch Loss": np.mean(epoch_loss)})
+        epoch_logs.update({"Loss": float(np.mean(epoch_loss)), 
+                           "Seen images [kimg]": state.cur_nimg/1000})
         if len(epoch_ref_loss)!=0:
-            epoch_logs.update({"Epoch Super-Batch Learner Loss": np.mean(epoch_learner_loss),
-                               "Epoch Super-Batch Reference Loss": np.mean(epoch_ref_loss[-1]),
+            epoch_logs.update({"Super-Batch Learner Loss": float(np.mean(epoch_learner_loss)),
+                               "Super-Batch Reference Loss": float(np.mean(epoch_ref_loss)),
                                "Selection time [sec]":cumulative_selection_time*1000})
         else:
-            epoch_logs.update({"Epoch Super-Batch Learner Loss": None,
-                               "Epoch Super-Batch Reference Loss": None})
+            epoch_logs.update({"Super-Batch Learner Loss": None,
+                               "Super-Batch Reference Loss": None})
+        dist.print0(epoch_logs)
+
+        # Evaluate learning rate.
+        lr = dnnlib.util.call_func_by_name(cur_nimg=state.cur_nimg, batch_size=epoch_nimg, **lr_kwargs)
+        training_stats.report('Loss/learning_rate', lr)
+        epoch_logs.update({"Learning rate": float(lr)})
 
         # Run optimizer and update weights.
         for g in optimizer.param_groups:
@@ -375,11 +374,8 @@ def training_loop(
                 'reserved',     f"{training_stats.report0('Resources/peak_gpu_mem_reserved_gb',         torch.cuda.max_memory_reserved(device) / 2**30):<6.2f}",
             ]))
             kimg_logs.update({
-                'Loss': epoch_loss,
-                'Total Time' : state.total_elapsed_time,
                 'Speed [sec/tick]' : cur_time - prev_status_time,
                 'Speed [sec/kimg]' : (cumulative_training_time - prev_cumulative_training_time) / max(state.cur_nimg - prev_status_nimg, 1) * 1e3,
-                'Seen images [kimg]': state.cur_nimg//1000,
             })
             run.log(kimg_logs)
             prev_cumulative_training_time = cumulative_training_time

@@ -1,5 +1,5 @@
 preset="test-training"; dataset="cifar10"
-subdir="99_Test/05"; ref="01_CIFAR10/01_Ref/network-snapshot-0025165-0.050.pkl"
+subdir="99_Test/Ref/01"; ref="01_CIFAR10/01_Ref/network-snapshot-0033554-0.100.pkl"
 batchsize=512
 devices=1,2; ndevices=2
 device=2
