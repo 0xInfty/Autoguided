@@ -88,6 +88,17 @@ def is_sample_in_fractal(samples, ground_truth_distribution, sigma=0):
 
 ### Tools for Weights & Biases ###################################################################
 
+def get_wandb_tags(dataset_kwargs):
+    try:
+        if "cifar" in dataset_kwargs.path:
+            return ["cifar"]
+        elif "tiny" in dataset_kwargs.path:
+            return ["tiny"]
+        else:
+            return ["imagenet"]
+    except:
+        return None
+
 def get_wandb_name(wandb_dir):
     first, last = os.path.split(wandb_dir)
     accumulated = last

@@ -26,7 +26,7 @@ import karras.torch_utils.distributed as dist
 import karras.torch_utils.training_stats as training_stats
 import karras.torch_utils.persistence as persistence
 import karras.torch_utils.misc as misc
-from ours.utils import move_wandb_files, get_wandb_name
+from ours.utils import move_wandb_files, get_wandb_name, get_wandb_tags
 
 #----------------------------------------------------------------------------
 # Uncertainty-based loss function (Equations 14,15,16,21) proposed in the
@@ -213,12 +213,13 @@ def training_loop(
     # Set up a W&B experiment
     os.environ["WANDB_DIR"] = run_dir
     group_name = get_wandb_name(run_dir)
+    tags = get_wandb_tags(dataset_kwargs)
     if world_size>1:
         run_name = f"{group_name}_R{dist.get_rank()}"
     else:
         run_name = group_name
     run = wandb.init(
-        entity="ajest", project="Images", name=run_name, group=group_name,
+        entity="ajest", project="Images", name=run_name, group=group_name, tags=tags,
         config=dict(dataset_kwargs=dataset_kwargs, encoder_kwargs=encoder_kwargs,
                     data_loader_kwargs=data_loader_kwargs, network_kwargs=network_kwargs,
                     loss_kwargs=loss_kwargs, optimizer_kwargs=optimizer_kwargs,
