@@ -27,8 +27,14 @@ warnings.filterwarnings('ignore', 'You are using `torch.load` with `weights_only
 #----------------------------------------------------------------------------
 # Configuration presets.
 
+def img_to_other(n, batch_size, n_train_total):
+    return int(n_train_total*n/1281167/batch_size)*batch_size
+
 def img_to_cifar(n, batch_size=2048):
-    return int(50000*n/1281167/batch_size)*batch_size
+    return img_to_other(n, batch_size, 50000)
+
+def img_to_tiny(n, batch_size=2048):
+    return img_to_other(n, batch_size, 100000)
 
 config_presets = {
     'edm2-img512-xxs':  dnnlib.EasyDict(duration=2048<<20, batch=2048, channels=64,  lr=0.0170, decay=70000, dropout=0.00, P_mean=-0.4, P_std=1.0),
@@ -44,6 +50,8 @@ config_presets = {
     'edm2-img64-l':     dnnlib.EasyDict(duration=1024<<20, batch=2048, channels=320, lr=0.0080, decay=35000, dropout=0.10, P_mean=-0.8, P_std=1.6),
     'edm2-img64-xl':    dnnlib.EasyDict(duration=640<<20,  batch=2048, channels=384, lr=0.0070, decay=35000, dropout=0.10, P_mean=-0.8, P_std=1.6),
     'edm2-cifar10-xxs': dnnlib.EasyDict(duration=img_to_cifar(2048<<20), batch=2048, channels=64, lr=0.0170, decay=70000, dropout=0.00, P_mean=-0.4, P_std=1.0,
+                                        checkpoint_nimg=None, snapshot_nimg=40*2048),
+    'edm2-tiny-xxs':    dnnlib.EasyDict(duration=img_to_tiny(2048<<20), batch=2048, channels=64, lr=0.0170, decay=70000, dropout=0.00, P_mean=-0.4, P_std=1.0,
                                         checkpoint_nimg=None, snapshot_nimg=40*2048),
     'test-training':    dnnlib.EasyDict(duration=20*2048, batch=2048, channels=64, lr=0.0170, decay=70000, dropout=0.00, P_mean=-0.4, P_std=1.0,
                                         checkpoint_nimg=None, snapshot_nimg=40*2048)

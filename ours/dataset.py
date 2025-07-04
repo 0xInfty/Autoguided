@@ -14,7 +14,8 @@ from karras.training.dataset import Dataset
 
 DATASET_OPTIONS = {
     "imagenet": dict(class_name='karras.training.dataset.ImageFolderDataset'),
-    "cifar10": dict(class_name='ours.dataset.HuggingFaceDataset', path="uoft-cs/cifar10", n_classes=10),
+    "cifar10": dict(class_name='ours.dataset.HuggingFaceDataset', path="uoft-cs/cifar10", n_classes=10, key_image="img", key_label="label"),
+    "tiny": dict(class_name='ours.dataset.HuggingFaceDataset', path="zh-plus/tiny-imagenet", n_classes=200, key_image="image", key_label="label"),
     "folder": dict(class_name='karras.training.dataset.ImageFolderDataset'),
 }
 
@@ -23,6 +24,8 @@ class HuggingFaceDataset(Dataset):
     def __init__(self,
         path,                   # Path to Hugging Face dataset
         n_classes,              # Specify number of classes for one hot encoding
+        key_image,              # String identifier of the images column
+        key_label,              # String identifier of the labels column
         resolution      = None, # Ensure specific resolution, None = anything goes.
         cache_dir       = dirs.DATA_HOME, # Cache dir to store the Hugging Face dataset
         **super_kwargs,         # Additional arguments for the Dataset base class.
@@ -33,8 +36,8 @@ class HuggingFaceDataset(Dataset):
         self._dataset = hfdat.load_dataset(path, split="train", cache_dir=self.cache_dir)
         
         self._n_classes = n_classes
-        self._key_image = "img" # Change if different
-        self._key_label = "label" # Change if different
+        self._key_image = key_image
+        self._key_label = key_label
         if self.key_image not in self.data.column_names:
             raise ValueError(f"Hugging Face Dataset has no column {self.key_image}")
         if self.key_label not in self.data.column_names:
@@ -88,7 +91,11 @@ class HuggingFaceDataset(Dataset):
                 image = image.copy()
             else:
                 image = image.detach().clone()
-        assert list(image.shape) == self._raw_shape[1:]
+        if list(image.shape) != self._raw_shape[1:]:
+            if list(image.shape) == self._raw_shape[2:]: # Grayscale image detected
+                image = image.repeat(self._raw_shape[1], 1, 1) # Repeat on all channels
+            else: # Something else is wrong
+                raise ValueError(f"Image {idx} does not have the right shape: expected {self._raw_shape[1:]} but found {list(image.shape)}")
         if self._xflip[idx]:
             assert image.ndim == 3 # CHW
             image = image[:, :, ::-1]
