@@ -49,13 +49,17 @@ config_presets = {
     'edm2-img64-m':     dnnlib.EasyDict(duration=2048<<20, batch=2048, channels=256, lr=0.0090, decay=35000, dropout=0.10, P_mean=-0.8, P_std=1.6),
     'edm2-img64-l':     dnnlib.EasyDict(duration=1024<<20, batch=2048, channels=320, lr=0.0080, decay=35000, dropout=0.10, P_mean=-0.8, P_std=1.6),
     'edm2-img64-xl':    dnnlib.EasyDict(duration=640<<20,  batch=2048, channels=384, lr=0.0070, decay=35000, dropout=0.10, P_mean=-0.8, P_std=1.6),
-    'edm2-cifar10-xxs': dnnlib.EasyDict(duration=img_to_cifar(2048<<20), batch=2048, channels=64, lr=0.0170, decay=70000, dropout=0.00, P_mean=-0.4, P_std=1.0,
+    'edm2-cifar10-xxs': dnnlib.EasyDict(duration=img_to_cifar(2048<<20), batch=2048, channels=64,
+                                        lr=0.0170, decay=img_to_cifar(70e3*2048)/2048, rampup=img_to_cifar(10*1e6)/1e6,
+                                        dropout=0.00, P_mean=-0.4, P_std=1.0,
                                         checkpoint_nimg=None, snapshot_nimg=40*2048),
-    'edm2-tiny-xxs':    dnnlib.EasyDict(duration=img_to_tiny(2048<<20), batch=2048, channels=64, lr=0.0170, decay=70000, dropout=0.00, P_mean=-0.4, P_std=1.0,
+    'edm2-tiny-xxs':    dnnlib.EasyDict(duration=img_to_tiny(2048<<20), batch=2048, channels=64, 
+                                        lr=0.0170, decay=img_to_tiny(70e3*2048)/2048, rampup=img_to_tiny(10*1e6)/1e6,
+                                        dropout=0.00, P_mean=-0.4, P_std=1.0,
                                         checkpoint_nimg=None, snapshot_nimg=40*2048),
-    'test-training':    dnnlib.EasyDict(duration=20*2048, batch=2048, channels=64, lr=0.0170, decay=70000, dropout=0.00, P_mean=-0.4, P_std=1.0,
-                                        checkpoint_nimg=None, snapshot_nimg=40*2048)
 }
+config_presets["test-training"] = config_presets["edm2-cifar10-xxs"]
+config_presets["test-training"].duration = 20*2048 # Just for 20 epochs
 
 #----------------------------------------------------------------------------
 # Setup arguments for training.training_loop.training_loop().
@@ -98,7 +102,7 @@ def setup_training_config(preset='edm2-img512-s', **opts):
     c.update(total_nimg=opts.duration, batch_size=opts.batch)
     c.network_kwargs = dnnlib.EasyDict(class_name='karras.training.networks_edm2.Precond', model_channels=opts.channels, dropout=opts.dropout)
     c.loss_kwargs = dnnlib.EasyDict(class_name='karras.training.training_loop.EDM2Loss', P_mean=opts.P_mean, P_std=opts.P_std)
-    c.lr_kwargs = dnnlib.EasyDict(func_name='karras.training.training_loop.learning_rate_schedule', ref_lr=opts.lr, ref_batches=opts.decay)
+    c.lr_kwargs = dnnlib.EasyDict(func_name='karras.training.training_loop.learning_rate_schedule', ref_lr=opts.lr, ref_batches=opts.decay, rampup_Mimg=opts.rampup)
 
     # Data selection.
     c.ref_path = opts.get('ref_path', 0) or None

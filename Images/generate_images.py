@@ -76,8 +76,10 @@ config_presets = {
     'edm2-img512-s-uncond-autog-dino': EasyDict(net=f'{model_root}/edm2-img512-s-uncond-2147483-0.090.pkl', gnet=f'{model_root}/edm2-img512-xs-uncond-0134217-0.125.pkl', guidance_weight=2.90), # fd_dinov2 = 90.39
     'edm2-img64-s-autog-fid':          EasyDict(net=f'{model_root}/edm2-img64-s-1073741-0.045.pkl',         gnet=f'{model_root}/edm2-img64-xs-0134217-0.110.pkl',         guidance_weight=1.70), # fid = 1.01
     'edm2-img64-s-autog-dino':         EasyDict(net=f'{model_root}/edm2-img64-s-1073741-0.105.pkl',         gnet=f'{model_root}/edm2-img64-xs-0134217-0.175.pkl',         guidance_weight=2.20), # fd_dinov2 = 31.85
-    'edm2-CIFAR10-xxs':                EasyDict(net=os.path.join(models_dir, "01_CIFAR10", 'network-snapshot-0117440-0.100.pkl')),       # fid = unknown
-    'edm2-CIFAR10-xxs-0':              EasyDict(net=os.path.join(models_dir, "01_CIFAR10", 'network-snapshot-0000000-0.100.pkl')),       # fid = unknown
+    'edm2-CIFAR10-xxs-ref':            EasyDict(net=os.path.join(models_dir, "01_CIFAR10", "Ref", "00", 'network-snapshot-0000639-0.100.pkl')),
+    'edm2-CIFAR10-xxs-ajest-final':    EasyDict(net=os.path.join(models_dir, "01_CIFAR10", "AJEST", "00", 'network-snapshot-0042879-0.100.pkl')),
+    'edm2-CIFAR10-xxs-ajest-nimg':     EasyDict(net=os.path.join(models_dir, "01_CIFAR10", "Ref", "00", 'network-snapshot-0000639-0.100.pkl')),
+    'edm2-CIFAR10-xxs-eajest':         EasyDict(net=os.path.join(models_dir, "01_CIFAR10", 'network-snapshot-0117440-0.100.pkl')),       # fid = unknown
 }
 
 #----------------------------------------------------------------------------
