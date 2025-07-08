@@ -214,6 +214,8 @@ def training_loop(
     os.environ["WANDB_DIR"] = run_dir
     group_name = get_wandb_name(run_dir)
     tags = get_wandb_tags(dataset_kwargs)
+    if is_ref_available: wandb_ref_path = ref_path.split(dirs.MODELS_HOME)[-1]
+    else: wandb_ref_path = None
     if world_size>1:
         run_name = f"{group_name}_R{dist.get_rank()}"
     else:
@@ -226,6 +228,7 @@ def training_loop(
                     lr_kwargs=lr_kwargs, ema_kwargs=ema_kwargs,
                     selection_kwargs=selection_kwargs,
                     selection=selection, selection_early=selection_early, selection_late=selection_late,
+                    ref_path=wandb_ref_path,
                     seed=seed, batch_size=batch_size, batch_gpu=batch_gpu, 
                     total_nimg=total_nimg, loss_scaling=loss_scaling, device=device),
         settings=wandb.Settings(x_stats_gpu_device_ids=[taux.get_device_number(device)]))

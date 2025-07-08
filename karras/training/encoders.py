@@ -69,13 +69,13 @@ class StandardRGBEncoder(Encoder):
     def __init__(self):
         super().__init__()
 
-    def encode_pixels(self, x): # raw pixels => raw latents
+    def encode_pixels(self, x): # Called during preprocessing
         return x
 
-    def encode_latents(self, x): # raw latents => final latents
+    def encode_latents(self, x): # 8 bits [0,255] to [-1,+1] during training/inference
         return x.to(torch.float32) / 127.5 - 1
 
-    def decode(self, x): # final latents => raw pixels
+    def decode(self, x): # Normalized [-1,+2] to 8 bits [0,255] during training/inference
         return (x.to(torch.float32) * 127.5 + 128).clip(0, 255).to(torch.uint8)
 
 #----------------------------------------------------------------------------
