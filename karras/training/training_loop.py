@@ -68,6 +68,7 @@ def training_loop(
     encoder_kwargs      = dict(class_name='karras.training.encoders.StabilityVAEEncoder'),
     data_loader_kwargs  = dict(class_name='torch.utils.data.DataLoader', pin_memory=True, num_workers=2, prefetch_factor=2),
     network_kwargs      = dict(class_name='karras.training.networks_edm2.Precond'),
+    ref_network_kwargs  = dict(class_name='karras.training.networks_edm2.Precond'),
     loss_kwargs         = dict(class_name='karras.training.training_loop.EDM2Loss'),
     optimizer_kwargs    = dict(class_name='torch.optim.Adam', betas=(0.9, 0.99)),
     lr_kwargs           = dict(func_name='karras.training.training_loop.learning_rate_schedule'),
@@ -162,8 +163,7 @@ def training_loop(
     net.train().requires_grad_(True).to(device)
     if is_ref_available:
         dist.print0('Constructing reference network...')
-        interface_kwargs = dict(img_resolution=ref_image.shape[-1], img_channels=ref_image.shape[1], label_dim=ref_label.shape[-1])
-        ref = dnnlib.util.construct_class_by_name(**network_kwargs, **interface_kwargs)
+        ref = dnnlib.util.construct_class_by_name(**ref_network_kwargs, **interface_kwargs)
         ref.eval().requires_grad_(False).to(device)
 
     # Print network summary.
