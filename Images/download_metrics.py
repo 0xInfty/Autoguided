@@ -7,16 +7,20 @@ sys.path.insert(0, os.path.join(dirs.SYSTEM_HOME, "ours"))
 
 import csv
 import numpy as np
+import pandas as pd
 import torch
 import wandb
 import click
 import tqdm
 import matplotlib.pyplot as plt
+import seaborn as sns
 
 import karras.dnnlib as dnnlib
 from ours.dataset import DATASET_OPTIONS, get_dataset_kwargs
 
 api = wandb.Api()
+
+sns.set_theme(style="darkgrid")
 
 def download_metrics(run_ids, output_filepath, max_epochs=None, page_size=100):
     wait_for_trigger = max_epochs is not None
@@ -186,6 +190,92 @@ def visualize_all_selected_images(dataset_name, indices_filepath, ajest_N=None,
                 
                 img_ids, are_img_ids_selected = [], []
             if limited_epochs and epoch_i >= max_epochs: break
+
+def visualize_classes(dataset, img_ids, are_ids_selected=None):
+
+    # Get parameters for figure
+    n_cols = 32
+    n_rows = int(len(img_ids)/n_cols)
+    plot_all = are_ids_selected is None
+    if plot_all: are_ids_selected = [True for img_id in img_ids]
+
+    # Create landscape figure
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=A4_DIMS, facecolor="black")
+    plt.subplots_adjust(wspace=0.1, hspace=0.1)
+
+    # Plot images
+    for idx, (img_id, is_selected) in enumerate(zip(img_ids, are_ids_selected)):
+        row = idx // n_cols
+        col = idx % n_cols
+        ax = axes[row][col]
+        ax.set_facecolor("black")
+        if plot_all or is_selected:
+            _, _, label = dataset[img_id]
+            plt.text(0.5, 0.5, str(list(label).index(1)),
+                    horizontalalignment='center', verticalalignment='center',
+                    color="w", transform = ax.transAxes)
+        ax.axis('off')
+
+    # Final layout and export
+    plt.tight_layout(pad=0)
+    plt.show()
+
+    return fig, axes
+
+def visualize_classes_per_iteration(dataset, img_ids, are_ids_selected, N_iterations=16):
+
+    # Get parameters for figure
+    n_rows = N_iterations
+    n_cols = int(sum(are_ids_selected)/n_rows)
+    plot_all = are_ids_selected is None
+    if plot_all: are_ids_selected = [True for img_id in img_ids]
+
+    fig_size = A4_DIMS[::-1] # Portrait
+    padding = 0.2 # 0.5 cm in inches
+    cell_size = min((np.array(fig_size)-2*padding)/np.array([n_rows, n_cols]))
+    fig_size = 2*padding+cell_size*np.array((n_rows, n_cols))
+
+    # Create figure
+    fig, axes = plt.subplots(n_rows, n_cols, facecolor="black", figsize=fig_size[::-1])
+
+    # Plot images
+    selected_img_ids = img_ids[are_ids_selected]
+    for idx, img_id in enumerate(selected_img_ids):
+        row = idx // n_cols
+        col = idx % n_cols
+        ax = axes[row][col]
+        ax.set_facecolor("black")
+        _, _, label = dataset[img_id]
+        plt.text(0.5, 0.5, str(list(label).index(1)),
+                horizontalalignment='center', verticalalignment='center',
+                color="w", transform = ax.transAxes)
+        ax.axis('off')
+
+    # Final layout and export
+    plt.show()
+
+    return fig, axes
+
+def plot_classes_histogram(dataset, img_ids, are_ids_selected):
+
+    # Create landscape figure
+    fig, axes = plt.subplots()
+
+    # Plot images
+    labels = np.array([dataset[img_id][-1] for img_id in img_ids])
+    n_classes = dataset.label_shape[0]-1
+    labels = np.array([list(lab).index(1) for lab in labels])
+    
+    sns.histplot(data=pd.DataFrame(dict(labels=labels)), bins=n_classes, binrange=(0,n_classes), 
+                    x="labels", color="blue", label="Observed", alpha=0.5)
+    sns.histplot(data=pd.DataFrame(dict(selected=labels))[are_ids_selected], 
+                bins=n_classes, binrange=(0,n_classes), 
+                x="selected", color="red", label="Selected", alpha=.7)
+    plt.legend()
+    plt.tight_layout(pad=0)
+    plt.show()
+
+    return fig, axes
 
 @click.group()
 def cmdline():
