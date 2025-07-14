@@ -13,11 +13,29 @@ from karras.training.dataset import Dataset
 # import pyvtorch.huggingface as vhfdat
 
 DATASET_OPTIONS = {
-    "imagenet": dict(class_name='karras.training.dataset.ImageFolderDataset'),
+    "img512": dict(class_name='karras.training.dataset.ImageFolderDataset', path=os.path.join(dirs.DATA_HOME, "img512.zip")),
+    "img64": dict(class_name='karras.training.dataset.ImageFolderDataset', path=os.path.join(dirs.DATA_HOME, "img512-sd.zip")),
     "cifar10": dict(class_name='ours.dataset.HuggingFaceDataset', path="uoft-cs/cifar10", n_classes=10, key_image="img", key_label="label"),
     "tiny": dict(class_name='ours.dataset.HuggingFaceDataset', path="zh-plus/tiny-imagenet", n_classes=200, key_image="image", key_label="label"),
     "folder": dict(class_name='karras.training.dataset.ImageFolderDataset'),
 }
+
+def get_dataset_kwargs(dataset_name, image_path=None, use_labels=True):
+    try:
+        dataset_kwargs = DATASET_OPTIONS[dataset_name]
+    except KeyError:
+        if image_path is not None: 
+            dataset_kwargs = DATASET_OPTIONS["folder"]
+            dataset_kwargs["path"] = image_path
+        else:
+            raise ValueError("Dataset path is required for 'folder' datasets")
+    dataset_kwargs = dnnlib.EasyDict(dataset_kwargs)
+    if dataset_name != "folder": 
+        dataset_kwargs.name = dataset_name
+    else:
+        dataset_kwargs.name = dataset_kwargs.image_path
+    dataset_kwargs.use_labels = use_labels
+    return dataset_kwargs
 
 class HuggingFaceDataset(Dataset):
 
@@ -27,6 +45,7 @@ class HuggingFaceDataset(Dataset):
         key_image,              # String identifier of the images column
         key_label,              # String identifier of the labels column
         resolution      = None, # Ensure specific resolution, None = anything goes.
+        name            = None, # Name of the dataset, optional
         cache_dir       = dirs.DATA_HOME, # Cache dir to store the Hugging Face dataset
         **super_kwargs,         # Additional arguments for the Dataset base class.
     ):
@@ -45,7 +64,7 @@ class HuggingFaceDataset(Dataset):
         
         self.data.set_format(type="torch", columns=[self.key_image,self.key_label])
 
-        name = "HuggingFaceDataset" #os.path.splitext(os.path.basename(self.path))[0]
+        name = name or os.path.splitext(path)[-1]
         raw_shape = [len(self._dataset)] + list(self._load_raw_image(0).shape)
         if resolution is not None and (raw_shape[2] != resolution or raw_shape[3] != resolution):
             raise IOError('Image files do not match the specified resolution')

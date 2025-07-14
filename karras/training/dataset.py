@@ -170,6 +170,7 @@ class ImageFolderDataset(Dataset):
     def __init__(self,
         path,                   # Path to directory or zip.
         resolution      = None, # Ensure specific resolution, None = anything goes.
+        name            = None, # Name of the dataset, optional
         **super_kwargs,         # Additional arguments for the Dataset base class.
     ):
         self._path = path
@@ -190,7 +191,7 @@ class ImageFolderDataset(Dataset):
         if len(self._image_fnames) == 0:
             raise IOError('No image files found in the specified path')
 
-        name = os.path.splitext(os.path.basename(self._path))[0]
+        name = name or os.path.splitext(os.path.basename(self._path))[-1]
         raw_shape = [len(self._image_fnames)] + list(self._load_raw_image(0).shape)
         if resolution is not None and (raw_shape[2] != resolution or raw_shape[3] != resolution):
             raise IOError('Image files do not match the specified resolution')
