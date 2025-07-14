@@ -14,7 +14,7 @@ import tqdm
 import matplotlib.pyplot as plt
 
 import karras.dnnlib as dnnlib
-from ours.dataset import DATASET_OPTIONS
+from ours.dataset import DATASET_OPTIONS, get_dataset_kwargs
 
 api = wandb.Api()
 
@@ -111,55 +111,81 @@ def visualize_images_per_iteration(dataset, img_ids, are_ids_selected, N_iterati
     return fig, axes
 
 def visualize_all_selected_images(dataset_name, indices_filepath, ajest_N=None,
-                                  comparison=True, per_iteration=True, max_epochs=None):
+                                  comparison=True, per_iteration=True, 
+                                  max_epochs=None, period=None, including=None):
 
     # General configuration
     folder = os.path.dirname(indices_filepath)
     if per_iteration and ajest_N is None:
         raise ValueError("Unknown number of data selection iterations")
 
-    # Load indices data
-    indices_data = np.loadtxt(indices_filepath, skiprows=1,delimiter=",",dtype=np.int32)
-    n_epochs = int(max(indices_data[:,1])+1)
-    n_rounds = int(max(indices_data[:,2])+1)
-
+    # Get basic parameters from the indices file
+    n_ranks = 0
+    n_rounds = 0
+    with open(indices_filepath, "r") as f:
+        reader = csv.reader(f)
+        for i, line in enumerate(reader):
+            if i==0: pass # Header
+            else:
+                if int(line[0]) >= n_ranks:
+                    n_ranks = int(line[0])
+                if int(line[2]) >= n_rounds:
+                    n_rounds = int(line[2])
+                else: break
+    n_ranks += 1
+    n_rounds += 1
+    n_lines_per_epoch = i-1
+    n_lines_per_round = int(n_lines_per_epoch / n_rounds)
+    limited_epochs = max_epochs is not None
+    period = period or 1
+    try: including = [int(i) for i in including[0].split(",")]
+    except: including = None
+    print("Including", including)
+    
     # Load dataset
-    if dataset_name == "imagenet":
-        # dataset_kwargs = dnnlib.EasyDict(class_name=DATASET_OPTIONS[dataset_name]["class_name"], path=opts.data)
-        raise ValueError("Need data path")
-    else:
-        dataset_kwargs = dnnlib.EasyDict(DATASET_OPTIONS[dataset_name])
-    dataset_kwargs.use_labels = True
+    dataset_kwargs = get_dataset_kwargs(dataset_name)
     dataset = dnnlib.util.construct_class_by_name(**dataset_kwargs)
 
-    # Generate visualizations and store them
-    if max_epochs is not None: n_epochs = max_epochs
-    for epoch_i in tqdm.tqdm(range(n_epochs)):
-        for round_i in range(n_rounds):
+    # Collect and visualize data
+    epoch_i = 0
+    with open(indices_filepath, "r") as f:
+        reader = csv.reader(f)
+        img_ids, are_img_ids_selected = [], []
+        for i, line in tqdm.tqdm(enumerate(reader)):
+            if i==0: pass
+            else:
+                epoch_i = int(line[1])
+                round_i = int(line[2])
+                img_ids.append(int(line[-2]))
+                are_img_ids_selected.append(bool(int(line[-1])))
+            if i>0 and i % n_lines_per_round == 0 and (epoch_i % period == 0 or epoch_i in including):
 
-            # Get round data
-            round_indices = np.where(np.logical_and(indices_data[:,1]==epoch_i, 
-                                        indices_data[:,2]==round_i))[0]
-            img_ids = indices_data[round_indices,-2]
-            are_img_ids_selected = indices_data[round_indices,-1].astype(bool)
-
-            # Visualize all images in the round, and then show only those selected
-            if comparison:
-                fig, axes = visualize_images(dataset, img_ids)
-                fig_filepath = os.path.join(folder, f"epoch_{epoch_i}_round_{round_i}_all.jpeg")
-                fig.savefig(fig_filepath, dpi=300, bbox_inches='tight')
-                plt.close(fig)
-                fig, axes = visualize_images(dataset, img_ids, are_img_ids_selected)
-                fig_filepath = os.path.join(folder, f"epoch_{epoch_i}_round_{round_i}_compared.jpeg")
-                fig.savefig(fig_filepath, dpi=300, bbox_inches='tight')
-                plt.close(fig)
-            
-            # Visualize images in the round in the order in which they were selected
-            if per_iteration:
-                fig_filepath = os.path.join(folder, f"epoch_{epoch_i}__round_{round_i}_selected.jpeg")
-                fig, axes = visualize_images_per_iteration(dataset, img_ids, are_img_ids_selected, ajest_N)
-                fig.savefig(fig_filepath, dpi=300, bbox_inches='tight')
-                plt.close(fig)
+                # Visualize all images in the round, and then show only those selected
+                if comparison:
+                    fig, axes = visualize_images(dataset, img_ids)
+                    fig_filepath = os.path.join(folder, f"epoch_{epoch_i}_round_{round_i}_all.jpeg")
+                    fig.savefig(fig_filepath, dpi=300, bbox_inches='tight')
+                    plt.close(fig)
+                    fig, axes = visualize_images(dataset, img_ids, are_img_ids_selected)
+                    fig_filepath = os.path.join(folder, f"epoch_{epoch_i}_round_{round_i}_compared.jpeg")
+                    fig.savefig(fig_filepath, dpi=300, bbox_inches='tight')
+                    plt.close(fig)
+                
+                # Visualize images in the round in the order in which they were selected
+                if per_iteration:
+                    img_ids = np.array(img_ids, dtype=np.int32)
+                    are_img_ids_selected = np.array(are_img_ids_selected, dtype=bool)
+                    fig_filepath = os.path.join(folder, f"epoch_{epoch_i}__round_{round_i}_selected_0.jpeg")
+                    fig, axes = visualize_images_per_iteration(dataset, img_ids[0::2], are_img_ids_selected[0::2], ajest_N)
+                    fig.savefig(fig_filepath, dpi=300, bbox_inches='tight')
+                    plt.close(fig)
+                    fig_filepath = os.path.join(folder, f"epoch_{epoch_i}__round_{round_i}_selected_1.jpeg")
+                    fig, axes = visualize_images_per_iteration(dataset, img_ids[1::2], are_img_ids_selected[1::2], ajest_N)
+                    fig.savefig(fig_filepath, dpi=300, bbox_inches='tight')
+                    plt.close(fig)
+                
+                img_ids, are_img_ids_selected = [], []
+            if limited_epochs and epoch_i >= max_epochs: break
 
 @click.group()
 def cmdline():
@@ -179,13 +205,16 @@ def download(runs, dest, maxn):
 @click.option('--dataset',    help='Dataset to be used', metavar='STR', type=click.Choice(list(DATASET_OPTIONS.keys())), default="imagenet", show_default=True)
 @click.option('--seln',       help='Number of data selection iterations per round', metavar='INT', type=int, required=False, default=None, show_default=True)
 @click.option('--maxn',       help='Maximum number of epochs to store', metavar='INT', type=int, required=False, default=None, show_default=True)
+@click.option('--period',     help='Execute every period epochs', metavar='INT', type=int, required=False, default=None, show_default=True)
+@click.option('--inc',        help='Epoch indices to be included regardless of period', metavar='INT', required=False, multiple=True, default=None, show_default=True)
 @click.option('--compare/--no-compare',    help='Show comparison between selected and not selected', metavar='BOOL', type=bool, default=True)
 @click.option('--per-iter/--no-per-iter',  help='Show selected images per iteration', metavar='BOOL', type=bool, default=True)
 
-def visualize(source, dataset, seln, maxn, compare, per_iter):
+def visualize(source, dataset, seln, maxn, period, inc, compare, per_iter):
     source = os.path.join(dirs.MODELS_HOME, source)
     visualize_all_selected_images(dataset, source, ajest_N=seln, 
-                                  comparison=compare, per_iteration=per_iter, max_epochs=maxn)
+                                  comparison=compare, per_iteration=per_iter, 
+                                  max_epochs=maxn, period=period, including=inc)
 
 if __name__ == "__main__":
     cmdline()
