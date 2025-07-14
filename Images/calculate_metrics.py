@@ -25,7 +25,7 @@ import karras.torch_utils.misc as misc
 import karras.training.dataset as dataset
 from karras.training.encoders import PRETRAINED_HOME
 import generate_images
-from ours.dataset import DATASET_OPTIONS
+from ours.dataset import DATASET_OPTIONS, get_dataset_kwargs
 
 #----------------------------------------------------------------------------
 # Abstract base class for feature detectors.
@@ -62,6 +62,7 @@ class DINOv2Detector(Detector):
         import warnings
         warnings.filterwarnings('ignore', 'xFormers is not available')
         torch.hub.set_dir(dnnlib.make_cache_dir_path('torch_hub'))
+        torch.hub.set_dir(PRETRAINED_HOME)
         self.model = torch.hub.load('facebookresearch/dinov2:main', 'dinov2_vitl14', trust_repo=True, verbose=False, skip_validation=True)
         self.model.eval().requires_grad_(False)
 
@@ -179,7 +180,7 @@ def calculate_stats_for_iterable(
             cum_images = torch.zeros([], dtype=torch.int64, device=device)
 
             # Loop over batches.
-            for batch_idx, images in enumerate(image_iter):
+            for batch_idx, (_, images, _) in enumerate(image_iter):
                 if isinstance(images, dict) and 'images' in images: # dict(images)
                     images = images['images']
                 elif isinstance(images, (tuple, list)) and len(images) == 2: # (images, labels)
@@ -231,10 +232,7 @@ def calculate_stats_for_files(
         torch.distributed.barrier()
 
     # List images.
-    if dataset_name in ["imagenet", "folder"]:
-        dataset_kwargs = dnnlib.EasyDict(class_name=DATASET_OPTIONS[dataset_name]["class_name"], path=image_path)
-    else:
-        dataset_kwargs = dnnlib.EasyDict(DATASET_OPTIONS[dataset_name])
+    dataset_kwargs = get_dataset_kwargs(dataset_name, image_path=image_path)
     if verbose:
         dist.print0("Dataset kwargs", dataset_kwargs)
     dataset_obj = dnnlib.util.construct_class_by_name(**dataset_kwargs, max_size=num_images, random_seed=seed)
@@ -343,9 +341,6 @@ def calc(ref_path, metrics, **opts):
     torch.multiprocessing.set_start_method('spawn')
     dist.init()
     opts = dnnlib.EasyDict(opts)
-    if opts.dataset_name != "imagenet":
-        try: opts.image_path = os.path.join(dirs.DATA_HOME, opts.image_path)
-        except: opts.update(dict(image_path=dirs.DATA_HOME))
     ref_path = os.path.join(dirs.DATA_HOME, "dataset_refs", ref_path)
     if dist.get_rank() == 0:
         ref = load_stats(path=ref_path) # do this first, just in case it fails
@@ -399,9 +394,6 @@ def ref(**opts):
     torch.multiprocessing.set_start_method('spawn')
     dist.init()
     opts = dnnlib.EasyDict(opts)
-    if opts.dataset_name != "imagenet":
-        try: opts.image_path = os.path.join(dirs.DATA_HOME, opts.image_path)
-        except: opts.update(dict(image_path=dirs.DATA_HOME))
     opts.dest_path = os.path.join(dirs.DATA_HOME, "dataset_refs", opts.dest_path)
     stats_iter = calculate_stats_for_files(**opts)
     for _r in tqdm.tqdm(stats_iter, unit='batch', disable=(dist.get_rank() != 0)):

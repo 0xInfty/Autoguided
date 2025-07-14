@@ -20,7 +20,7 @@ import torch
 import karras.dnnlib as dnnlib
 import karras.torch_utils.distributed as dist
 import karras.training.training_loop as trn
-from ours.dataset import DATASET_OPTIONS
+from ours.dataset import DATASET_OPTIONS, get_dataset_kwargs
 
 warnings.filterwarnings('ignore', 'You are using `torch.load` with `weights_only=False`')
 
@@ -79,11 +79,7 @@ def setup_training_config(preset='edm2-img512-s', **opts):
             opts[key] = value
 
     # Dataset.
-    if opts.dataset == "imagenet":
-        c.dataset_kwargs = dnnlib.EasyDict(class_name=DATASET_OPTIONS[opts.dataset]["class_name"], path=opts.data)
-    else:
-        c.dataset_kwargs = dnnlib.EasyDict(DATASET_OPTIONS[opts.dataset])
-    c.dataset_kwargs.use_labels = opts.get('cond', True)
+    c.dataset_kwargs = get_dataset_kwargs(opts.dataset, use_labels=opts.get('cond', True))
     try:
         dataset_obj = dnnlib.util.construct_class_by_name(**c.dataset_kwargs)
         dataset_channels = dataset_obj.num_channels
@@ -120,6 +116,7 @@ def setup_training_config(preset='edm2-img512-s', **opts):
     c.selection_kwargs = dnnlib.EasyDict(func_name='ours.selection.jointly_sample_batch',
                                          N=opts.N, filter_ratio=opts.filter_ratio, learnability=opts.learnability,
                                          inverted=opts.inverted, numeric_stability_trick=opts.numeric_stability_trick)
+    if c.selection: c.lr_kwargs.update(dict(super_batch_size=opts.batch))
     
     # Performance-related options.
     c.batch_gpu = opts.get('batch_gpu', 0) or None
