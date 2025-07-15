@@ -18,6 +18,9 @@ import seaborn as sns
 import karras.dnnlib as dnnlib
 from ours.dataset import DATASET_OPTIONS, get_dataset_kwargs
 
+import warnings
+warnings.filterwarnings('ignore', 'No artists with labels found to put in legend')
+
 api = wandb.Api()
 
 sns.set_theme(style="darkgrid")
@@ -51,24 +54,28 @@ def download_metrics(run_ids, output_filepath, max_epochs=None, page_size=100):
 
 A4_DIMS = [11.7, 8.3] # H,W in inches; 2480x3508 pixels at 300 dpi
 
-def set_up_figure(n_rows=1, n_cols=1, portrait=True, facecolor="w", padding=0.2, dpi=100):
+def set_up_figure(n_rows=1, n_cols=1, portrait=True, facecolor="w", padding=0.2, dpi=100, aspect="auto"):
+
+    assert aspect in ["equal", "auto"], "Aspect should be either 'equal' or 'auto'"
+
+    if n_cols==1 and n_rows > 1:
+        kwargs = dict( gridspec_kw=dict(hspace=0), sharey=True )
+    elif n_rows == 1 and n_cols > 1:
+        kwargs = dict( gridspec_kw=dict(wspace=0), sharex=True )
+    else: kwargs = dict()
 
     if n_rows>4 or n_cols>4:
         if portrait: fig_size = A4_DIMS[::-1] # Portrait
         else: fig_size = A4_DIMS # Landscape
 
-        cell_size = min((np.array(fig_size)-2*padding)/np.array([n_rows, n_cols]))
-        fig_size = 2*padding+cell_size*np.array((n_rows, n_cols))
-        
-        fig, axes = plt.subplots(n_rows, n_cols, facecolor=facecolor, figsize=fig_size[::-1], dpi=dpi)
-
-    elif n_cols==1:
-        fig, axes = plt.subplots(n_rows, n_cols, facecolor=facecolor, dpi=dpi, gridspec_kw=dict(hspace=0), sharey=True)
-    elif n_rows==1:
-        fig, axes = plt.subplots(n_rows, n_cols, facecolor=facecolor, dpi=dpi, gridspec_kw=dict(wspace=0), sharex=True)
-
+        cell_size = (np.array(fig_size)-2*padding)/np.array([n_rows, n_cols])
+        if aspect == "equal":
+            fig_size = 2*padding+min(cell_size)*np.array((n_rows, n_cols))
+        else:
+            fig_size = 2*padding+cell_size*np.array((n_rows, n_cols))
+        fig, axes = plt.subplots(n_rows, n_cols, facecolor=facecolor, figsize=fig_size[::-1], dpi=dpi, **kwargs)
     else:
-        fig, axes = plt.subplots(n_rows, n_cols, facecolor=facecolor, dpi=dpi)
+        fig, axes = plt.subplots(n_rows, n_cols, facecolor=facecolor, dpi=dpi, **kwargs)
 
     return fig, axes
 
@@ -80,7 +87,7 @@ def visualize_images(dataset, img_ids, are_ids_selected=None, n_cols=32):
     if plot_all: are_ids_selected = [True]*len(img_ids)
 
     # Create landscape figure
-    fig, axes = set_up_figure(n_rows, n_cols, portrait=False, facecolor="k", padding=0.5, dpi=300)
+    fig, axes = set_up_figure(n_rows, n_cols, portrait=False, facecolor="k", padding=0.5, dpi=300, aspect="equal")
 
     # Plot images
     for idx, (img_id, is_selected) in enumerate(zip(img_ids, are_ids_selected)):
@@ -108,7 +115,7 @@ def visualize_images_per_iteration(dataset, img_ids, are_ids_selected, N_iterati
     if plot_all: are_ids_selected = [True for img_id in img_ids]
 
     # Create figure
-    fig, axes = set_up_figure(n_rows, n_cols, portrait=True, facecolor="black")
+    fig, axes = set_up_figure(n_rows, n_cols, portrait=True, facecolor="black", aspect="equal")
 
     # Plot images
     selected_img_ids = img_ids[are_ids_selected]
