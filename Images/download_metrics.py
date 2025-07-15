@@ -26,14 +26,14 @@ api = wandb.Api()
 
 sns.set_theme(style="darkgrid")
 
-def download_metrics(run_ids, output_filepath, max_epochs=None, page_size=100):
+def download_metrics(run_ids, output_filepath, max_epochs=None, page_size=100, n_ranks=2):
     wait_for_trigger = max_epochs is not None
 
     # Download data
     history = []
     for run_id in run_ids:
         run = api.run(f"ajest/Images/{run_id}")
-        hist = run.scan_history(keys=["Epoch", "Indices", "Selected indices"], page_size=100)
+        hist = run.scan_history(keys=["Epoch", "Indices", "Selected indices"], page_size=page_size)
         history.append(hist)
 
     # Save data to CSV file
@@ -48,7 +48,7 @@ def download_metrics(run_ids, output_filepath, max_epochs=None, page_size=100):
             if wait_for_trigger and epoch_i >= max_epochs: break
             for round_i in range(len(rank_rows[0]["Indices"])):
                 for image_i in range(len(rank_rows[0]["Indices"][round_i])):
-                    for rank_i in range(2):
+                    for rank_i in range(n_ranks):
                         img_id = rank_rows[rank_i]["Indices"][round_i][image_i]
                         is_img_id_selected = image_i in rank_rows[rank_i]["Selected indices"][round_i]
                         writer.writerow([rank_i, rank_rows[rank_i]["Epoch"], round_i, img_id, int(is_img_id_selected)])
