@@ -241,8 +241,8 @@ def visualize_all_selected_images(dataset_name, indices_filepath, ajest_N=None,
                                 # if show_histograms:
                         
                         if i % n_lines_per_epoch == 0:
-                            these_img_ids = chain(*img_ids)
-                            are_these_img_ids_selected = chain(*are_img_ids_selected)
+                            these_img_ids = list(chain(*img_ids))
+                            are_these_img_ids_selected = list(chain(*are_img_ids_selected))
                             if show_images:
                                 fig_filepath = os.path.join(folder, f"epoch_{epoch_i}_images.jpeg")
                                 fig, axes = visualize_images(dataset, these_img_ids, are_these_img_ids_selected, n_cols=24)
