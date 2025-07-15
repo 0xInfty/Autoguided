@@ -51,30 +51,36 @@ def download_metrics(run_ids, output_filepath, max_epochs=None, page_size=100):
 
 A4_DIMS = [11.7, 8.3] # H,W in inches; 2480x3508 pixels at 300 dpi
 
-def set_up_figure(n_rows, n_cols, portrait=True, facecolor="w"):
+def set_up_figure(n_rows=1, n_cols=1, portrait=True, facecolor="w", padding=0.2, dpi=100):
 
-    if portrait: fig_size = A4_DIMS[::-1] # Portrait
-    else: fig_size = A4_DIMS # Landscape
+    if n_rows>4 or n_cols>4:
+        if portrait: fig_size = A4_DIMS[::-1] # Portrait
+        else: fig_size = A4_DIMS # Landscape
 
-    padding = 0.2 # 0.5 cm in inches
-    cell_size = min((np.array(fig_size)-2*padding)/np.array([n_rows, n_cols]))
-    fig_size = 2*padding+cell_size*np.array((n_rows, n_cols))
-    
-    fig, axes = plt.subplots(n_rows, n_cols, facecolor=facecolor, figsize=fig_size[::-1])
+        cell_size = min((np.array(fig_size)-2*padding)/np.array([n_rows, n_cols]))
+        fig_size = 2*padding+cell_size*np.array((n_rows, n_cols))
+        
+        fig, axes = plt.subplots(n_rows, n_cols, facecolor=facecolor, figsize=fig_size[::-1], dpi=dpi)
+
+    elif n_cols==1:
+        fig, axes = plt.subplots(n_rows, n_cols, facecolor=facecolor, dpi=dpi, gridspec_kw=dict(hspace=0), sharey=True)
+    elif n_rows==1:
+        fig, axes = plt.subplots(n_rows, n_cols, facecolor=facecolor, dpi=dpi, gridspec_kw=dict(wspace=0), sharex=True)
+
+    else:
+        fig, axes = plt.subplots(n_rows, n_cols, facecolor=facecolor, dpi=dpi)
 
     return fig, axes
 
-def visualize_images(dataset, img_ids, are_ids_selected=None):
+def visualize_images(dataset, img_ids, are_ids_selected=None, n_cols=32):
 
     # Get parameters for figure
-    n_cols = 32
     n_rows = int(len(img_ids)/n_cols)
     plot_all = are_ids_selected is None
-    if plot_all: are_ids_selected = [True for img_id in img_ids]
+    if plot_all: are_ids_selected = [True]*len(img_ids)
 
     # Create landscape figure
-    fig, axes = plt.subplots(n_rows, n_cols, figsize=A4_DIMS, facecolor="black")
-    plt.subplots_adjust(wspace=0.1, hspace=0.1)
+    fig, axes = set_up_figure(n_rows, n_cols, portrait=False, facecolor="k", padding=0.5, dpi=300)
 
     # Plot images
     for idx, (img_id, is_selected) in enumerate(zip(img_ids, are_ids_selected)):
@@ -89,7 +95,6 @@ def visualize_images(dataset, img_ids, are_ids_selected=None):
         ax.axis('off')
 
     # Final layout and export
-    plt.tight_layout(pad=0)
     plt.show()
 
     return fig, axes
@@ -208,8 +213,7 @@ def visualize_classes(dataset, img_ids, are_ids_selected=None):
     if plot_all: are_ids_selected = [True for img_id in img_ids]
 
     # Create landscape figure
-    fig, axes = plt.subplots(n_rows, n_cols, figsize=A4_DIMS, facecolor="black")
-    plt.subplots_adjust(wspace=0.1, hspace=0.1)
+    fig, axes = set_up_figure(n_rows, n_cols, portrait=False, facecolor="k", padding=0.5)
 
     # Plot images
     for idx, (img_id, is_selected) in enumerate(zip(img_ids, are_ids_selected)):
@@ -219,7 +223,7 @@ def visualize_classes(dataset, img_ids, are_ids_selected=None):
         ax.set_facecolor("black")
         if plot_all or is_selected:
             _, _, label = dataset[img_id]
-            plt.text(0.5, 0.5, str(list(label).index(1)),
+            plt.text(0.5, 0.5, str(list(label).index(1)), fontdict=dict(fontsize="xx-small"),
                     horizontalalignment='center', verticalalignment='center',
                     color="w", transform = ax.transAxes)
         ax.axis('off')
@@ -238,13 +242,8 @@ def visualize_classes_per_iteration(dataset, img_ids, are_ids_selected, N_iterat
     plot_all = are_ids_selected is None
     if plot_all: are_ids_selected = [True for img_id in img_ids]
 
-    fig_size = A4_DIMS[::-1] # Portrait
-    padding = 0.2 # 0.5 cm in inches
-    cell_size = min((np.array(fig_size)-2*padding)/np.array([n_rows, n_cols]))
-    fig_size = 2*padding+cell_size*np.array((n_rows, n_cols))
-
     # Create figure
-    fig, axes = plt.subplots(n_rows, n_cols, facecolor="black", figsize=fig_size[::-1])
+    fig, axes = set_up_figure(n_rows, n_cols, portrait=True, facecolor="black")
 
     # Plot images
     selected_img_ids = img_ids[are_ids_selected]
@@ -291,8 +290,8 @@ def plot_classes_histogram(dataset, img_ids, are_ids_selected, ax=None):
 def plot_classes_histogram_per_round(dataset, img_ids, are_ids_selected):
 
     # Create figure
-    n_rounds = len(img_ids)
-    fig, axes = plt.subplots(nrows=n_rounds, gridspec_kw=dict(hspace=0))
+    n_rows = len(img_ids)
+    fig, axes = set_up_figure(n_rows=n_rows)
 
     for round_i, ax in enumerate(axes):
         fig, ax = plot_classes_histogram(dataset, img_ids[round_i], are_ids_selected[round_i], ax=ax)
