@@ -51,6 +51,19 @@ def download_metrics(run_ids, output_filepath, max_epochs=None, page_size=100):
 
 A4_DIMS = [11.7, 8.3] # H,W in inches; 2480x3508 pixels at 300 dpi
 
+def set_up_figure(n_rows, n_cols, portrait=True, facecolor="w"):
+
+    if portrait: fig_size = A4_DIMS[::-1] # Portrait
+    else: fig_size = A4_DIMS # Landscape
+
+    padding = 0.2 # 0.5 cm in inches
+    cell_size = min((np.array(fig_size)-2*padding)/np.array([n_rows, n_cols]))
+    fig_size = 2*padding+cell_size*np.array((n_rows, n_cols))
+    
+    fig, axes = plt.subplots(n_rows, n_cols, facecolor=facecolor, figsize=fig_size[::-1])
+
+    return fig, axes
+
 def visualize_images(dataset, img_ids, are_ids_selected=None):
 
     # Get parameters for figure
@@ -89,13 +102,8 @@ def visualize_images_per_iteration(dataset, img_ids, are_ids_selected, N_iterati
     plot_all = are_ids_selected is None
     if plot_all: are_ids_selected = [True for img_id in img_ids]
 
-    fig_size = A4_DIMS[::-1] # Portrait
-    padding = 0.2 # 0.5 cm in inches
-    cell_size = min((np.array(fig_size)-2*padding)/np.array([n_rows, n_cols]))
-    fig_size = 2*padding+cell_size*np.array((n_rows, n_cols))
-
     # Create figure
-    fig, axes = plt.subplots(n_rows, n_cols, facecolor="black", figsize=fig_size[::-1])
+    fig, axes = set_up_figure(n_rows, n_cols, portrait=True, facecolor="black")
 
     # Plot images
     selected_img_ids = img_ids[are_ids_selected]
@@ -273,6 +281,7 @@ def plot_classes_histogram(dataset, img_ids, are_ids_selected, ax=None):
     sns.histplot(data=pd.DataFrame(dict(selected=labels))[are_ids_selected], 
                  bins=n_classes, binrange=(0,n_classes), 
                  x="selected", color="red", label="Selected", alpha=.7, ax=ax)
+    plt.xlabel("Classes")
     plt.legend()
     plt.tight_layout(pad=0)
     if creating_fig: plt.show()
