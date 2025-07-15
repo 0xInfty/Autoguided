@@ -14,6 +14,7 @@ import click
 import tqdm
 import matplotlib.pyplot as plt
 import seaborn as sns
+from itertools import chain
 
 import karras.dnnlib as dnnlib
 from ours.dataset import DATASET_OPTIONS, get_dataset_kwargs
@@ -87,7 +88,7 @@ def visualize_images(dataset, img_ids, are_ids_selected=None, n_cols=32):
     if plot_all: are_ids_selected = [True]*len(img_ids)
 
     # Create landscape figure
-    fig, axes = set_up_figure(n_rows, n_cols, portrait=False, facecolor="k", padding=0.5, dpi=300, aspect="equal")
+    fig, axes = set_up_figure(n_rows, n_cols, portrait=False, facecolor="k", padding=0.5, aspect="equal")
 
     # Plot images
     for idx, (img_id, is_selected) in enumerate(zip(img_ids, are_ids_selected)):
@@ -135,7 +136,8 @@ def visualize_images_per_iteration(dataset, img_ids, are_ids_selected, N_iterati
     return fig, axes
 
 def visualize_all_selected_images(dataset_name, indices_filepath, ajest_N=None,
-                                  comparison=True, per_iteration=True, 
+                                  per_round=True, per_iteration=True, 
+                                  show_images=True, show_labels=False, show_histograms=True, 
                                   max_epochs=None, period=None, including=None):
 
     # General configuration
@@ -176,39 +178,85 @@ def visualize_all_selected_images(dataset_name, indices_filepath, ajest_N=None,
         reader = csv.reader(f)
         img_ids, are_img_ids_selected = [], []
         for i, line in tqdm.tqdm(enumerate(reader)):
-            if i==0: pass
-            else:
+            if i>0:
                 epoch_i = int(line[1])
                 round_i = int(line[2])
-                img_ids.append(int(line[-2]))
-                are_img_ids_selected.append(bool(int(line[-1])))
-            if i>0 and i % n_lines_per_round == 0 and (epoch_i % period == 0 or epoch_i in including):
+                if epoch_i % period == 0 or epoch_i in including:
+                    try: 
+                        img_ids[round_i].append(int(line[-2]))
+                        are_img_ids_selected[round_i].append(bool(int(line[-1])))
+                    except:
+                        img_ids.append([int(line[-2])])
+                        are_img_ids_selected.append([bool(int(line[-1]))])
 
-                # Visualize all images in the round, and then show only those selected
-                if comparison:
-                    fig, axes = visualize_images(dataset, img_ids)
-                    fig_filepath = os.path.join(folder, f"epoch_{epoch_i}_round_{round_i}_all.jpeg")
-                    fig.savefig(fig_filepath, dpi=300, bbox_inches='tight')
-                    plt.close(fig)
-                    fig, axes = visualize_images(dataset, img_ids, are_img_ids_selected)
-                    fig_filepath = os.path.join(folder, f"epoch_{epoch_i}_round_{round_i}_compared.jpeg")
-                    fig.savefig(fig_filepath, dpi=300, bbox_inches='tight')
-                    plt.close(fig)
-                
-                # Visualize images in the round in the order in which they were selected
-                if per_iteration:
-                    img_ids = np.array(img_ids, dtype=np.int32)
-                    are_img_ids_selected = np.array(are_img_ids_selected, dtype=bool)
-                    fig_filepath = os.path.join(folder, f"epoch_{epoch_i}__round_{round_i}_selected_0.jpeg")
-                    fig, axes = visualize_images_per_iteration(dataset, img_ids[0::2], are_img_ids_selected[0::2], ajest_N)
-                    fig.savefig(fig_filepath, dpi=300, bbox_inches='tight')
-                    plt.close(fig)
-                    fig_filepath = os.path.join(folder, f"epoch_{epoch_i}__round_{round_i}_selected_1.jpeg")
-                    fig, axes = visualize_images_per_iteration(dataset, img_ids[1::2], are_img_ids_selected[1::2], ajest_N)
-                    fig.savefig(fig_filepath, dpi=300, bbox_inches='tight')
-                    plt.close(fig)
-                
-                img_ids, are_img_ids_selected = [], []
+                    if i % n_lines_per_round == 0:
+                        
+                        if i>0 and i % n_lines_per_round == 0:
+
+                            # Visualize all images in the round, and then show only those selected
+                            if per_round:
+                                these_img_ids = img_ids[round_i]
+                                are_these_img_ids_selected = are_img_ids_selected[round_i]
+                                if show_images:
+                                    fig, axes = visualize_images(dataset, these_img_ids)
+                                    fig_filepath = os.path.join(folder, f"epoch_{epoch_i}_round_{round_i}_all_images.jpeg")
+                                    fig.savefig(fig_filepath, bbox_inches='tight'); plt.close(fig)
+                                    fig, axes = visualize_images(dataset, these_img_ids, are_these_img_ids_selected)
+                                    fig_filepath = os.path.join(folder, f"epoch_{epoch_i}_round_{round_i}_images.jpeg")
+                                    fig.savefig(fig_filepath, bbox_inches='tight'); plt.close(fig)
+                                if show_labels:
+                                    fig, axes = visualize_classes(dataset, these_img_ids)
+                                    fig_filepath = os.path.join(folder, f"epoch_{epoch_i}_round_{round_i}_all_labels.jpeg")
+                                    fig.savefig(fig_filepath, bbox_inches='tight'); plt.close(fig)
+                                    fig, axes = visualize_classes(dataset, these_img_ids, are_these_img_ids_selected)
+                                    fig_filepath = os.path.join(folder, f"epoch_{epoch_i}_round_{round_i}_labels.jpeg")
+                                    fig.savefig(fig_filepath, bbox_inches='tight'); plt.close(fig)
+                                if show_histograms:
+                                    fig, axes = plot_classes_histogram(dataset, these_img_ids, are_these_img_ids_selected)
+                                    fig_filepath = os.path.join(folder, f"epoch_{epoch_i}_round_{round_i}_histogram.jpeg")
+                                    fig.savefig(fig_filepath, bbox_inches='tight'); plt.close(fig)
+
+                            # Visualize images in the round in the order in which they were selected
+                            if per_iteration:
+                                these_img_ids = np.array(img_ids[round_i], dtype=np.int32)
+                                are_these_img_ids_selected = np.array(are_img_ids_selected[round_i], dtype=bool)
+                                if show_images:
+                                    fig_filepath = os.path.join(folder, f"epoch_{epoch_i}_round_{round_i}_rank_0_images.jpeg")
+                                    fig, axes = visualize_images_per_iteration(dataset, these_img_ids[0::2], 
+                                                                            are_these_img_ids_selected[0::2], ajest_N)
+                                    fig.savefig(fig_filepath, bbox_inches='tight'); plt.close(fig)
+                                    fig_filepath = os.path.join(folder, f"epoch_{epoch_i}_round_{round_i}_rank_1_images.jpeg")
+                                    fig, axes = visualize_images_per_iteration(dataset, these_img_ids[1::2], 
+                                                                            are_these_img_ids_selected[1::2], ajest_N)
+                                    fig.savefig(fig_filepath, bbox_inches='tight'); plt.close(fig)
+                                if show_labels:
+                                    fig_filepath = os.path.join(folder, f"epoch_{epoch_i}_round_{round_i}_rank_0_labels.jpeg")
+                                    fig, axes = visualize_classes_per_iteration(dataset, these_img_ids[0::2], 
+                                                                            are_these_img_ids_selected[0::2], ajest_N)
+                                    fig.savefig(fig_filepath, bbox_inches='tight'); plt.close(fig)
+                                    fig_filepath = os.path.join(folder, f"epoch_{epoch_i}_round_{round_i}_rank_1_labels.jpeg")
+                                    fig, axes = visualize_classes_per_iteration(dataset, these_img_ids[1::2], 
+                                                                            are_these_img_ids_selected[1::2], ajest_N)
+                                    fig.savefig(fig_filepath, bbox_inches='tight'); plt.close(fig)
+                                # if show_histograms:
+                        
+                        if i % n_lines_per_epoch == 0:
+                            these_img_ids = chain(*img_ids)
+                            are_these_img_ids_selected = chain(*are_img_ids_selected)
+                            if show_images:
+                                fig_filepath = os.path.join(folder, f"epoch_{epoch_i}_images.jpeg")
+                                fig, axes = visualize_images(dataset, these_img_ids, are_these_img_ids_selected, n_cols=24)
+                                fig.savefig(fig_filepath, bbox_inches='tight'); plt.close(fig)
+                            if show_labels:
+                                fig_filepath = os.path.join(folder, f"epoch_{epoch_i}_labels.jpeg")
+                                fig, axes = visualize_classes(dataset, these_img_ids, are_these_img_ids_selected, n_cols=24)
+                                fig.savefig(fig_filepath, bbox_inches='tight'); plt.close(fig)
+                            if show_histograms:
+                                fig, axes = plot_classes_histogram(dataset, these_img_ids, are_these_img_ids_selected)
+                                fig_filepath = os.path.join(folder, f"epoch_{epoch_i}_histogram.jpeg")
+                                fig.savefig(fig_filepath, bbox_inches='tight'); plt.close(fig)
+                            img_ids, are_img_ids_selected = [], []
+
             if limited_epochs and epoch_i >= max_epochs: break
 
 def visualize_classes(dataset, img_ids, are_ids_selected=None):
@@ -326,13 +374,13 @@ def download(runs, dest, maxn):
 @click.option('--maxn',       help='Maximum number of epochs to store', metavar='INT', type=int, required=False, default=None, show_default=True)
 @click.option('--period',     help='Execute every period epochs', metavar='INT', type=int, required=False, default=None, show_default=True)
 @click.option('--inc',        help='Epoch indices to be included regardless of period', metavar='INT', required=False, multiple=True, default=None, show_default=True)
-@click.option('--compare/--no-compare',    help='Show comparison between selected and not selected', metavar='BOOL', type=bool, default=True)
-@click.option('--per-iter/--no-per-iter',  help='Show selected images per iteration', metavar='BOOL', type=bool, default=True)
+@click.option('--per-round/--no-per-round', help='Show selected images per round', metavar='BOOL', type=bool, default=True)
+@click.option('--per-iter/--no-per-iter',   help='Show selected images per iteration', metavar='BOOL', type=bool, default=False)
 
-def visualize(source, dataset, seln, maxn, period, inc, compare, per_iter):
+def visualize(source, dataset, seln, maxn, period, inc, per_round, per_iter):
     source = os.path.join(dirs.MODELS_HOME, source)
     visualize_all_selected_images(dataset, source, ajest_N=seln, 
-                                  comparison=compare, per_iteration=per_iter, 
+                                  per_round=per_round, per_iteration=per_iter, 
                                   max_epochs=maxn, period=period, including=inc)
 
 if __name__ == "__main__":
