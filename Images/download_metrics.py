@@ -256,10 +256,12 @@ def visualize_classes_per_iteration(dataset, img_ids, are_ids_selected, N_iterat
 
     return fig, axes
 
-def plot_classes_histogram(dataset, img_ids, are_ids_selected):
+def plot_classes_histogram(dataset, img_ids, are_ids_selected, ax=None):
 
     # Create landscape figure
-    fig, axes = plt.subplots()
+    creating_fig = ax is None
+    if creating_fig: fig, ax = plt.subplots()
+    else: fig = ax.figure
 
     # Plot images
     labels = np.array([dataset[img_id][-1] for img_id in img_ids])
@@ -267,15 +269,27 @@ def plot_classes_histogram(dataset, img_ids, are_ids_selected):
     labels = np.array([list(lab).index(1) for lab in labels])
     
     sns.histplot(data=pd.DataFrame(dict(labels=labels)), bins=n_classes, binrange=(0,n_classes), 
-                    x="labels", color="blue", label="Observed", alpha=0.5)
+                 x="labels", color="blue", label="Observed", alpha=0.5, ax=ax)
     sns.histplot(data=pd.DataFrame(dict(selected=labels))[are_ids_selected], 
-                bins=n_classes, binrange=(0,n_classes), 
-                x="selected", color="red", label="Selected", alpha=.7)
+                 bins=n_classes, binrange=(0,n_classes), 
+                 x="selected", color="red", label="Selected", alpha=.7, ax=ax)
     plt.legend()
     plt.tight_layout(pad=0)
-    plt.show()
+    if creating_fig: plt.show()
 
-    return fig, axes
+    return fig, ax
+
+def plot_classes_histogram_per_round(dataset, img_ids, are_ids_selected):
+
+    # Create figure
+    n_rounds = len(img_ids)
+    fig, axes = plt.subplots(nrows=n_rounds, gridspec_kw=dict(hspace=0))
+
+    for round_i, ax in enumerate(axes):
+        fig, ax = plot_classes_histogram(dataset, img_ids[round_i], are_ids_selected[round_i], ax=ax)
+    plt.show(fig)
+
+    return fig, ax
 
 @click.group()
 def cmdline():
