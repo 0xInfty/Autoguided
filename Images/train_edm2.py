@@ -207,7 +207,7 @@ def parse_nimg(s):
 @click.option('--filt',  'filter_ratio',
                 help='ACID filter ratio', metavar='FLOAT', type=float, default=0.8, show_default=True)
 @click.option('--n', 'N', 
-                help='ACID chunk size', metavar='INT', type=int, default=8, show_default=True)
+                help='ACID number of data selection iterations', metavar='INT', type=int, default=8, show_default=True)
 @click.option('--diff/--no-diff', 'learnability',
                 help='Use ACID learnability score?', metavar='BOOL', type=bool, default=True, show_default=True)
 @click.option('--invert/--no-invert', 'inverted',
