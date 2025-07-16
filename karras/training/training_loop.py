@@ -67,22 +67,13 @@ def learning_rate_schedule(cur_nimg, batch_size,
         print("> Ref batches * batch size > Rampup Nimg", ref_batches * batch_size > rampup_Mimg*1e6)
 
     # Make it decay faster while selecting data
-    # n_batches = (cur_nimg - diff_nimg) / batch_size
     n_batches = (cur_nimg - diff_nimg) * super_batch_size / (batch_size**2)
-    # n_batches = (cur_nimg - diff_nimg) * super_batch_size**2 / (batch_size**3)
 
-    # Ramp up according to the number of images seen by the model with no data selection
-    rampup_batches = rampup_Mimg * 1e6 / super_batch_size # for given batch size
-    # rampup_batches = rampup_Mimg * 1e6 / batch_size # for given batch size
-    # rampup_batches = rampup_Mimg * 1e6 * super_batch_size / (batch_size**2) # for given batch size
+    # Ramp up according to number of images seen with the super batch size and no data selection
+    rampup_batches = rampup_Mimg * 1e6 / super_batch_size
     
-    # Decay according to the number of batches seen by a model with the original batch size
-    ref_batches = ref_batches
-    # ref_batches = ref_batches * super_batch_size / ref_batch_size
-    # ref_batches = ref_batches * super_batch_size # for given batch size
-    # ref_batches = ref_batches * batch_size # for given batch size
-    # ref_batches = ref_batches * super_batch_size / batch_size # for given batch size
-    # ref_batches = ref_batches * batch_size / super_batch_size # assume ref_batches was for super batch size, and adjust to current batch size instead
+    # Decay according to number of batches, regardless of batch size
+    # ref_batches = ref_batches
 
     if verbose:
         print("Final")
