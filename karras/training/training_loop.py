@@ -177,6 +177,9 @@ def training_loop(
         dist.print0("Data selection configuration =", selection_kwargs)
         selection_snapshot_nimg = int(snapshot_nimg*(1-selection_kwargs.filter_ratio))
         selection_checkpoint_nimg = int(checkpoint_nimg*(1-selection_kwargs.filter_ratio))
+        selection_snapshot_nimg = snapshot_nimg / (2**round(np.log( snapshot_nimg/selection_snapshot_nimg , 2 )))
+        selection_checkpoint_nimg = snapshot_nimg / (2**round(np.log( snapshot_nimg/selection_checkpoint_nimg , 2 )))
+        # Assuming that snapshot_nimg and selection_checkpoint_nimg are big multiples of a big power of 2
     else: 
         run_selection = False
         is_selection_waiting = False
