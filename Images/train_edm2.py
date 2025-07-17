@@ -56,10 +56,11 @@ config_presets = {
     'edm2-tiny-xxs':    dnnlib.EasyDict(duration=img_to_tiny(2048<<20), batch=2048, channels=64, 
                                         lr=0.0170, decay=img_to_tiny(70e3*2048)/2048, rampup=img_to_tiny(10*1e6)/1e6,
                                         dropout=0.00, P_mean=-0.4, P_std=1.0,
-                                        checkpoint_nimg=None, snapshot_nimg=40*2048),
+                                        checkpoint_nimg=500*2048, snapshot_nimg=250*2048),
     'edm2-tiny-xs':     dnnlib.EasyDict(duration=img_to_tiny(2048<<20), batch=2048, channels=128, ref_channels=64,
                                         lr=0.0120, decay=img_to_tiny(70e3*2048)/2048, rampup=img_to_tiny(10*1e6)/1e6,
-                                        dropout=0.00, ref_dropout=0.00, P_mean=-0.4, P_std=1.0),
+                                        dropout=0.00, ref_dropout=0.00, P_mean=-0.4, P_std=1.0,
+                                        checkpoint_nimg=500*2048, snapshot_nimg=250*2048),
 }
 config_presets["test-training"] = config_presets["edm2-cifar10-xxs"]
 config_presets["test-training"].duration = 20*2048 # Just for 20 epochs

@@ -175,7 +175,8 @@ def training_loop(
             is_selection_waiting = False
             dist.print0("Data selection with early-start execution strategy")
         dist.print0("Data selection configuration =", selection_kwargs)
-        selection_loss_factor = 1/selection_kwargs.filter_ratio
+        selection_snapshot_nimg = int(snapshot_nimg*(1-selection_kwargs.filter_ratio))
+        selection_checkpoint_nimg = int(checkpoint_nimg*(1-selection_kwargs.filter_ratio))
     else: 
         run_selection = False
         is_selection_waiting = False
@@ -341,15 +342,16 @@ def training_loop(
                         run_selection = False
                         is_selection_waiting = False
                     cumulative_selection_time += time.time() - selection_time_start
-                round_nimg = world_size * len(loss)
+                gpu_nimg = len(loss)
+                round_nimg = world_size * gpu_nimg
                 epoch_nimg += round_nimg
                 state.cur_nimg += round_nimg
                 epoch_loss.append(float(loss.mean()))
 
                 # Accumulate loss and calculate gradients
                 if run_selection:
-                    loss.sum().mul(selection_loss_factor).backward()
-                    # Instead of B, I'm only adding up f*B terms, so I multiply by 1/f
+                    loss.sum().mul(batch_gpu/gpu_nimg).backward()
+                    # Instead of B, I'm only adding up b<B terms, so I multiply by B/b
                 else: loss.sum().backward()
 
             # Log on each round and each epoch
@@ -442,7 +444,11 @@ def training_loop(
                 done = True
 
         # Save network snapshot.
-        if snapshot_nimg is not None and state.cur_nimg % snapshot_nimg == 0 and (state.cur_nimg != start_nimg or start_nimg == 0) and dist.get_rank() == 0:
+        if run_selection: 
+            snapshot_condition = state.cur_nimg % selection_snapshot_nimg == 0
+        else:
+            snapshot_condition = state.cur_nimg % snapshot_nimg == 0
+        if snapshot_nimg is not None and snapshot_condition and (state.cur_nimg != start_nimg or start_nimg == 0) and dist.get_rank() == 0:
             ema_list = ema.get() if ema is not None else optimizer.get_ema(net) if hasattr(optimizer, 'get_ema') else net
             ema_list = ema_list if isinstance(ema_list, list) else [(ema_list, '')]
             for ema_net, ema_suffix in ema_list:
@@ -456,7 +462,11 @@ def training_loop(
                 del data # conserve memory
 
         # Save state checkpoint.
-        if checkpoint_nimg is not None and (done or state.cur_nimg % checkpoint_nimg == 0) and state.cur_nimg != start_nimg:
+        if run_selection: 
+            checkpoint_condition = state.cur_nimg % selection_checkpoint_nimg == 0
+        else:
+            checkpoint_condition = state.cur_nimg % checkpoint_nimg == 0
+        if checkpoint_nimg is not None and (done or checkpoint_condition) and state.cur_nimg != start_nimg:
             checkpoint.save(os.path.join(run_dir, f'training-state-{state.cur_epoch:07d}.pt'))
             misc.check_ddp_consistency(net)
 
