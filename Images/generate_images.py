@@ -80,6 +80,10 @@ config_presets = {
     'edm2-CIFAR10-xxs-ajest-final':    EasyDict(net=os.path.join(models_dir, "01_CIFAR10", "AJEST", "00", 'network-snapshot-0042879-0.100.pkl')),
     'edm2-CIFAR10-xxs-ajest-nimg':     EasyDict(net=os.path.join(models_dir, "01_CIFAR10", "Ref", "00", 'network-snapshot-0000639-0.100.pkl')),
     'edm2-CIFAR10-xxs-eajest':         EasyDict(net=os.path.join(models_dir, "01_CIFAR10", 'network-snapshot-0117440-0.100.pkl')),       # fid = unknown
+    'edm2-tiny-ref-0.10':              EasyDict(net=os.path.join(models_dir, "04_Tiny_LR/Ref/00/network-snapshot-0005159-0.100.pkl")),       # fid = unknown
+    'edm2-tiny-ref-0.05':              EasyDict(net=os.path.join(models_dir, "04_Tiny_LR/Ref/00/network-snapshot-0005159-0.050.pkl")),       # fid = unknown
+    'edm2-tiny-base-0.10':             EasyDict(net=os.path.join(models_dir, "04_Tiny_LR/Baseline/00/network-snapshot-0020479-0.100.pkl")),       # fid = unknown
+    'edm2-tiny-base-0.50':             EasyDict(net=os.path.join(models_dir, "04_Tiny_LR/Baseline/00/network-snapshot-0020479-0.050.pkl")),       # fid = unknown
 }
 
 #----------------------------------------------------------------------------
@@ -281,7 +285,7 @@ def parse_int_list(s):
 @click.option('--preset',                   help='Configuration preset', metavar='STR',                             type=str, default=None)
 @click.option('--net',                      help='Main network pickle filename', metavar='PATH|URL',                type=str, default=None)
 @click.option('--gnet',                     help='Guiding network pickle filename', metavar='PATH|URL',             type=str, default=None)
-@click.option('--outdir',                   help='Where to save the output images', metavar='DIR',                  type=str, required=True)
+@click.option('--outdir',                   help='Where to save the output images', metavar='DIR',                  type=str, default=None, show_default=True)
 @click.option('--results/--no-results',     help='Whether to send output to Results or to Data', metavar='BOOL',    type=bool, default=False, show_default=True)
 @click.option('--subdirs',                  help='Create subdirectory for every 1000 seeds',                        is_flag=True)
 @click.option('--seeds',                    help='List of random seeds (e.g. 1,2,5-10)', metavar='LIST',            type=parse_int_list, default='16-19', show_default=True)
@@ -342,10 +346,12 @@ def cmdline(preset, **opts):
         log.info("Guidance cannot be activated: no guidance weight in configuration preset")
     opts.guidance = opts.guidance_weight # Rename for `generate_images` to work
     del opts.guidance_weight
+    if opts.outdir is None:
+        opts.outdir = os.path.splitext(opts.net)[0].split( models_dir+os.sep )[-1]
     if opts.results:
         opts.outdir = os.path.join(dirs.RESULTS_HOME, "Images", opts.outdir)
     else: 
-        opts.outdir = os.path.join(dirs.DATA_HOME, opts.outdir)
+        opts.outdir = os.path.join(dirs.DATA_HOME, "generated", opts.outdir)
     del opts.results
 
     # Generate.
