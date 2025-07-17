@@ -52,15 +52,15 @@ config_presets = {
     'edm2-cifar10-xxs': dnnlib.EasyDict(duration=img_to_cifar(2048<<20), batch=2048, channels=64,
                                         lr=0.0170, decay=img_to_cifar(70e3*2048)/2048, rampup=img_to_cifar(10*1e6)/1e6,
                                         dropout=0.00, P_mean=-0.4, P_std=1.0,
-                                        checkpoint_nimg=None, snapshot_nimg=40*2048),
+                                        checkpoint_period=None, snapshot_period=40),
     'edm2-tiny-xxs':    dnnlib.EasyDict(duration=img_to_tiny(2048<<20), batch=2048, channels=64, 
                                         lr=0.0170, decay=img_to_tiny(70e3*2048)/2048, rampup=img_to_tiny(10*1e6)/1e6,
                                         dropout=0.00, P_mean=-0.4, P_std=1.0,
-                                        checkpoint_nimg=500*2048, snapshot_nimg=250*2048),
+                                        checkpoint_period=1000, snapshot_period=500),
     'edm2-tiny-xs':     dnnlib.EasyDict(duration=img_to_tiny(2048<<20), batch=2048, channels=128, ref_channels=64,
                                         lr=0.0120, decay=img_to_tiny(70e3*2048)/2048, rampup=img_to_tiny(10*1e6)/1e6,
                                         dropout=0.00, ref_dropout=0.00, P_mean=-0.4, P_std=1.0,
-                                        checkpoint_nimg=500*2048, snapshot_nimg=250*2048),
+                                        checkpoint_period=1000, snapshot_period=500),
 }
 config_presets["test-training"] = config_presets["edm2-cifar10-xxs"]
 config_presets["test-training"].duration = 20*2048 # Just for 20 epochs
@@ -126,9 +126,9 @@ def setup_training_config(preset='edm2-img512-s', **opts):
     c.cudnn_benchmark = opts.get('bench', True)
 
     # I/O-related options.
-    c.status_nimg = opts.get('status', 0) or None
-    c.snapshot_nimg = config_presets[preset].get("snapshot_nimg", opts.get('snapshot', 0)) or None
-    c.checkpoint_nimg = config_presets[preset].get("checkpoint_nimg", opts.get('checkpoint', 0)) or None
+    c.status_period = opts.get('status', 0) or None
+    c.snapshot_period = config_presets[preset].get("snapshot_period", opts.get('snapshot', 0)) or None
+    c.checkpoint_period = config_presets[preset].get("checkpoint_period", opts.get('checkpoint', 0)) or None
     c.seed = opts.get('seed', 0)
     return c
 
@@ -192,7 +192,7 @@ def parse_nimg(s):
 
 # Hyperparameters.
 @click.option('--duration',         help='Training duration', metavar='NIMG',                   type=parse_nimg, default=None)
-@click.option('--batch',            help='Total batch size', metavar='NIMG',                    type=parse_nimg, default=None)
+@click.option('--batch',            help='Total batch size', metavar='INT',                     type=int, default=None)
 @click.option('--channels',         help='Channel multiplier', metavar='INT',                   type=click.IntRange(min=64), default=None)
 @click.option('--dropout',          help='Dropout probability', metavar='FLOAT',                type=click.FloatRange(min=0, max=1), default=None)
 @click.option('--P_mean', 'P_mean', help='Noise level mean', metavar='FLOAT',                   type=float, default=None)
@@ -221,15 +221,15 @@ def parse_nimg(s):
                 help='Use the softmax stability trick?', metavar='BOOL', type=bool, default=False, show_default=True)
 
 # Performance-related options.
-@click.option('--batch-gpu',        help='Limit batch size per GPU', metavar='NIMG',            type=parse_nimg, default=0, show_default=True)
+@click.option('--batch-gpu',        help='Limit batch size per GPU', metavar='INT',             type=int, default=0, show_default=True)
 @click.option('--fp16',             help='Enable mixed-precision training', metavar='BOOL',     type=bool, default=True, show_default=True)
 @click.option('--ls',               help='Loss scaling', metavar='FLOAT',                       type=click.FloatRange(min=0, min_open=True), default=1, show_default=True)
 @click.option('--bench',            help='Enable cuDNN benchmarking', metavar='BOOL',           type=bool, default=True, show_default=True)
 
 # I/O-related options.
-@click.option('--status',           help='Interval of status prints', metavar='NIMG',           type=parse_nimg, default='128Ki', show_default=True)
-@click.option('--snapshot',         help='Interval of network snapshots', metavar='NIMG',       type=parse_nimg, default='8Mi', show_default=True)
-@click.option('--checkpoint',       help='Interval of training checkpoints', metavar='NIMG',    type=parse_nimg, default='128Mi', show_default=True)
+@click.option('--status',           help='Epoch period of status prints', metavar='INT',        type=int, default=int((128<<10)/2048), show_default=True)
+@click.option('--snapshot',         help='Epoch period of network snapshots', metavar='INT',    type=int, default=int((8<<20)/2048), show_default=True)
+@click.option('--checkpoint',       help='Epoch period of training checkpoints', metavar='INT', type=int, default=int((128<<20)/2048), show_default=True)
 @click.option('--seed',             help='Random seed', metavar='INT',                          type=int, default=0, show_default=True)
 @click.option('-n', '--dry-run',    help='Print training options and exit',                     is_flag=True)
 

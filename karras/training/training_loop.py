@@ -16,6 +16,7 @@ import copy
 import pickle
 import psutil
 import builtins
+import math
 import numpy as np
 import torch
 import wandb
@@ -119,9 +120,10 @@ def training_loop(
     selection_late      = False,    # Run data selection once the learner becomes better than the ref
     selection_early     = False,    # Run data selection only while the learner is worse than the ref
 
-    status_nimg         = 128<<10,  # Report status every N training images. None = disable.
-    snapshot_nimg       = 8<<20,    # Save network snapshot every N training images. None = disable.
-    checkpoint_nimg     = 128<<20,  # Save state checkpoint every N training images. None = disable.
+    status_period         = (128<<10)/2048,  # Report status every N epochs. None = disable.
+    snapshot_period       = (8<<20)/2048,    # Save network snapshot every N epochs. None = disable.
+    checkpoint_period     = (128<<20)/2048,  # Save state checkpoint every N epochs. None = disable.
+    detail_max_epoch      = 1000,            # Save five times as frequently until this point
 
     loss_scaling        = 1,        # Loss scaling factor for reducing FP16 under/overflows.
     force_finite        = True,     # Get rid of NaN/Inf gradients before feeding them to the optimizer.
@@ -152,9 +154,12 @@ def training_loop(
     assert batch_size == batch_gpu * num_accumulation_rounds * world_size
     assert total_nimg % batch_size == 0
     assert slice_nimg is None or slice_nimg % batch_size == 0
-    assert status_nimg is None or status_nimg % batch_size == 0
-    assert snapshot_nimg is None or (snapshot_nimg % batch_size == 0 and snapshot_nimg % 1024 == 0)
-    assert checkpoint_nimg is None or (checkpoint_nimg % batch_size == 0 and checkpoint_nimg % 1024 == 0)
+    assert status_period is None or status_period % 4 == 0
+    assert snapshot_period is None or snapshot_period % 4 == 0
+    assert checkpoint_period is None or checkpoint_period % 4 == 0
+    detail_status_period = int(status_period / 4)
+    detail_snapshot_period = int(snapshot_period / 4)
+    detail_checkpoint_period = int(checkpoint_period / 4)
 
     # Set up data selection
     dist.print0("Data selection =", selection)
@@ -175,11 +180,6 @@ def training_loop(
             is_selection_waiting = False
             dist.print0("Data selection with early-start execution strategy")
         dist.print0("Data selection configuration =", selection_kwargs)
-        selection_snapshot_nimg = int(snapshot_nimg*(1-selection_kwargs.filter_ratio))
-        selection_checkpoint_nimg = int(checkpoint_nimg*(1-selection_kwargs.filter_ratio))
-        selection_snapshot_nimg = snapshot_nimg / (2**round(np.log( snapshot_nimg/selection_snapshot_nimg , 2 )))
-        selection_checkpoint_nimg = snapshot_nimg / (2**round(np.log( snapshot_nimg/selection_checkpoint_nimg , 2 )))
-        # Assuming that snapshot_nimg and selection_checkpoint_nimg are big multiples of a big power of 2
     else: 
         run_selection = False
         is_selection_waiting = False
@@ -238,7 +238,7 @@ def training_loop(
     # Decide how long to train.
     stop_at_nimg = total_nimg
     if slice_nimg is not None:
-        granularity = checkpoint_nimg if checkpoint_nimg is not None else snapshot_nimg if snapshot_nimg is not None else batch_size
+        granularity = checkpoint_period if checkpoint_period is not None else snapshot_period if snapshot_period is not None else batch_size
         slice_end_nimg = (state.cur_nimg + slice_nimg) // granularity * granularity # round down
         stop_at_nimg = min(stop_at_nimg, slice_end_nimg)
     assert stop_at_nimg > state.cur_nimg
@@ -403,75 +403,82 @@ def training_loop(
         done = (state.cur_nimg >= stop_at_nimg)
         epoch_logs.update({"Training Time [sec]": cumulative_training_time*1000})
         run.log(epoch_logs)
-        if status_nimg is not None and (done or state.cur_nimg % status_nimg == 0) and (state.cur_nimg != start_nimg or start_nimg == 0):
-            cur_time = time.time()
-            state.total_elapsed_time += cur_time - prev_status_time
-            cur_process = psutil.Process(os.getpid())
-            cpu_memory_usage = sum(p.memory_info().rss for p in [cur_process] + cur_process.children(recursive=True))
-            dist.print0(' '.join(['Status:',
-                'kimg',         f"{training_stats.report0('Progress/kimg',                              state.cur_nimg / 1e3):<9.1f}",
-                'time',         f"{dnnlib.util.format_time(training_stats.report0('Timing/total_sec',   state.total_elapsed_time)):<12s}",
-                'sec/tick',     f"{training_stats.report0('Timing/sec_per_tick',                        cur_time - prev_status_time):<8.2f}",
-                'sec/kimg',     f"{training_stats.report0('Timing/sec_per_kimg',                        cumulative_training_time / max(state.cur_nimg - prev_status_nimg, 1) * 1e3):<7.3f}",
-                'maintenance',  f"{training_stats.report0('Timing/maintenance_sec',                     cur_time - prev_status_time - cumulative_training_time):<7.2f}",
-                'cpumem',       f"{training_stats.report0('Resources/cpu_mem_gb',                       cpu_memory_usage / 2**30):<6.2f}",
-                'gpumem',       f"{training_stats.report0('Resources/peak_gpu_mem_gb',                  torch.cuda.max_memory_allocated(device) / 2**30):<6.2f}",
-                'reserved',     f"{training_stats.report0('Resources/peak_gpu_mem_reserved_gb',         torch.cuda.max_memory_reserved(device) / 2**30):<6.2f}",
-            ]))
-            kimg_logs.update({
-                'Speed [sec/tick]' : cur_time - prev_status_time,
-                'Speed [sec/kimg]' : (cumulative_training_time - prev_cumulative_training_time) / max(state.cur_nimg - prev_status_nimg, 1) * 1e3,
-            })
-            run.log(kimg_logs)
-            prev_cumulative_training_time = cumulative_training_time
-            prev_status_nimg = state.cur_nimg
-            prev_status_time = cur_time
-            torch.cuda.reset_peak_memory_stats()
+        if status_period is not None and (done or state.cur_epoch % status_period == 0) and (state.cur_nimg != start_nimg or start_nimg == 0):
+            if state.cur_epoch < detail_max_epoch: 
+                status_condition = state.cur_epoch % detail_status_period == 0
+            else:
+                status_condition = state.cur_epoch % status_period == 0
+            if status_condition:
+                cur_time = time.time()
+                state.total_elapsed_time += cur_time - prev_status_time
+                cur_process = psutil.Process(os.getpid())
+                cpu_memory_usage = sum(p.memory_info().rss for p in [cur_process] + cur_process.children(recursive=True))
+                dist.print0(' '.join(['Status:',
+                    'kimg',         f"{training_stats.report0('Progress/kimg',                              state.cur_nimg / 1e3):<9.1f}",
+                    'time',         f"{dnnlib.util.format_time(training_stats.report0('Timing/total_sec',   state.total_elapsed_time)):<12s}",
+                    'sec/tick',     f"{training_stats.report0('Timing/sec_per_tick',                        cur_time - prev_status_time):<8.2f}",
+                    'sec/kimg',     f"{training_stats.report0('Timing/sec_per_kimg',                        cumulative_training_time / max(state.cur_nimg - prev_status_nimg, 1) * 1e3):<7.3f}",
+                    'maintenance',  f"{training_stats.report0('Timing/maintenance_sec',                     cur_time - prev_status_time - cumulative_training_time):<7.2f}",
+                    'cpumem',       f"{training_stats.report0('Resources/cpu_mem_gb',                       cpu_memory_usage / 2**30):<6.2f}",
+                    'gpumem',       f"{training_stats.report0('Resources/peak_gpu_mem_gb',                  torch.cuda.max_memory_allocated(device) / 2**30):<6.2f}",
+                    'reserved',     f"{training_stats.report0('Resources/peak_gpu_mem_reserved_gb',         torch.cuda.max_memory_reserved(device) / 2**30):<6.2f}",
+                ]))
+                kimg_logs.update({
+                    'Speed [sec/tick]' : cur_time - prev_status_time,
+                    'Speed [sec/kimg]' : (cumulative_training_time - prev_cumulative_training_time) / max(state.cur_nimg - prev_status_nimg, 1) * 1e3,
+                })
+                run.log(kimg_logs)
+                prev_cumulative_training_time = cumulative_training_time
+                prev_status_nimg = state.cur_nimg
+                prev_status_time = cur_time
+                torch.cuda.reset_peak_memory_stats()
 
-            # Flush training stats.
-            training_stats.default_collector.update()
-            if dist.get_rank() == 0:
-                if stats_jsonl is None:
-                    stats_jsonl = open(os.path.join(run_dir, 'stats.jsonl'), 'at')
-                fmt = {'Progress/tick': '%.0f', 'Progress/kimg': '%.3f', 'timestamp': '%.3f'}
-                items = [(name, value.mean) for name, value in training_stats.default_collector.as_dict().items()] + [('timestamp', time.time())]
-                items = [f'"{name}": ' + (fmt.get(name, '%g') % value if np.isfinite(value) else 'NaN') for name, value in items]
-                stats_jsonl.write('{' + ', '.join(items) + '}\n')
-                stats_jsonl.flush()
+                # Flush training stats.
+                training_stats.default_collector.update()
+                if dist.get_rank() == 0:
+                    if stats_jsonl is None:
+                        stats_jsonl = open(os.path.join(run_dir, 'stats.jsonl'), 'at')
+                    fmt = {'Progress/tick': '%.0f', 'Progress/kimg': '%.3f', 'timestamp': '%.3f'}
+                    items = [(name, value.mean) for name, value in training_stats.default_collector.as_dict().items()] + [('timestamp', time.time())]
+                    items = [f'"{name}": ' + (fmt.get(name, '%g') % value if np.isfinite(value) else 'NaN') for name, value in items]
+                    stats_jsonl.write('{' + ', '.join(items) + '}\n')
+                    stats_jsonl.flush()
 
-            # Update progress and check for abort.
-            dist.update_progress(state.cur_nimg // 1000, stop_at_nimg // 1000)
-            if state.cur_nimg == stop_at_nimg and state.cur_nimg < total_nimg:
-                dist.request_suspend()
-            if dist.should_stop() or dist.should_suspend():
-                done = True
+                # Update progress and check for abort.
+                dist.update_progress(state.cur_nimg // 1000, stop_at_nimg // 1000)
+                if state.cur_nimg == stop_at_nimg and state.cur_nimg < total_nimg:
+                    dist.request_suspend()
+                if dist.should_stop() or dist.should_suspend():
+                    done = True
 
         # Save network snapshot.
-        if run_selection: 
-            snapshot_condition = state.cur_nimg % selection_snapshot_nimg == 0
-        else:
-            snapshot_condition = state.cur_nimg % snapshot_nimg == 0
-        if snapshot_nimg is not None and snapshot_condition and (state.cur_nimg != start_nimg or start_nimg == 0) and dist.get_rank() == 0:
-            ema_list = ema.get() if ema is not None else optimizer.get_ema(net) if hasattr(optimizer, 'get_ema') else net
-            ema_list = ema_list if isinstance(ema_list, list) else [(ema_list, '')]
-            for ema_net, ema_suffix in ema_list:
-                data = dnnlib.EasyDict(encoder=encoder, dataset_kwargs=dataset_kwargs, loss_fn=loss_fn)
-                data.ema = copy.deepcopy(ema_net).cpu().eval().requires_grad_(False).to(torch.float16)
-                fname = f'network-snapshot-{state.cur_epoch:07d}{ema_suffix}.pkl'
-                dist.print0(f'Saving {fname} ... ', end='', flush=True)
-                with open(os.path.join(run_dir, fname), 'wb') as f:
-                    pickle.dump(data, f)
-                dist.print0('done')
-                del data # conserve memory
+        if snapshot_period is not None and (state.cur_nimg != start_nimg or start_nimg == 0) and dist.get_rank() == 0:
+            if state.cur_epoch < detail_max_epoch: 
+                snapshot_condition = state.cur_epoch % detail_snapshot_period == 0
+            else:
+                snapshot_condition = state.cur_epoch % snapshot_period == 0
+            if done or snapshot_condition:
+                ema_list = ema.get() if ema is not None else optimizer.get_ema(net) if hasattr(optimizer, 'get_ema') else net
+                ema_list = ema_list if isinstance(ema_list, list) else [(ema_list, '')]
+                for ema_net, ema_suffix in ema_list:
+                    data = dnnlib.EasyDict(encoder=encoder, dataset_kwargs=dataset_kwargs, loss_fn=loss_fn)
+                    data.ema = copy.deepcopy(ema_net).cpu().eval().requires_grad_(False).to(torch.float16)
+                    fname = f'network-snapshot-{state.cur_epoch:07d}{ema_suffix}.pkl'
+                    dist.print0(f'Saving {fname} ... ', end='', flush=True)
+                    with open(os.path.join(run_dir, fname), 'wb') as f:
+                        pickle.dump(data, f)
+                    dist.print0('done')
+                    del data # conserve memory
 
         # Save state checkpoint.
-        if run_selection: 
-            checkpoint_condition = state.cur_nimg % selection_checkpoint_nimg == 0
-        else:
-            checkpoint_condition = state.cur_nimg % checkpoint_nimg == 0
-        if checkpoint_nimg is not None and (done or checkpoint_condition) and state.cur_nimg != start_nimg:
-            checkpoint.save(os.path.join(run_dir, f'training-state-{state.cur_epoch:07d}.pt'))
-            misc.check_ddp_consistency(net)
+        if checkpoint_period is not None and state.cur_nimg != start_nimg:
+            if state.cur_epoch < detail_max_epoch: 
+                checkpoint_condition = state.cur_epoch % detail_checkpoint_period == 0
+            else:
+                checkpoint_condition = state.cur_epoch % checkpoint_period == 0
+            if done or checkpoint_condition:
+                checkpoint.save(os.path.join(run_dir, f'training-state-{state.cur_epoch:07d}.pt'))
+                misc.check_ddp_consistency(net)
 
         # Done?
         if done:
