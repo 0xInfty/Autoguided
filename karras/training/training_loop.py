@@ -132,7 +132,8 @@ def training_loop(
 ):
     # Initialize.
     prev_status_time = time.time()
-    misc.set_random_seed(seed, dist.get_rank())
+    rank = dist.get_rank()
+    misc.set_random_seed(seed, rank)
     torch.backends.cudnn.benchmark = cudnn_benchmark
     torch.backends.cudnn.allow_tf32 = False
     torch.backends.cuda.matmul.allow_tf32 = False
@@ -170,10 +171,12 @@ def training_loop(
         if selection_late:
             run_selection = False
             is_selection_waiting = True
+            broadcast_operation = torch.dist.ReduceOp.MAX # If any process sets run to True, set all of them to True
             dist.print0("Data selection with delayed execution strategy")
         elif selection_early:
             run_selection = True
             is_selection_waiting = True
+            broadcast_operation = torch.dist.ReduceOp.MIN # If any process sets run to False, set all of them to False
             dist.print0("Data selection programmed stop strategy")
         else:
             run_selection = True
@@ -202,7 +205,7 @@ def training_loop(
         ref.eval().requires_grad_(False).to(device)
 
     # Print network summary.
-    if dist.get_rank() == 0:
+    if rank == 0:
         misc.print_module_summary(net, [
             torch.zeros([batch_gpu, net.img_channels, net.img_resolution, net.img_resolution], device=device),
             torch.ones([batch_gpu], device=device),
@@ -211,7 +214,7 @@ def training_loop(
 
     # Print reference network summary.
     if is_ref_available:
-        if dist.get_rank() == 0:
+        if rank == 0:
             misc.print_module_summary(ref, [
                 torch.zeros([batch_gpu, ref.img_channels, ref.img_resolution, ref.img_resolution], device=device),
                 torch.ones([batch_gpu], device=device),
@@ -252,7 +255,7 @@ def training_loop(
     if is_ref_available: wandb_ref_path = ref_path.split(dirs.MODELS_HOME)[-1]
     else: wandb_ref_path = None
     if world_size>1:
-        run_name = f"{group_name}_R{dist.get_rank()}"
+        run_name = f"{group_name}_R{rank}"
     else:
         run_name = group_name
     run = wandb.init(
@@ -269,7 +272,7 @@ def training_loop(
         settings=wandb.Settings(x_stats_gpu_device_ids=[taux.get_device_number(device)]))
 
     # Main training loop.
-    dataset_sampler = misc.InfiniteSampler(dataset=dataset_obj, rank=dist.get_rank(), num_replicas=world_size, 
+    dataset_sampler = misc.InfiniteSampler(dataset=dataset_obj, rank=rank, num_replicas=world_size, 
                                            seed=seed, start_idx=state.cur_epoch*batch_size)
     dataset_iterator = iter(dnnlib.util.construct_class_by_name(dataset=dataset_obj, sampler=dataset_sampler, batch_size=batch_gpu, **data_loader_kwargs))
     prev_status_nimg = state.cur_nimg
@@ -296,7 +299,7 @@ def training_loop(
         batch_start_time = time.time()
 
         # Evaluate loss and accumulate gradients.
-        misc.set_random_seed(seed, dist.get_rank(), state.cur_epoch*batch_size)
+        misc.set_random_seed(seed, rank, state.cur_epoch*batch_size)
         optimizer.zero_grad(set_to_none=True)
         epoch_nimg = 0
         epoch_loss = []
@@ -324,12 +327,22 @@ def training_loop(
                     epoch_ref_loss.append(float(ref_loss.mean()))
                     if not net_beats_ref and loss.mean() < ref_loss.mean():
                         net_beats_ref = True
-                        dist.print0("Network has beaten the reference")
+                        print("Network has beaten the reference")
                         if is_selection_waiting:
                             run_selection = not(run_selection)
-                            if run_selection: dist.print0("Selection will now be run")
-                            else: dist.print0("Selection will now be stopped")
+                            if run_selection: print("Selection will now be run")
+                            else: print("Selection will now be stopped")
                             is_selection_waiting = False
+                    # Inform all other GPUs of changes in run_selection
+                    sync_tensor = torch.tensor([run_selection], dtype=torch.bool, device=device)
+                    dist.all_reduce(sync_tensor, op=broadcast_operation)
+                    new_run_selection = bool(sync_tensor.item())
+                    if new_run_selection != run_selection:
+                        print("Network has beaten the reference")
+                        if run_selection: print("Selection will now be run")
+                        else: print("Selection will now be stopped")
+                        is_selection_waiting = False
+                    run_selection = new_run_selection
                     cumulative_selection_time += time.time() - selection_time_start
 
                 # Calculate overall loss
@@ -435,7 +448,7 @@ def training_loop(
 
                 # Flush training stats.
                 training_stats.default_collector.update()
-                if dist.get_rank() == 0:
+                if rank == 0:
                     if stats_jsonl is None:
                         stats_jsonl = open(os.path.join(run_dir, 'stats.jsonl'), 'at')
                     fmt = {'Progress/tick': '%.0f', 'Progress/kimg': '%.3f', 'timestamp': '%.3f'}
@@ -452,7 +465,7 @@ def training_loop(
                     done = True
 
         # Save network snapshot.
-        if snapshot_period is not None and (state.cur_nimg != start_nimg or start_nimg == 0) and dist.get_rank() == 0:
+        if snapshot_period is not None and (state.cur_nimg != start_nimg or start_nimg == 0) and rank == 0:
             if state.cur_epoch < detail_max_epoch: 
                 snapshot_condition = state.cur_epoch % detail_snapshot_period == 0
             else:
@@ -489,6 +502,6 @@ def training_loop(
     try: run.finish()
     except AttributeError: pass
     torch.distributed.barrier()
-    if dist.get_rank()==0: move_wandb_files(run_dir, run_dir)
+    if rank==0: move_wandb_files(run_dir, run_dir)
 
 #----------------------------------------------------------------------------
