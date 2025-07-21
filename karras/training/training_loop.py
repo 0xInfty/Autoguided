@@ -337,7 +337,8 @@ def training_loop(
                     sync_tensor = torch.tensor([run_selection], dtype=torch.bool, device=device)
                     torch.distributed.all_reduce(sync_tensor, op=broadcast_operation)
                     new_run_selection = bool(sync_tensor.item())
-                    if new_run_selection != run_selection:
+                    if is_selection_waiting and new_run_selection != run_selection:
+                        net_beats_ref = True
                         print("Network has beaten the reference")
                         if new_run_selection: print("Selection will now be run")
                         else: print("Selection will now be stopped")
