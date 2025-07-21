@@ -339,7 +339,7 @@ def training_loop(
                     new_run_selection = bool(sync_tensor.item())
                     if new_run_selection != run_selection:
                         print("Network has beaten the reference")
-                        if run_selection: print("Selection will now be run")
+                        if new_run_selection: print("Selection will now be run")
                         else: print("Selection will now be stopped")
                         is_selection_waiting = False
                     run_selection = new_run_selection
