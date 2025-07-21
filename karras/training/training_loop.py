@@ -171,12 +171,12 @@ def training_loop(
         if selection_late:
             run_selection = False
             is_selection_waiting = True
-            broadcast_operation = torch.dist.ReduceOp.MAX # If any process sets run to True, set all of them to True
+            broadcast_operation = torch.distributed.ReduceOp.MAX # If any process sets run to True, set all of them to True
             dist.print0("Data selection with delayed execution strategy")
         elif selection_early:
             run_selection = True
             is_selection_waiting = True
-            broadcast_operation = torch.dist.ReduceOp.MIN # If any process sets run to False, set all of them to False
+            broadcast_operation = torch.distributed.ReduceOp.MIN # If any process sets run to False, set all of them to False
             dist.print0("Data selection programmed stop strategy")
         else:
             run_selection = True
@@ -335,7 +335,7 @@ def training_loop(
                             is_selection_waiting = False
                     # Inform all other GPUs of changes in run_selection
                     sync_tensor = torch.tensor([run_selection], dtype=torch.bool, device=device)
-                    dist.all_reduce(sync_tensor, op=broadcast_operation)
+                    torch.distributed.all_reduce(sync_tensor, op=broadcast_operation)
                     new_run_selection = bool(sync_tensor.item())
                     if new_run_selection != run_selection:
                         print("Network has beaten the reference")
