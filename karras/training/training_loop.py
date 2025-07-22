@@ -52,26 +52,51 @@ class EDM2Loss:
 #----------------------------------------------------------------------------
 # Learning rate decay schedule
 
-def learning_rate_schedule(cur_nimg, batch_size, 
+def learning_rate_schedule(cur_nimg, cur_epoch, run_selection=False, early=False,
+                           mini_batch_size=None, super_batch_size=None, ref_batch_size=2048,
                            ref_lr=100e-4, ref_batches=70e3, rampup_Mimg=10, 
-                           ref_batch_size=2048,
-                           super_batch_size=None, 
-                           diff_lr=0, diff_nimg=0, verbose=False):
+                           change_nimg=0, change_epoch=0,
+                           verbose=False):
     
-    super_batch_size = super_batch_size or batch_size
+    mini_batch_size = mini_batch_size or ref_batch_size
+    super_batch_size = super_batch_size or ref_batch_size
+    assert super_batch_size >= mini_batch_size, "Super batch size cannot be smaller than mini batch size"
+    assert not run_selection or (super_batch_size > mini_batch_size), "Selection requires uper_batch_size > mini_batch_size"
+
+    # Infer batch size
+    if run_selection: batch_size = mini_batch_size
+    else: batch_size = super_batch_size
 
     if verbose:
         print("Original")
         print("> N img", cur_nimg)
         print("> Rampup img", rampup_Mimg*1e6)
         print("> Ref batches", ref_batches)
-        print("> Ref batches * batch size > Rampup Nimg", ref_batches * batch_size > rampup_Mimg*1e6)
+        print("> Ref batches * batch size > Rampup Nimg", ref_batches * mini_batch_size > rampup_Mimg*1e6)
 
+    # Data selection factor
+    factor = super_batch_size / mini_batch_size
+    if verbose: print("Data selection factor", factor)
+
+    # Make the function continuous if AJEST is triggered to run early or late
+    if change_epoch != 0:
+        if not run_selection and early:
+            change_factor = factor - 1
+            cur_nimg = cur_nimg + change_factor * change_nimg
+            cur_epoch = cur_epoch + change_factor * change_epoch
+            # Maybe change_epoch should be fractional if round>0
+        elif run_selection and not early:
+            if verbose: print("Late data selection clause")
+            change_factor = (factor - 1)/factor
+            cur_nimg = cur_nimg - change_factor * change_nimg
+            cur_epoch = cur_epoch - change_factor * change_epoch
+    
     # Make it decay faster while selecting data
-    n_batches = (cur_nimg - diff_nimg) * super_batch_size / (batch_size**2)
+    if verbose: print("Actual data selection factor", super_batch_size / batch_size)
+    cur_epoch = cur_epoch * super_batch_size / batch_size
 
     # Ramp up according to number of images seen with the super batch size and no data selection
-    rampup_batches = rampup_Mimg * 1e6 / super_batch_size
+    rampup_nimg = rampup_Mimg * 1e6 * batch_size / super_batch_size
     
     # Decay according to number of batches, regardless of batch size
     # ref_batches = ref_batches
@@ -79,18 +104,18 @@ def learning_rate_schedule(cur_nimg, batch_size,
     if verbose:
         print("Final")
         print("> N batches", cur_nimg)
-        print("> Rampup batches (r)", rampup_batches)
+        print("> Rampup img", rampup_nimg)
         print("> Ref batches (t0)", ref_batches)
-        print("> Ref batches * batch size > Rampup Nimg", ref_batches > rampup_batches)
+        print("> Ref batches * batch size > Rampup Nimg", ref_batches * batch_size > rampup_nimg)
 
     # Apply original Karras et al's schedule from the paper "Analyzing and Improving
     # the Training Dynamics of Diffusion Models".
     lr = ref_lr
     if rampup_Mimg > 0:
-        lr *= min(n_batches / rampup_batches, 1)
+        lr *= min(cur_nimg / rampup_nimg, 1)
     if ref_batches > 0:
-        lr /= np.sqrt(max(n_batches / ref_batches, 1))
-    return lr - diff_lr
+        lr /= np.sqrt(max(cur_epoch / ref_batches, 1))
+    return lr
 
 #----------------------------------------------------------------------------
 # Main training loop.
