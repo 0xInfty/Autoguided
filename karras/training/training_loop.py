@@ -213,6 +213,8 @@ def training_loop(
     else: 
         run_selection = False
         is_selection_waiting = False
+    change_just_happened = False
+    change_epoch, change_nimg = 0, 0
     net_beats_ref = False
     
     # Setup dataset, encoder, and network.
@@ -362,6 +364,7 @@ def training_loop(
                             if run_selection: print("Selection will now be run")
                             else: print("Selection will now be stopped")
                             is_selection_waiting = False
+                            change_just_happened = True
                     # Inform all other GPUs of changes in run_selection
                     sync_tensor = torch.tensor([run_selection], dtype=torch.bool, device=device)
                     torch.distributed.all_reduce(sync_tensor, op=broadcast_operation)
@@ -372,6 +375,7 @@ def training_loop(
                         if new_run_selection: print("Selection will now be run")
                         else: print("Selection will now be stopped")
                         is_selection_waiting = False
+                        change_just_happened = True
                     run_selection = new_run_selection
                     cumulative_selection_time += time.time() - selection_time_start
 
@@ -393,6 +397,10 @@ def training_loop(
                 epoch_nimg += round_nimg
                 state.cur_nimg += round_nimg
                 epoch_loss.append(float(loss.mean()))
+                if change_just_happened:
+                    change_epoch = state.cur_epoch + round_idx / (num_accumulation_rounds-1)
+                    change_nimg = state.cur_nimg
+                    change_just_happened = False
 
                 # Accumulate loss and calculate gradients
                 if run_selection:
@@ -426,7 +434,8 @@ def training_loop(
         # Evaluate learning rate.
         lr = dnnlib.util.call_func_by_name(cur_nimg=state.cur_nimg, cur_epoch=state.cur_epoch, 
                                            run_selection=run_selection, early=selection_early, late=selection_late,
-                                           mini_batch_size=mini_batch_size, super_batch_size=batch_size, **lr_kwargs)
+                                           mini_batch_size=mini_batch_size, super_batch_size=batch_size, 
+                                           change_epoch=change_epoch, change_nimg=change_nimg, **lr_kwargs)
         # Used to say mini_batch_size=epoch_nimg
         training_stats.report('Loss/learning_rate', lr)
         epoch_logs.update({"Learning rate": float(lr)})
