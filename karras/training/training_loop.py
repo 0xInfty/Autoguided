@@ -388,9 +388,7 @@ def training_loop(
                         loss = loss[selected_indices] # Use indices of the selection mini-batch
                         epoch_selected_indices.append(list(selected_indices))
                     except ValueError:
-                        dist.print0("Selection has crashed, so it has been deactivated")
-                        run_selection = False
-                        is_selection_waiting = False
+                        raise ValueError("Selection has crashed on at least 1 of the GPUs")
                     cumulative_selection_time += time.time() - selection_time_start
                 gpu_nimg = len(loss)
                 round_nimg = world_size * gpu_nimg
