@@ -312,7 +312,7 @@ def training_loop(
     stats_jsonl = None
     lr = dnnlib.util.call_func_by_name(cur_nimg=state.cur_nimg, cur_epoch=state.cur_epoch, 
                                        run_selection=run_selection, early=selection_early, late=selection_late,
-                                       mini_batch_size=mini_batch_size, super_batch_size=batch_size, **lr_kwargs)
+                                       mini_batch_size=mini_batch_size, **lr_kwargs)
     kimg_logs = {"Stats' Epoch":state.cur_epoch, 'Speed [sec/tick]':None, 'Speed [sec/kimg]':None}
     epoch_logs = {"Epoch":state.cur_epoch, "Loss":None, "Seen images [kimg]": 0,
                   "Learning rate": lr, "Training Time [sec]":cumulative_training_time*1000}
@@ -432,8 +432,8 @@ def training_loop(
         # Evaluate learning rate.
         lr = dnnlib.util.call_func_by_name(cur_nimg=state.cur_nimg, cur_epoch=state.cur_epoch, 
                                            run_selection=run_selection, early=selection_early, late=selection_late,
-                                           mini_batch_size=mini_batch_size, super_batch_size=batch_size, 
-                                           change_epoch=change_epoch, change_nimg=change_nimg, **lr_kwargs)
+                                           change_epoch=change_epoch, change_nimg=change_nimg,
+                                           mini_batch_size=mini_batch_size, **lr_kwargs)
         # Used to say mini_batch_size=epoch_nimg
         training_stats.report('Loss/learning_rate', lr)
         epoch_logs.update({"Learning rate": float(lr)})
