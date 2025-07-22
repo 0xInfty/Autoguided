@@ -52,7 +52,7 @@ class EDM2Loss:
 #----------------------------------------------------------------------------
 # Learning rate decay schedule
 
-def learning_rate_schedule(cur_nimg, cur_epoch, run_selection=False, early=False,
+def learning_rate_schedule(cur_nimg, cur_epoch, run_selection=False, early=False, late=False,
                            mini_batch_size=None, super_batch_size=None, ref_batch_size=2048,
                            ref_lr=100e-4, ref_batches=70e3, rampup_Mimg=10, 
                            change_nimg=0, change_epoch=0,
@@ -85,7 +85,7 @@ def learning_rate_schedule(cur_nimg, cur_epoch, run_selection=False, early=False
             cur_nimg = cur_nimg + change_factor * change_nimg
             cur_epoch = cur_epoch + change_factor * change_epoch
             # Maybe change_epoch should be fractional if round>0
-        elif run_selection and not early:
+        elif run_selection and late:
             if verbose: print("Late data selection clause")
             change_factor = (factor - 1)/factor
             cur_nimg = cur_nimg - change_factor * change_nimg
@@ -193,6 +193,8 @@ def training_loop(
     if not is_ref_available and selection:
         raise ValueError("Missing reference model")
     if selection:
+        mini_batch_size = int(batch_gpu * (1 - selection_kwargs.filter_ratio) / selection_kwargs.N)
+        mini_batch_size *= selection_kwargs.N * num_accumulation_rounds *  world_size
         if selection_late:
             run_selection = False
             is_selection_waiting = True
@@ -306,7 +308,9 @@ def training_loop(
     cumulative_selection_time = 0
     start_nimg = state.cur_nimg
     stats_jsonl = None
-    lr = dnnlib.util.call_func_by_name(cur_nimg=state.cur_nimg, batch_size=batch_size, **lr_kwargs)
+    lr = dnnlib.util.call_func_by_name(cur_nimg=state.cur_nimg, cur_epoch=state.cur_epoch, 
+                                       run_selection=run_selection, early=selection_early, late=selection_late,
+                                       mini_batch_size=mini_batch_size, super_batch_size=batch_size, **lr_kwargs)
     kimg_logs = {"Stats' Epoch":state.cur_epoch, 'Speed [sec/tick]':None, 'Speed [sec/kimg]':None}
     epoch_logs = {"Epoch":state.cur_epoch, "Loss":None, "Seen images [kimg]": 0,
                   "Learning rate": lr, "Training Time [sec]":cumulative_training_time*1000}
@@ -420,7 +424,10 @@ def training_loop(
                                "Selected indices": None})
 
         # Evaluate learning rate.
-        lr = dnnlib.util.call_func_by_name(cur_nimg=state.cur_nimg, batch_size=epoch_nimg, **lr_kwargs)
+        lr = dnnlib.util.call_func_by_name(cur_nimg=state.cur_nimg, cur_epoch=state.cur_epoch, 
+                                           run_selection=run_selection, early=selection_early, late=selection_late,
+                                           mini_batch_size=mini_batch_size, super_batch_size=batch_size, **lr_kwargs)
+        # Used to say mini_batch_size=epoch_nimg
         training_stats.report('Loss/learning_rate', lr)
         epoch_logs.update({"Learning rate": float(lr)})
 
