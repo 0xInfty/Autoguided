@@ -101,11 +101,11 @@ def setup_training_config(preset='edm2-img512-s', **opts):
     # Hyperparameters.
     c.update(total_nimg=opts.duration, batch_size=opts.batch)
     c.network_kwargs = dnnlib.EasyDict(class_name='karras.training.networks_edm2.Precond', model_channels=opts.channels, dropout=opts.dropout)
-    c.ref_network_kwargs = dnnlib.EasyDict(class_name='karras.training.networks_edm2.Precond', model_channels=opts.channels, dropout=opts.dropout)
-    try: c.ref_network_kwargs.model_channels = opts.ref_channels
-    except KeyError: c.ref_network_kwargs.model_channels = opts.channels
+    c.ref_network_kwargs = dnnlib.EasyDict(class_name='karras.training.networks_edm2.Precond')
+    try: c.ref_network_kwargs.model_channels = opts.ref_channels or opts.channels
+    except AttributeError: c.ref_network_kwargs.model_channels = opts.channels
     try: c.ref_network_kwargs.dropout = opts.ref_dropout
-    except KeyError: c.ref_network_kwargs.dropout = opts.dropout
+    except AttributeError: c.ref_network_kwargs.dropout = opts.dropout
     c.loss_kwargs = dnnlib.EasyDict(class_name='karras.training.training_loop.EDM2Loss', P_mean=opts.P_mean, P_std=opts.P_std)
     c.lr_kwargs = dnnlib.EasyDict(func_name='karras.training.training_loop.learning_rate_schedule', ref_lr=opts.lr, ref_batches=opts.decay, rampup_Mimg=opts.rampup)
 
