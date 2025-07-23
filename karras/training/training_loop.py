@@ -52,26 +52,51 @@ class EDM2Loss:
 #----------------------------------------------------------------------------
 # Learning rate decay schedule
 
-def learning_rate_schedule(cur_nimg, batch_size, 
+def learning_rate_schedule(cur_nimg, cur_epoch, run_selection=False, early=False, late=False,
+                           mini_batch_size=None, super_batch_size=None, ref_batch_size=2048,
                            ref_lr=100e-4, ref_batches=70e3, rampup_Mimg=10, 
-                           ref_batch_size=2048,
-                           super_batch_size=None, 
-                           diff_lr=0, diff_nimg=0, verbose=False):
+                           change_nimg=0, change_epoch=0,
+                           verbose=False):
     
-    super_batch_size = super_batch_size or batch_size
+    super_batch_size = super_batch_size or ref_batch_size
+    mini_batch_size = mini_batch_size or super_batch_size
+    assert super_batch_size >= mini_batch_size, "Super batch size cannot be smaller than mini batch size"
+    assert not run_selection or (super_batch_size > mini_batch_size), "Selection requires uper_batch_size > mini_batch_size"
+
+    # Infer batch size
+    if run_selection: batch_size = mini_batch_size
+    else: batch_size = super_batch_size
 
     if verbose:
         print("Original")
         print("> N img", cur_nimg)
         print("> Rampup img", rampup_Mimg*1e6)
         print("> Ref batches", ref_batches)
-        print("> Ref batches * batch size > Rampup Nimg", ref_batches * batch_size > rampup_Mimg*1e6)
+        print("> Ref batches * batch size > Rampup Nimg", ref_batches * mini_batch_size > rampup_Mimg*1e6)
 
+    # Data selection factor
+    factor = super_batch_size / mini_batch_size
+    if verbose: print("Data selection factor", factor)
+
+    # Make the function continuous if AJEST is triggered to run early or late
+    if change_epoch != 0:
+        if not run_selection and early:
+            change_factor = factor - 1
+            cur_nimg = cur_nimg + change_factor * change_nimg
+            cur_epoch = cur_epoch + change_factor * change_epoch
+            # Maybe change_epoch should be fractional if round>0
+        elif run_selection and late:
+            if verbose: print("Late data selection clause")
+            change_factor = (factor - 1)/factor
+            cur_nimg = cur_nimg - change_factor * change_nimg
+            cur_epoch = cur_epoch - change_factor * change_epoch
+    
     # Make it decay faster while selecting data
-    n_batches = (cur_nimg - diff_nimg) * super_batch_size / (batch_size**2)
+    if verbose: print("Actual data selection factor", super_batch_size / batch_size)
+    cur_epoch = cur_epoch * super_batch_size / batch_size
 
     # Ramp up according to number of images seen with the super batch size and no data selection
-    rampup_batches = rampup_Mimg * 1e6 / super_batch_size
+    rampup_nimg = rampup_Mimg * 1e6 * batch_size / super_batch_size
     
     # Decay according to number of batches, regardless of batch size
     # ref_batches = ref_batches
@@ -79,18 +104,18 @@ def learning_rate_schedule(cur_nimg, batch_size,
     if verbose:
         print("Final")
         print("> N batches", cur_nimg)
-        print("> Rampup batches (r)", rampup_batches)
+        print("> Rampup img", rampup_nimg)
         print("> Ref batches (t0)", ref_batches)
-        print("> Ref batches * batch size > Rampup Nimg", ref_batches > rampup_batches)
+        print("> Ref batches * batch size > Rampup Nimg", ref_batches * batch_size > rampup_nimg)
 
     # Apply original Karras et al's schedule from the paper "Analyzing and Improving
     # the Training Dynamics of Diffusion Models".
     lr = ref_lr
     if rampup_Mimg > 0:
-        lr *= min(n_batches / rampup_batches, 1)
+        lr *= min(cur_nimg / rampup_nimg, 1)
     if ref_batches > 0:
-        lr /= np.sqrt(max(n_batches / ref_batches, 1))
-    return lr - diff_lr
+        lr /= np.sqrt(max(cur_epoch / ref_batches, 1))
+    return lr
 
 #----------------------------------------------------------------------------
 # Main training loop.
@@ -168,15 +193,17 @@ def training_loop(
     if not is_ref_available and selection:
         raise ValueError("Missing reference model")
     if selection:
+        mini_batch_size = int(batch_gpu * (1 - selection_kwargs.filter_ratio) / selection_kwargs.N)
+        mini_batch_size *= selection_kwargs.N * num_accumulation_rounds *  world_size
         if selection_late:
             run_selection = False
             is_selection_waiting = True
-            broadcast_operation = torch.dist.ReduceOp.MAX # If any process sets run to True, set all of them to True
+            broadcast_operation = torch.distributed.ReduceOp.MAX # If any process sets run to True, set all of them to True
             dist.print0("Data selection with delayed execution strategy")
         elif selection_early:
             run_selection = True
             is_selection_waiting = True
-            broadcast_operation = torch.dist.ReduceOp.MIN # If any process sets run to False, set all of them to False
+            broadcast_operation = torch.distributed.ReduceOp.MIN # If any process sets run to False, set all of them to False
             dist.print0("Data selection programmed stop strategy")
         else:
             run_selection = True
@@ -186,6 +213,8 @@ def training_loop(
     else: 
         run_selection = False
         is_selection_waiting = False
+    change_just_happened = False
+    change_epoch, change_nimg = 0, 0
     net_beats_ref = False
     
     # Setup dataset, encoder, and network.
@@ -281,7 +310,9 @@ def training_loop(
     cumulative_selection_time = 0
     start_nimg = state.cur_nimg
     stats_jsonl = None
-    lr = dnnlib.util.call_func_by_name(cur_nimg=state.cur_nimg, batch_size=batch_size, **lr_kwargs)
+    lr = dnnlib.util.call_func_by_name(cur_nimg=state.cur_nimg, cur_epoch=state.cur_epoch, 
+                                       run_selection=run_selection, early=selection_early, late=selection_late,
+                                       mini_batch_size=mini_batch_size, **lr_kwargs)
     kimg_logs = {"Stats' Epoch":state.cur_epoch, 'Speed [sec/tick]':None, 'Speed [sec/kimg]':None}
     epoch_logs = {"Epoch":state.cur_epoch, "Loss":None, "Seen images [kimg]": 0,
                   "Learning rate": lr, "Training Time [sec]":cumulative_training_time*1000}
@@ -333,15 +364,18 @@ def training_loop(
                             if run_selection: print("Selection will now be run")
                             else: print("Selection will now be stopped")
                             is_selection_waiting = False
+                            change_just_happened = True
                     # Inform all other GPUs of changes in run_selection
                     sync_tensor = torch.tensor([run_selection], dtype=torch.bool, device=device)
-                    dist.all_reduce(sync_tensor, op=broadcast_operation)
+                    torch.distributed.all_reduce(sync_tensor, op=broadcast_operation)
                     new_run_selection = bool(sync_tensor.item())
-                    if new_run_selection != run_selection:
+                    if is_selection_waiting and new_run_selection != run_selection:
+                        net_beats_ref = True
                         print("Network has beaten the reference")
-                        if run_selection: print("Selection will now be run")
+                        if new_run_selection: print("Selection will now be run")
                         else: print("Selection will now be stopped")
                         is_selection_waiting = False
+                        change_just_happened = True
                     run_selection = new_run_selection
                     cumulative_selection_time += time.time() - selection_time_start
 
@@ -354,15 +388,17 @@ def training_loop(
                         loss = loss[selected_indices] # Use indices of the selection mini-batch
                         epoch_selected_indices.append(list(selected_indices))
                     except ValueError:
-                        dist.print0("Selection has crashed, so it has been deactivated")
-                        run_selection = False
-                        is_selection_waiting = False
+                        raise ValueError("Selection has crashed on at least 1 of the GPUs")
                     cumulative_selection_time += time.time() - selection_time_start
                 gpu_nimg = len(loss)
                 round_nimg = world_size * gpu_nimg
                 epoch_nimg += round_nimg
                 state.cur_nimg += round_nimg
                 epoch_loss.append(float(loss.mean()))
+                if change_just_happened:
+                    change_epoch = state.cur_epoch + round_idx / (num_accumulation_rounds-1)
+                    change_nimg = state.cur_nimg
+                    change_just_happened = False
 
                 # Accumulate loss and calculate gradients
                 if run_selection:
@@ -394,7 +430,11 @@ def training_loop(
                                "Selected indices": None})
 
         # Evaluate learning rate.
-        lr = dnnlib.util.call_func_by_name(cur_nimg=state.cur_nimg, batch_size=epoch_nimg, **lr_kwargs)
+        lr = dnnlib.util.call_func_by_name(cur_nimg=state.cur_nimg, cur_epoch=state.cur_epoch, 
+                                           run_selection=run_selection, early=selection_early, late=selection_late,
+                                           change_epoch=change_epoch, change_nimg=change_nimg,
+                                           mini_batch_size=mini_batch_size, **lr_kwargs)
+        # Used to say mini_batch_size=epoch_nimg
         training_stats.report('Loss/learning_rate', lr)
         epoch_logs.update({"Learning rate": float(lr)})
 
