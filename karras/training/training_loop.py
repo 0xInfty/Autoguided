@@ -58,8 +58,8 @@ def learning_rate_schedule(cur_nimg, cur_epoch, run_selection=False, early=False
                            change_nimg=0, change_epoch=0,
                            verbose=False):
     
-    mini_batch_size = mini_batch_size or ref_batch_size
     super_batch_size = super_batch_size or ref_batch_size
+    mini_batch_size = mini_batch_size or super_batch_size
     assert super_batch_size >= mini_batch_size, "Super batch size cannot be smaller than mini batch size"
     assert not run_selection or (super_batch_size > mini_batch_size), "Selection requires uper_batch_size > mini_batch_size"
 
