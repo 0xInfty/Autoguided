@@ -37,7 +37,7 @@ import ours.selection as sel
 import logs
 
 PRETRAINED_HOME = os.path.join(dirs.MODELS_HOME, "ToyExample", "00_PreTrained")
-if not os.path.isdir(PRETRAINED_HOME): os.mkdir(PRETRAINED_HOME)
+if not os.path.isdir(PRETRAINED_HOME): os.makedirs(PRETRAINED_HOME)
 
 log = logs.create_logger("errors")
 
