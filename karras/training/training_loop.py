@@ -367,17 +367,18 @@ def training_loop(
                             is_selection_waiting = False
                             change_just_happened = True
                     # Inform all other GPUs of changes in run_selection
-                    sync_tensor = torch.tensor([run_selection], dtype=torch.bool, device=device)
-                    torch.distributed.all_reduce(sync_tensor, op=broadcast_operation)
-                    new_run_selection = bool(sync_tensor.item())
-                    if is_selection_waiting and new_run_selection != run_selection:
-                        net_beats_ref = True
-                        print("Network has beaten the reference")
-                        if new_run_selection: print("Selection will now be run")
-                        else: print("Selection will now be stopped")
-                        is_selection_waiting = False
-                        change_just_happened = True
-                    run_selection = new_run_selection
+                    if is_selection_waiting or change_just_happened:
+                        sync_tensor = torch.tensor([run_selection], dtype=torch.bool, device=device)
+                        torch.distributed.all_reduce(sync_tensor, op=broadcast_operation)
+                        new_run_selection = bool(sync_tensor.item())
+                        if is_selection_waiting and new_run_selection != run_selection:
+                            net_beats_ref = True
+                            print("Network has beaten the reference")
+                            if new_run_selection: print("Selection will now be run")
+                            else: print("Selection will now be stopped")
+                            is_selection_waiting = False
+                            change_just_happened = True
+                        run_selection = new_run_selection
                     cumulative_selection_time += time.time() - selection_time_start
 
                 # Calculate overall loss
