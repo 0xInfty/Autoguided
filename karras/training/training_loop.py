@@ -211,6 +211,7 @@ def training_loop(
             dist.print0("Data selection with early-start execution strategy")
         dist.print0("Data selection configuration =", selection_kwargs)
     else: 
+        mini_batch_size = batch_size
         run_selection = False
         is_selection_waiting = False
     change_just_happened = False
