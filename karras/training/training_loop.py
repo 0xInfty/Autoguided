@@ -94,6 +94,7 @@ def learning_rate_schedule(cur_nimg, cur_epoch, run_selection=False, early=False
     # Make it decay faster while selecting data
     if verbose: print("Actual data selection factor", super_batch_size / batch_size)
     cur_epoch = cur_epoch * super_batch_size / batch_size
+    cur_nimg = cur_nimg * super_batch_size / batch_size
 
     # Ramp up according to number of images seen with the super batch size and no data selection
     rampup_nimg = rampup_Mimg * 1e6 * batch_size / super_batch_size
