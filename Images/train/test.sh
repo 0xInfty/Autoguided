@@ -1,7 +1,7 @@
 preset="test-training"; dataset="cifar10"
-subdir="99_Test/AJEST/02"; ref="01_CIFAR10/Ref/00/network-snapshot-0000039-0.100.pkl"
+subdir="99_Test/AJEST/03"; ref="01_CIFAR10/Ref/00/network-snapshot-0000039-0.100.pkl"
 batchsize=512
-devices=1,2; ndevices=2
+devices=0,1; ndevices=2
 device=2
 
 # With no data selection
