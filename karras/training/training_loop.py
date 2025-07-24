@@ -28,6 +28,7 @@ import karras.torch_utils.training_stats as training_stats
 import karras.torch_utils.persistence as persistence
 import karras.torch_utils.misc as misc
 from ours.utils import move_wandb_files, get_wandb_name, get_wandb_tags
+from ours.selection import REQUIRES_REF_LOSS
 
 #----------------------------------------------------------------------------
 # Uncertainty-based loss function (Equations 14,15,16,21) proposed in the
@@ -191,11 +192,9 @@ def training_loop(
     # Set up data selection
     dist.print0("Data selection =", selection)
     is_ref_available = ref_path is not None
-    if not is_ref_available and selection:
-        raise ValueError("Missing reference model")
     if selection:
-        mini_batch_size = int(batch_gpu * (1 - selection_kwargs.filter_ratio) / selection_kwargs.N)
-        mini_batch_size *= selection_kwargs.N * num_accumulation_rounds *  world_size
+        mini_batch_gpu = int(batch_gpu * (1 - selection_kwargs.filter_ratio) / selection_kwargs.N) * selection_kwargs.N
+        mini_batch_size = mini_batch_gpu * num_accumulation_rounds *  world_size
         if selection_late:
             run_selection = False
             is_selection_waiting = True
@@ -211,13 +210,21 @@ def training_loop(
             is_selection_waiting = False
             dist.print0("Data selection with early-start execution strategy")
         dist.print0("Data selection configuration =", selection_kwargs)
+        requires_ref_loss = selection_kwargs.func_name.split("ours.selection") in REQUIRES_REF_LOSS
     else: 
+        mini_batch_gpu = batch_gpu
         mini_batch_size = batch_size
         run_selection = False
         is_selection_waiting = False
+        requires_ref_loss = False
     change_just_happened = False
     change_epoch, change_nimg = 0, 0
     net_beats_ref = False
+    selection_kwargs.selection_size = mini_batch_gpu
+    selection_kwargs.mini_batch_size = mini_batch_size
+    selection_kwargs.requires_ref_loss = requires_ref_loss
+    if not is_ref_available and selection and requires_ref_loss:
+        raise ValueError("Missing reference model")
     
     # Setup dataset, encoder, and network.
     dist.print0('Loading dataset...')
@@ -351,7 +358,7 @@ def training_loop(
                 epoch_indices.append(list(indices))
                 
                 # Calculate reference loss
-                if run_selection or is_selection_waiting:
+                if (run_selection and requires_ref_loss) or is_selection_waiting:
                     selection_time_start = time.time()
                     ref_loss = loss_fn(net=ref, images=images, labels=labels.to(device))
                     ref_loss = ref_loss.sum(dim=(1,2,3)).mul(loss_factor)
@@ -381,6 +388,7 @@ def training_loop(
                             change_just_happened = True
                         run_selection = new_run_selection
                     cumulative_selection_time += time.time() - selection_time_start
+                elif run_selection: ref_loss = None
 
                 # Calculate overall loss
                 if run_selection:

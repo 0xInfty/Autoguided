@@ -64,6 +64,8 @@ config_presets = {
 }
 config_presets["test-training"] = config_presets["edm2-cifar10-xxs"]
 config_presets["test-training"].duration = 20*2048 # Just for 20 epochs
+config_presets["test-random"] = config_presets["test-training"]
+config_presets["test-random"]["selection_func"] = "ours.selection.random_baseline"
 
 #----------------------------------------------------------------------------
 # Setup arguments for training.training_loop.training_loop().
@@ -114,9 +116,10 @@ def setup_training_config(preset='edm2-img512-s', **opts):
     c.selection = opts.get('selection', 0) or None
     c.selection_early = opts.get('selection_early', 0) or None
     c.selection_late = opts.get('selection_late', 0) or None
-    c.selection_kwargs = dnnlib.EasyDict(func_name='ours.selection.jointly_sample_batch',
-                                         N=opts.N, filter_ratio=opts.filter_ratio, learnability=opts.learnability,
+    c.selection_kwargs = dnnlib.EasyDict(N=opts.N, filter_ratio=opts.filter_ratio, learnability=opts.learnability,
                                          inverted=opts.inverted, numeric_stability_trick=opts.numeric_stability_trick)
+    if opts.acid: c.selection_kwargs.func_name = 'ours.selection.jointly_sample_batch'
+    else: c.selection_kwargs.func_name = 'ours.selection.random_baseline'
     if c.selection: c.lr_kwargs.update(dict(super_batch_size=opts.batch))
     
     # Performance-related options.
@@ -203,7 +206,9 @@ def parse_nimg(s):
 # Data selection.
 @click.option('--guide-path', 'ref_path',
                 help='Use auto-guidance?', metavar='PATH', type=str, default=None, show_default=True)
-@click.option('--acid/--no-acid', 'selection',
+@click.option('--selection/--no-selection', 'selection',
+                help='Use data selection?', metavar='BOOL', type=bool, default=False, show_default=True)
+@click.option('--acid/--no-acid', 'acid',
                 help='Use ACID batch selection?', metavar='BOOL', type=bool, default=False, show_default=True)
 @click.option('--filt',  'filter_ratio',
                 help='ACID filter ratio', metavar='FLOAT', type=float, default=0.8, show_default=True)
@@ -265,6 +270,7 @@ def cmdline(outdir, dry_run, **opts):
     try: opts.ref_path = os.path.join(dirs.MODELS_HOME, "Images", opts.ref_path)
     except TypeError: opts.ref_path = None
 
+    opts.selection = opts.selection or opts.acid
     c = setup_training_config(**opts)
     print_training_config(run_dir=outdir, c=c)
     if dry_run:

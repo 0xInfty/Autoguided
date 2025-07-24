@@ -7,6 +7,8 @@ import logs
 
 log = logs.create_logger("errors")
 
+REQUIRES_REF_LOSS = ["jointly_sample_batch"]
+
 #----------------------------------------------------------------------------
 # JEST & ACID's joint sampling batch selection method
 
@@ -107,3 +109,20 @@ def jointly_sample_batch(learner_loss, ref_loss, N=16, filter_ratio=0.8,
         plt.close(fig)
 
     return indices # Gather the n chunks of size b/n and return mini-batch of size b
+
+#----------------------------------------------------------------------------
+# Just a random selection
+
+def random_baseline(learner_loss, *args, selection_size=None, **kwargs):
+
+    assert selection_size is not None, "Mini batch size is needed as a kwarg"
+    
+    # Define size of super-batch
+    super_batch_size = int(learner_loss.numel()) # Size B of a super-batch
+
+    # Create a list of random indices
+    indices = np.random.choice(super_batch_size, selection_size, replace=False)
+
+    print(f"Ran random selection to get {len(indices)} elements")
+
+    return indices
