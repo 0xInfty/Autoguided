@@ -184,9 +184,9 @@ def training_loop(
     assert status_period is None or status_period % 4 == 0
     assert snapshot_period is None or snapshot_period % 4 == 0
     assert checkpoint_period is None or checkpoint_period % 4 == 0
-    detail_status_period = int(status_period / 4)
-    detail_snapshot_period = int(snapshot_period / 4)
-    detail_checkpoint_period = int(checkpoint_period / 4)
+    detail_status_period = int(status_period / 4) if status_period is not None else None
+    detail_snapshot_period = int(snapshot_period / 4) if snapshot_period is not None else None
+    detail_checkpoint_period = int(checkpoint_period / 4) if checkpoint_period is not None else None
 
     # Set up data selection
     dist.print0("Data selection =", selection)
