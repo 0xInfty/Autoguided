@@ -123,6 +123,4 @@ def random_baseline(learner_loss, *args, selection_size=None, **kwargs):
     # Create a list of random indices
     indices = np.random.choice(super_batch_size, selection_size, replace=False)
 
-    print(f"Ran random selection to get {len(indices)} elements")
-
     return indices
