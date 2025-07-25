@@ -25,6 +25,7 @@ import click
 import tqdm
 import pyvtools.text as vtext
 import wandb
+import time
 
 import karras.dnnlib.util as util
 import karras.torch_utils.persistence as persistence
@@ -238,7 +239,8 @@ def do_train(
     validation=False, val_batch_size=4<<7, sigma_max=5,
     testing=False, n_test_samples=4<<8, test_batch_size=4<<8, 
     test_outer=False, test_mandala=False,
-    acid=False, acid_N=16, acid_f=0.8, acid_diff=True, acid_inverted=False, 
+    selection=False, acid=False,
+    acid_N=16, acid_f=0.8, acid_diff=True, acid_inverted=False, 
     acid_stability_trick=False, acid_late=False, acid_early=False,
     device=torch.device('cuda'),
     pkl_pattern=None, pkl_iter=256, 
@@ -274,31 +276,39 @@ def do_train(
     log.info("Test batch size = %s", test_batch_size)
 
     # Log ACID parameters
+    log.info("Selection = %s", selection)
     log.info("ACID = %s", acid)
-    if acid:
+    if selection:
+        if acid: selection_func_name = 'ours.selection.jointly_sample_batch'
+        else: selection_func_name = 'ours.selection.random_baseline'
+        mini_batch_size = sel.get_selection_size(batch_size, func_name=selection_func_name,
+                                                 N=acid_N, filter_ratio=acid_f)
+        requires_ref_loss = selection_func_name.split("ours.selection") in sel.REQUIRES_REF_LOSS
         if acid_late:
-            run_acid = False
-            is_acid_waiting = True
-            log.info("ACID with delayed execution strategy")
+            run_selection = False
+            is_selection_waiting = True
+            log.info("Data selection with delayed execution strategy")
         elif acid_early:
-            run_acid = True
-            is_acid_waiting = True
-            log.info("ACID programmed stop strategy")
+            run_selection = True
+            is_selection_waiting = True
+            log.info("Data selection programmed stop strategy")
         else:
-            run_acid = True
-            is_acid_waiting = False
-            log.info("ACID with early-start execution strategy")
+            run_selection = True
+            is_selection_waiting = False
+            log.info("Data selection with early-start execution strategy")
+        log.info("Mini-Batch Size = %s", mini_batch_size)
         log.info("ACID's Number of Chunks = %s", acid_N)
         log.info("ACID's Filter Ratio = %s", acid_f)
-        acid_b_over_N = int(batch_size * (1 - acid_f) / acid_N) # Size of a mini-batch chunk
-        acid_batch_size = acid_N * acid_b_over_N # Size of a mini-batch
-        log.info("ACID's Mini-Batch Size = %s", acid_batch_size)
+        log.info("ACID's Mini-Batch Chunck Size = %s", int(mini_batch_size/acid_N))
         log.info("ACID's Learnability = %s", acid_diff)
         log.info("ACID's Scores Inverted = %s", acid_inverted)
         log.info("ACID's Numeric Stability Trick = %s", acid_stability_trick)
     else: 
-        run_acid = False
-        is_acid_waiting = False
+        mini_batch_size = batch_size
+        run_selection = False
+        is_selection_waiting = False
+        requires_ref_loss = False
+    change_epoch, change_nimg = 0, 0
     net_beats_ref = False # Assume reference is always better than the model at first
 
     # Log other parameters
@@ -373,16 +383,20 @@ def do_train(
                     guide_path=guide_path, guide_interpolation=guide_interpolation,
                     validation=validation, val_batch_size=val_batch_size, sigma_max=sigma_max,
                     testing=testing, n_test_samples=n_test_samples, test_batch_size=test_batch_size, 
-                    acid=acid, acid_N=acid_N, acid_f=acid_f, acid_diff=acid_diff, acid_inverted=acid_inverted, 
+                    selection=selection, acid=acid, mini_batch_size=mini_batch_size,
+                    acid_N=acid_N, acid_f=acid_f, acid_diff=acid_diff, acid_inverted=acid_inverted, 
                     acid_stability_trick=acid_stability_trick, acid_late=acid_late, acid_early=acid_early,
                     device=device, log_filename=log_filename),
         )
 
     # Training loop.
+    cumulative_training_time = 0
+    cumulative_selection_time = 0
     progress_bar = tqdm.tqdm(range(total_iter))
     for iter_idx in progress_bar:
         iter_logs = {"Epoch":iter_idx}
         if logging_to_file: log.info("Iteration = %i", iter_idx)
+        training_time_start = time.time()
 
         # Run forward-pass
         opt.param_groups[0]['lr'] = lr_ref / np.sqrt(max(iter_idx / lr_iter, 1))
@@ -391,13 +405,14 @@ def do_train(
         samples = gtd.sample(batch_size, sigma)
         gt_scores = gtd.score(samples, sigma)
         net_scores = net.score(samples, sigma, graph=True)
-        if run_acid or is_acid_waiting: ref_scores = ref.score(samples, sigma)
+        if run_selection or is_selection_waiting: ref_scores = ref.score(samples, sigma)
         if guide_interpolation: 
             interpol_scores = guide.score(samples, sigma).lerp(net_scores, guidance_weight)
 
         # Calculate teacher and student loss
         net_loss = (sigma ** 2) * ((gt_scores - net_scores) ** 2).mean(-1)
-        if run_acid or is_acid_waiting:
+        if (run_selection and requires_ref_loss) or is_selection_waiting:
+            selection_time_start = time.time()
             ref_loss = (sigma ** 2) * ((gt_scores - ref_scores) ** 2).mean(-1)
             if guide_interpolation: 
                 acid_loss = (sigma ** 2) * ((gt_scores - interpol_scores) ** 2).mean(-1)
@@ -406,16 +421,19 @@ def do_train(
                 net_beats_ref = True
                 log.warning("Network has beaten the reference")
                 if guide_interpolation: log.warning("Calculation took the interpolation into account")
-                if is_acid_waiting:
-                    run_acid = not(run_acid)
-                    if run_acid: log.warning("ACID will now be run")
-                    else: log.warning("ACID will now be stopped")
-                    is_acid_waiting = False
+                if is_selection_waiting:
+                    run_selection = not(run_selection)
+                    if run_selection: log.warning("Selection will now be run")
+                    else: log.warning("Selection will now be stopped")
+                    is_selection_waiting = False
+            cumulative_selection_time += time.time() - selection_time_start
+        elif run_selection: ref_loss = np.zeros((2,))
 
         # Calculate overall loss
-        if run_acid:
+        if run_selection:
+            selection_time_start = time.time()
             try:
-                log.warning("Using ACID")
+                log.warning("Using data selection")
                 iter_logs.update({"Average Super-Batch Learner Loss": float(net_loss.mean()),
                                   "Average Super-Batch Reference Loss": float(ref_loss.mean())})
                 if guide_interpolation: 
@@ -426,10 +444,11 @@ def do_train(
                     numeric_stability_trick=acid_stability_trick, log=log)
                 loss = acid_loss[indices] # Use indices of the ACID mini-batch
             except ValueError:
-                log.warning("ACID has crashed, so it has been deactivated")
+                log.warning("Selection has crashed, so it has been deactivated")
                 loss = net_loss
-                run_acid = False
-                is_acid_waiting = False
+                run_selection = False
+                is_selection_waiting = False
+            cumulative_selection_time += time.time() - selection_time_start
         else:
             loss = net_loss
 
@@ -452,10 +471,13 @@ def do_train(
         beta = phema.power_function_beta(std=ema_std, t_next=iter_idx+1, t_delta=1)
         for p_net, p_ema in zip(net.parameters(), ema.parameters()):
             p_ema.lerp_(p_net.detach(), 1 - beta)
+        cumulative_training_time += time.time() - training_time_start
+        iter_logs.update({"Training Time [min]", cumulative_training_time/1e3/60,
+                          "Selection Time [min]", cumulative_selection_time/1e3/60})
 
         # Evaluate average loss and L2 metric on validation batch
         if validation:
-            val_results = run_test(net, ema, guide, ref, acid=run_acid,
+            val_results = run_test(net, ema, guide, ref, acid=run_selection,
                 classes=classes, P_mean=P_mean, P_std=P_std, sigma_max=sigma_max,
                 n_samples=val_batch_size, batch_size=val_batch_size, 
                 test_outer=test_outer, test_mandala=test_mandala,
@@ -471,7 +493,7 @@ def do_train(
                 iter_logs.update({"Average Validation Guide Loss": val_results["guide_loss"],
                                   "Average Validation Guided Learner L2 Distance": val_results["learner_guided_L2_metric"],
                                   "Average Validation Guided EMA L2 Distance": val_results["ema_guided_L2_metric"]})
-            if run_acid: 
+            if run_selection: 
                 iter_logs.update({"Average Validation ACID Reference Loss": val_results["ref_loss"]})
 
 
@@ -485,7 +507,7 @@ def do_train(
                     iter_logs.update({"Average Outer Validation Guide Loss": val_results["guide_out_loss"],
                                      "Average Outer Validation Guided Learner L2 Distance": val_results["learner_guided_out_L2_metric"],
                                      "Average Outer Validation Guided EMA L2 Distance": val_results["ema_guided_out_L2_metric"]})
-                if run_acid: 
+                if run_selection: 
                     iter_logs.update({"Average Outer Validation ACID Reference Loss": val_results["ref_out_loss"]})
             
             # Log validation mandala score
@@ -538,7 +560,7 @@ def do_train(
             test_logs.update({"Average Test Guide Loss": test_results["guide_loss"],
                               "Average Test Guided Learner L2 Distance": test_results["learner_guided_L2_metric"],
                               "Average Test Guided EMA L2 Distance": test_results["ema_guided_L2_metric"]})
-        if run_acid: 
+        if run_selection: 
             test_logs.update({"Average Test ACID Reference Loss": test_results["ref_loss"]})
 
 
@@ -552,7 +574,7 @@ def do_train(
                 test_logs.update({"Average Outer Test Guide Loss": test_results["guide_out_loss"],
                                     "Average Outer Test Guided Learner L2 Distance": test_results["learner_guided_out_L2_metric"],
                                     "Average Outer Test Guided EMA L2 Distance": test_results["ema_guided_out_L2_metric"]})
-            if run_acid: 
+            if run_selection: 
                 test_logs.update({"Average Outer Test ACID Reference Loss": test_results["ref_out_loss"]})
         
         # Log test mandala score
@@ -1478,6 +1500,8 @@ def cmdline():
                                                                       type=str, default=None, show_default=True)
 @click.option('--interpol/--no-interpol', help='Use guide interpolation on training scores?', metavar='BOOL', 
                                                                       type=bool, default=False, show_default=True)
+@click.option('--selection/--no-selection',   
+                          help='Use data selection?', metavar='BOOL', type=bool, default=False, show_default=True)
 @click.option('--acid/--no-acid',   
                           help='Use ACID batch selection?', metavar='BOOL', 
                                                                       type=bool, default=False, show_default=True)
@@ -1504,12 +1528,16 @@ def cmdline():
                                                                       type=bool, default=True, show_default=True)
 @click.option('--device', help='CUDA GPU id?', metavar='INT',         type=int, default=0, show_default=True)
 def train(outdir, cls, layers, dim, total_iter, batch_size, val, test, viz, 
-          guidance, guide_path, interpol, acid, n, filt, diff, invert, late, early, trick,
+          guidance, guide_path, interpol, selection, acid, n, filt, diff, invert, late, early, trick,
           seed, verbose, debug, logging, device):
     """Train a 2D toy model with the given parameters."""
+
     if debug: verbosity = 2
     elif verbose: verbosity = 1
     else: verbosity = 0
+
+    selection = selection or acid
+    
     if outdir is not None:
         outdir = os.path.join(dirs.MODELS_HOME, outdir)
         if not os.path.isdir(outdir): os.makedirs(outdir)
@@ -1520,13 +1548,15 @@ def train(outdir, cls, layers, dim, total_iter, batch_size, val, test, viz,
     else: log_filepath = None
     pkl_pattern = f'{outdir}/iter%04d.pkl' if outdir is not None else None
     viz_iter = 32 if viz else None
+        
     device = torch.device("cuda:"+str(device))
     log.info('Training...')
     do_train(classes=cls, num_layers=layers, hidden_dim=dim, 
              total_iter=total_iter, batch_size=batch_size, seed=seed, 
              validation=val, testing=test, 
              guidance=guidance, guide_path=guide_path, guide_interpolation=interpol,
-             acid=acid, acid_N=n, acid_f=filt, acid_diff=diff, acid_inverted=invert, 
+             selection=selection, acid=acid,
+             acid_N=n, acid_f=filt, acid_diff=diff, acid_inverted=invert, 
              acid_late=late, acid_stability_trick=trick, acid_early=early,
              pkl_pattern=pkl_pattern, 
              viz_iter=viz_iter,
