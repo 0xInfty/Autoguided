@@ -3,6 +3,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 import copy
 
+from karras.dnnlib import EasyDict
+from karras.dnnlib.util import call_func_by_name
+
 import logs
 
 log = logs.create_logger("errors")
@@ -124,3 +127,26 @@ def random_baseline(learner_loss, *args, selection_size=None, **kwargs):
     indices = np.random.choice(super_batch_size, selection_size, replace=False)
 
     return indices
+
+#----------------------------------------------------------------------------
+# A general function to get the selection size according to the function name
+
+def get_selection_size(full_size, **selection_kwargs):
+    
+    if not isinstance(selection_kwargs, EasyDict):
+        selection_kwargs = EasyDict(selection_kwargs)
+
+    if "jointly_sample_batch" in selection_kwargs.func_name:
+
+        # Each mini-batch of size b will be split in n chunks
+        b_over_N = int(full_size * (1 - selection_kwargs.filter_ratio) / selection_kwargs.N) # Size b/N of each mini-batch chunk
+        b = b_over_N * selection_kwargs.N # Size of the full mini-batch
+        return b
+
+    elif "random_baseline" in selection_kwargs.func_name:
+
+        b = int(full_size * (1 - selection_kwargs.filter_ratio))
+        return b
+    
+    else:
+        raise NotImplementedError

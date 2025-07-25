@@ -21,6 +21,7 @@ import numpy as np
 import torch
 import wandb
 import pyvtorch.aux as taux
+import json
 
 import karras.dnnlib as dnnlib
 import karras.torch_utils.distributed as dist
@@ -28,7 +29,7 @@ import karras.torch_utils.training_stats as training_stats
 import karras.torch_utils.persistence as persistence
 import karras.torch_utils.misc as misc
 from ours.utils import move_wandb_files, get_wandb_name, get_wandb_tags
-from ours.selection import REQUIRES_REF_LOSS
+from ours.selection import REQUIRES_REF_LOSS, get_selection_size
 
 #----------------------------------------------------------------------------
 # Uncertainty-based loss function (Equations 14,15,16,21) proposed in the
@@ -193,8 +194,11 @@ def training_loop(
     dist.print0("Data selection =", selection)
     is_ref_available = ref_path is not None
     if selection:
-        mini_batch_gpu = int(batch_gpu * (1 - selection_kwargs.filter_ratio) / selection_kwargs.N) * selection_kwargs.N
+        mini_batch_gpu = get_selection_size(batch_gpu, **selection_kwargs)
         mini_batch_size = mini_batch_gpu * num_accumulation_rounds *  world_size
+        requires_ref_loss = selection_kwargs.func_name.split("ours.selection") in REQUIRES_REF_LOSS
+        if not is_ref_available and selection and requires_ref_loss:
+            raise ValueError("Missing reference model")
         if selection_late:
             run_selection = False
             is_selection_waiting = True
@@ -209,8 +213,10 @@ def training_loop(
             run_selection = True
             is_selection_waiting = False
             dist.print0("Data selection with early-start execution strategy")
-        dist.print0("Data selection configuration =", selection_kwargs)
-        requires_ref_loss = selection_kwargs.func_name.split("ours.selection") in REQUIRES_REF_LOSS
+        selection_kwargs.requires_ref_loss = requires_ref_loss
+        selection_kwargs.selection_size = mini_batch_gpu
+        selection_kwargs.mini_batch_size = mini_batch_size
+        dist.print0("Data selection configuration =", json.dumps(selection_kwargs, indent=2))
     else: 
         mini_batch_gpu = batch_gpu
         mini_batch_size = batch_size
@@ -220,11 +226,7 @@ def training_loop(
     change_just_happened = False
     change_epoch, change_nimg = 0, 0
     net_beats_ref = False
-    selection_kwargs.selection_size = mini_batch_gpu
-    selection_kwargs.mini_batch_size = mini_batch_size
-    selection_kwargs.requires_ref_loss = requires_ref_loss
-    if not is_ref_available and selection and requires_ref_loss:
-        raise ValueError("Missing reference model")
+    return
     
     # Setup dataset, encoder, and network.
     dist.print0('Loading dataset...')
