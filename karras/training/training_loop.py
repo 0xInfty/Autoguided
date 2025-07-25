@@ -226,7 +226,6 @@ def training_loop(
     change_just_happened = False
     change_epoch, change_nimg = 0, 0
     net_beats_ref = False
-    return
     
     # Setup dataset, encoder, and network.
     dist.print0('Loading dataset...')
