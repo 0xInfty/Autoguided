@@ -401,6 +401,7 @@ def do_train(
     # Training loop.
     cumulative_training_time = 0
     cumulative_selection_time = 0
+    examples_seen = 0
     progress_bar = tqdm.tqdm(range(total_iter))
     for iter_idx in progress_bar:
         iter_logs = {"Epoch":iter_idx}
@@ -421,25 +422,6 @@ def do_train(
 
         # Calculate teacher and student loss
         net_loss = (sigma ** 2) * ((gt_scores - net_scores) ** 2).mean(-1)
-        if (run_selection and requires_ref_loss) or is_selection_waiting:
-            selection_time_start = time.time()
-            ref_loss = (sigma ** 2) * ((gt_scores - ref_scores) ** 2).mean(-1)
-            if guide_interpolation: 
-                acid_loss = (sigma ** 2) * ((gt_scores - interpol_scores) ** 2).mean(-1)
-            else: acid_loss = net_loss
-            if not net_beats_ref and net_loss.mean() < ref_loss.mean():
-                net_beats_ref = True
-                log.warning("Network has beaten the reference")
-                if guide_interpolation: log.warning("Calculation took the interpolation into account")
-                if is_selection_waiting:
-                    run_selection = not(run_selection)
-                    if run_selection: log.warning("Selection will now be run")
-                    else: log.warning("Selection will now be stopped")
-                    is_selection_waiting = False
-            cumulative_selection_time += time.time() - selection_time_start
-        elif run_selection: ref_loss = np.zeros((2,))
-
-        # Calculate reference and/or interpolation loss
         if run_selection or is_selection_waiting:
             selection_time_start = time.time()
             if guide_interpolation: 
@@ -469,8 +451,8 @@ def do_train(
                     iter_logs.update({"Average Super-Batch Reference Loss": float(ref_loss.mean())})
                 if guide_interpolation: 
                     iter_logs.update({"Average Super-Batch Guided Learner Loss": float(selection_loss.mean())})
-                indices = selection_function(selection_loss, ref_loss, 
-                    N=acid_N, filter_ratio=acid_f, selection_size=mini_batch_size,
+                indices = selection_function(mini_batch_size, selection_loss, ref_loss, 
+                    N=acid_N, filter_ratio=acid_f,
                     learnability=acid_diff, inverted=acid_inverted,
                     numeric_stability_trick=acid_stability_trick, log=log)
                 loss = selection_loss[indices] # Use indices of the ACID mini-batch
@@ -482,9 +464,10 @@ def do_train(
             cumulative_selection_time += time.time() - selection_time_start
         else:
             loss = net_loss
+        examples_seen += len(loss)
 
         # Backpropagate either on the full batch or only on ACID mini-batch
-        iter_logs.update({"Average Learner Loss": float(loss.mean())})
+        iter_logs.update({"Examples Seen": examples_seen, "Average Learner Loss": float(loss.mean())})
         loss.mean().backward()
 
         # Update learner parameters

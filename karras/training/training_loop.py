@@ -396,7 +396,7 @@ def training_loop(
                     selection_time_start = time.time()
                     try:
                         dist.print0("Using selection")
-                        selected_indices = dnnlib.util.call_func_by_name(loss, ref_loss, **selection_kwargs)
+                        selected_indices = dnnlib.util.call_func_by_name(mini_batch_gpu, loss, ref_loss, **selection_kwargs)
                         loss = loss[selected_indices] # Use indices of the selection mini-batch
                         epoch_selected_indices.append(list(selected_indices))
                     except ValueError:
