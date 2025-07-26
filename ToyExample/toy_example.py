@@ -279,11 +279,15 @@ def do_train(
     log.info("Selection = %s", selection)
     log.info("ACID = %s", acid)
     if selection:
-        if acid: selection_func_name = 'ours.selection.jointly_sample_batch'
-        else: selection_func_name = 'ours.selection.random_baseline'
+        if acid: 
+            selection_func_name = 'ours.selection.jointly_sample_batch'
+            selection_function = sel.jointly_sample_batch
+        else: 
+            selection_func_name = 'ours.selection.random_baseline'
+            selection_function = sel.random_baseline
         mini_batch_size = sel.get_selection_size(batch_size, func_name=selection_func_name,
                                                  N=acid_N, filter_ratio=acid_f)
-        requires_ref_loss = selection_func_name.split("ours.selection") in sel.REQUIRES_REF_LOSS
+        requires_ref_loss = selection_func_name.split("ours.selection.")[-1] in sel.REQUIRES_REF_LOSS
         if acid_late:
             run_selection = False
             is_selection_waiting = True
@@ -308,6 +312,8 @@ def do_train(
         run_selection = False
         is_selection_waiting = False
         requires_ref_loss = False
+    log.info("Requires reference loss = %s", requires_ref_loss)
+    log.info("Selection waiting = %s", is_selection_waiting)
     change_epoch, change_nimg = 0, 0
     net_beats_ref = False # Assume reference is always better than the model at first
 
@@ -355,7 +361,10 @@ def do_train(
     elif acid: 
         ref = ema
         log.warning("EMA assigned as ACID reference")
-    else: ref = None
+    else: 
+        if requires_ref_loss: raise ValueError("No reference was given, but a reference is needed")
+        log.warning("No reference model")
+        ref = None
 
     # Initialize plot.
     if viz_iter is not None:
@@ -405,7 +414,8 @@ def do_train(
         samples = gtd.sample(batch_size, sigma)
         gt_scores = gtd.score(samples, sigma)
         net_scores = net.score(samples, sigma, graph=True)
-        if run_selection or is_selection_waiting: ref_scores = ref.score(samples, sigma)
+        if (run_selection and requires_ref_loss) or is_selection_waiting: 
+            ref_scores = ref.score(samples, sigma)
         if guide_interpolation: 
             interpol_scores = guide.score(samples, sigma).lerp(net_scores, guidance_weight)
 
@@ -429,20 +439,41 @@ def do_train(
             cumulative_selection_time += time.time() - selection_time_start
         elif run_selection: ref_loss = np.zeros((2,))
 
+        # Calculate reference and/or interpolation loss
+        if run_selection or is_selection_waiting:
+            selection_time_start = time.time()
+            if guide_interpolation: 
+                selection_loss = (sigma ** 2) * ((gt_scores - interpol_scores) ** 2).mean(-1)
+            else: selection_loss = net_loss
+            if requires_ref_loss or is_selection_waiting:
+                ref_loss = (sigma ** 2) * ((gt_scores - ref_scores) ** 2).mean(-1)
+                if not net_beats_ref and net_loss.mean() < ref_loss.mean():
+                    net_beats_ref = True
+                    log.warning("Network has beaten the reference")
+                    if guide_interpolation: log.warning("Calculation took the interpolation into account")
+                    if is_selection_waiting:
+                        run_selection = not(run_selection)
+                        if run_selection: log.warning("Selection will now be run")
+                        else: log.warning("Selection will now be stopped")
+                        is_selection_waiting = False
+            else: ref_loss = None
+            cumulative_selection_time += time.time() - selection_time_start
+
         # Calculate overall loss
         if run_selection:
             selection_time_start = time.time()
             try:
                 log.warning("Using data selection")
-                iter_logs.update({"Average Super-Batch Learner Loss": float(net_loss.mean()),
-                                  "Average Super-Batch Reference Loss": float(ref_loss.mean())})
+                iter_logs.update({"Average Super-Batch Learner Loss": float(net_loss.mean())})
+                if requires_ref_loss:
+                    iter_logs.update({"Average Super-Batch Reference Loss": float(ref_loss.mean())})
                 if guide_interpolation: 
-                    iter_logs.update({"Average Super-Batch Guided Learner Loss": float(acid_loss.mean())})
-                indices = sel.jointly_sample_batch(acid_loss, ref_loss, 
-                    N=acid_N, filter_ratio=acid_f,
+                    iter_logs.update({"Average Super-Batch Guided Learner Loss": float(selection_loss.mean())})
+                indices = selection_function(selection_loss, ref_loss, 
+                    N=acid_N, filter_ratio=acid_f, selection_size=mini_batch_size,
                     learnability=acid_diff, inverted=acid_inverted,
                     numeric_stability_trick=acid_stability_trick, log=log)
-                loss = acid_loss[indices] # Use indices of the ACID mini-batch
+                loss = selection_loss[indices] # Use indices of the ACID mini-batch
             except ValueError:
                 log.warning("Selection has crashed, so it has been deactivated")
                 loss = net_loss
@@ -472,8 +503,8 @@ def do_train(
         for p_net, p_ema in zip(net.parameters(), ema.parameters()):
             p_ema.lerp_(p_net.detach(), 1 - beta)
         cumulative_training_time += time.time() - training_time_start
-        iter_logs.update({"Training Time [min]", cumulative_training_time/1e3/60,
-                          "Selection Time [min]", cumulative_selection_time/1e3/60})
+        iter_logs.update({"Training Time [min]": cumulative_training_time/60,
+                          "Selection Time [min]": cumulative_selection_time/60})
 
         # Evaluate average loss and L2 metric on validation batch
         if validation:
@@ -493,7 +524,7 @@ def do_train(
                 iter_logs.update({"Average Validation Guide Loss": val_results["guide_loss"],
                                   "Average Validation Guided Learner L2 Distance": val_results["learner_guided_L2_metric"],
                                   "Average Validation Guided EMA L2 Distance": val_results["ema_guided_L2_metric"]})
-            if run_selection: 
+            if run_selection and requires_ref_loss: 
                 iter_logs.update({"Average Validation ACID Reference Loss": val_results["ref_loss"]})
 
 
@@ -507,7 +538,7 @@ def do_train(
                     iter_logs.update({"Average Outer Validation Guide Loss": val_results["guide_out_loss"],
                                      "Average Outer Validation Guided Learner L2 Distance": val_results["learner_guided_out_L2_metric"],
                                      "Average Outer Validation Guided EMA L2 Distance": val_results["ema_guided_out_L2_metric"]})
-                if run_selection: 
+                if run_selection and requires_ref_loss: 
                     iter_logs.update({"Average Outer Validation ACID Reference Loss": val_results["ref_out_loss"]})
             
             # Log validation mandala score
@@ -560,7 +591,7 @@ def do_train(
             test_logs.update({"Average Test Guide Loss": test_results["guide_loss"],
                               "Average Test Guided Learner L2 Distance": test_results["learner_guided_L2_metric"],
                               "Average Test Guided EMA L2 Distance": test_results["ema_guided_L2_metric"]})
-        if run_selection: 
+        if selection and requires_ref_loss: 
             test_logs.update({"Average Test ACID Reference Loss": test_results["ref_loss"]})
 
 
@@ -574,7 +605,7 @@ def do_train(
                 test_logs.update({"Average Outer Test Guide Loss": test_results["guide_out_loss"],
                                     "Average Outer Test Guided Learner L2 Distance": test_results["learner_guided_out_L2_metric"],
                                     "Average Outer Test Guided EMA L2 Distance": test_results["ema_guided_out_L2_metric"]})
-            if run_selection: 
+            if run_selection and requires_ref_loss: 
                 test_logs.update({"Average Outer Test ACID Reference Loss": test_results["ref_out_loss"]})
         
         # Log test mandala score
@@ -588,7 +619,8 @@ def do_train(
                                   "Test Guided EMA Mandala Score": test_results["ema_guided_mandala_score"],
                                   "Test Guided Learner Classification Score": test_results["learner_guided_classification_score"],
                                   "Test Guided EMA Classification Score": test_results["ema_guided_classification_score"]})
-
+        
+        run.log(test_logs)
 
     # Save and visualize last iteration
     if saving_checkpoints:
@@ -604,12 +636,6 @@ def do_train(
         if saving_checkpoint_plots:
             plt_path = plt_pattern % (iter_idx + 1)
             plt.savefig(plt_path)
-
-    if logging_to_file and verbosity>=1: 
-        results = extract_results_from_log(log_filename)
-        if saving_checkpoint_plots and logging_to_file: 
-            loss_plt_path = log_filename.replace("log", "plot").replace(".txt", ".png")
-            plot_loss(results, loss_plt_path);
 
     run.finish()
     move_wandb_files(os.path.dirname(log_filename), os.path.dirname(log_filename))
