@@ -271,7 +271,7 @@ def do_train(
     log.info("Number of training epochs = %s", total_iter)
     log.info("Training batch size = %s", batch_size)
     log.info("Number of training samples = %s", total_iter*batch_size)
-    log.info("Number of validation samples = %s", val_batch_size)
+    log.info("Number of validation samples = %s", total_iter*val_batch_size)
     log.info("Number of test samples = %s", n_test_samples)
     log.info("Test batch size = %s", test_batch_size)
 
