@@ -196,7 +196,7 @@ def training_loop(
     if selection:
         mini_batch_gpu = get_selection_size(batch_gpu, **selection_kwargs)
         mini_batch_size = mini_batch_gpu * num_accumulation_rounds *  world_size
-        requires_ref_loss = selection_kwargs.func_name.split("ours.selection") in REQUIRES_REF_LOSS
+        requires_ref_loss = selection_kwargs.func_name.split.split("ours.selection.")[-1] in REQUIRES_REF_LOSS
         if not is_ref_available and selection and requires_ref_loss:
             raise ValueError("Missing reference model")
         if selection_late:
