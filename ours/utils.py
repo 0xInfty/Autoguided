@@ -9,6 +9,8 @@ import numpy as np
 import torch
 from re import finditer
 
+from pyvtools.text import filter_by_string_must
+
 ### Global parameters ##############################################################################
 
 DEVICE = torch.device("cuda")
@@ -87,6 +89,24 @@ def is_sample_in_fractal(samples, ground_truth_distribution, sigma=0):
     return logp >= GT_LOGP_LEVEL
 
 ### Tools for Weights & Biases ###################################################################
+
+def get_wandb_ids(checkpoints_dir):
+    """Identify the W&B run ID from the checkpoints folder"""
+    contents = os.listdir(os.path.join(checkpoints_dir, "wandb"))
+    wandb_folders = filter_by_string_must(contents, "run-")    
+    if len(wandb_folders) >= 1:
+        wandb_logs_filepath = [os.path.join(checkpoints_dir, "wandb", f, "files", "output.log") for f in wandb_folders]
+        wandb_logs_sizes = [os.path.getsize(f) for f in wandb_logs_filepath] # Rank 0 will log the most
+        wandb_ids = [wandb_folders[i][-8:] for i in np.argsort(wandb_logs_sizes)[::-1]]
+    else:
+        wandb_ids = None
+    return wandb_ids
+
+def get_wandb_id(checkpoints_dir):
+    """Identify the W&B run ID from the checkpoints folder"""
+    wandb_ids = get_wandb_ids(checkpoints_dir)
+    if wandb_ids is None: return None
+    else: return wandb_ids[0]
 
 def get_wandb_tags(dataset_kwargs):
     try:

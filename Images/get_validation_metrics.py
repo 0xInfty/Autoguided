@@ -17,21 +17,7 @@ import karras.torch_utils.distributed as dist
 from generate_images import DEFAULT_SAMPLER, generate_images, parse_int_list
 import calculate_metrics as calc
 from ours.dataset import DATASET_OPTIONS
-
-#----------------------------------------------------------------------------
-# Utilities
-
-def get_wandb_id(checkpoints_dir):
-    """Identify the W&B run ID from the checkpoints folder"""
-    contents = os.listdir(os.path.join(checkpoints_dir, "wandb"))
-    wandb_folders = filter_by_string_must(contents, "run-")    
-    if len(wandb_folders) > 1:
-        wandb_logs_filepath = [os.path.join(checkpoints_dir, "wandb", f, "files", "output.log") for f in wandb_folders]
-        wandb_logs_sizes = [os.path.getsize(f) for f in wandb_logs_filepath] # Rank 0 will log the most
-        wandb_id = wandb_folders[np.argmax(wandb_logs_sizes)][-8:]
-    else:
-        wandb_id = wandb_folders[0][-8:]
-    return wandb_id
+from ours.utils import get_wandb_id
 
 #----------------------------------------------------------------------------
 # Calculate metrics for all stored models as a post-hoc validation curve

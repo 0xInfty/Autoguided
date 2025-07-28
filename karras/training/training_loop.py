@@ -28,7 +28,7 @@ import karras.torch_utils.distributed as dist
 import karras.torch_utils.training_stats as training_stats
 import karras.torch_utils.persistence as persistence
 import karras.torch_utils.misc as misc
-from ours.utils import move_wandb_files, get_wandb_name, get_wandb_tags
+from ours.utils import move_wandb_files, get_wandb_name, get_wandb_tags, get_wandb_ids
 from ours.selection import REQUIRES_REF_LOSS, get_selection_size
 
 #----------------------------------------------------------------------------
@@ -196,7 +196,7 @@ def training_loop(
     if selection:
         mini_batch_gpu = get_selection_size(batch_gpu, **selection_kwargs)
         mini_batch_size = mini_batch_gpu * num_accumulation_rounds *  world_size
-        requires_ref_loss = selection_kwargs.func_name.split.split("ours.selection.")[-1] in REQUIRES_REF_LOSS
+        requires_ref_loss = selection_kwargs.func_name.split("ours.selection.")[-1] in REQUIRES_REF_LOSS
         if not is_ref_available and selection and requires_ref_loss:
             raise ValueError("Missing reference model")
         if selection_late:
@@ -270,7 +270,7 @@ def training_loop(
 
     # Load previous checkpoint
     checkpoint = dist.CheckpointIO(state=state, net=net, loss_fn=loss_fn, optimizer=optimizer, ema=ema)
-    checkpoint.load_latest(run_dir)
+    checkpoint.load_latest(run_dir, weights_only=False)
     if is_ref_available: 
         with builtins.open(ref_path, "rb") as f:
             data = dnnlib.EasyDict(pickle.load(f))
@@ -289,6 +289,7 @@ def training_loop(
 
     # Set up a W&B experiment
     os.environ["WANDB_DIR"] = run_dir
+    wandb_ids = get_wandb_ids(run_dir) # If no previous run exists, this will be None
     group_name = get_wandb_name(run_dir)
     tags = get_wandb_tags(dataset_kwargs)
     if is_ref_available: wandb_ref_path = ref_path.split(dirs.MODELS_HOME)[-1]
@@ -297,18 +298,21 @@ def training_loop(
         run_name = f"{group_name}_R{rank}"
     else:
         run_name = group_name
-    run = wandb.init(
-        entity="ajest", project="Images", name=run_name, group=group_name, tags=tags,
-        config=dict(dataset_kwargs=dataset_kwargs, encoder_kwargs=encoder_kwargs,
-                    data_loader_kwargs=data_loader_kwargs, network_kwargs=network_kwargs,
-                    loss_kwargs=loss_kwargs, optimizer_kwargs=optimizer_kwargs,
-                    lr_kwargs=lr_kwargs, ema_kwargs=ema_kwargs,
-                    selection_kwargs=selection_kwargs,
-                    selection=selection, selection_early=selection_early, selection_late=selection_late,
-                    ref_path=wandb_ref_path,
-                    seed=seed, batch_size=batch_size, batch_gpu=batch_gpu, 
-                    total_nimg=total_nimg, loss_scaling=loss_scaling, device=device),
-        settings=wandb.Settings(x_stats_gpu_device_ids=[taux.get_device_number(device)]))
+    if wandb_ids is None:
+        run = wandb.init(
+            entity="ajest", project="Images", name=run_name, group=group_name, tags=tags,
+            config=dict(dataset_kwargs=dataset_kwargs, encoder_kwargs=encoder_kwargs,
+                        data_loader_kwargs=data_loader_kwargs, network_kwargs=network_kwargs,
+                        loss_kwargs=loss_kwargs, optimizer_kwargs=optimizer_kwargs,
+                        lr_kwargs=lr_kwargs, ema_kwargs=ema_kwargs,
+                        selection_kwargs=selection_kwargs,
+                        selection=selection, selection_early=selection_early, selection_late=selection_late,
+                        ref_path=wandb_ref_path,
+                        seed=seed, batch_size=batch_size, batch_gpu=batch_gpu, 
+                        total_nimg=total_nimg, loss_scaling=loss_scaling, device=device),
+            settings=wandb.Settings(x_stats_gpu_device_ids=[taux.get_device_number(device)]))
+    else:
+        run = wandb.init(entity="ajest", project="Images", id=wandb_ids[rank], resume="allow")
 
     # Main training loop.
     dataset_sampler = misc.InfiniteSampler(dataset=dataset_obj, rank=rank, num_replicas=world_size, 
