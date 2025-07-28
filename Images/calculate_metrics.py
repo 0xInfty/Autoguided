@@ -233,8 +233,6 @@ def calculate_stats_for_files(
 
     # List images.
     dataset_kwargs = get_dataset_kwargs(dataset_name, image_path=image_path)
-    if verbose:
-        dist.print0("Dataset kwargs", dataset_kwargs)
     dataset_obj = dnnlib.util.construct_class_by_name(**dataset_kwargs, max_size=num_images, random_seed=seed)
     if num_images is not None and len(dataset_obj) < num_images:
         raise click.ClickException(f'Found {len(dataset_obj)} images, but expected at least {num_images}')
