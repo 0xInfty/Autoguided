@@ -89,11 +89,12 @@ def calculate_metrics_for_checkpoints(
         else:
             tag = f" (EMA={ema:.3f})"
         for checkpoint_filename in checkpoint_filenames:
+            checkpoint_filepath = os.path.join(checkpoints_dir, checkpoint_filename)
+            checkpoint_epochs = abs(find_numbers(checkpoint_filename)[-2])
+            if verbose: dist.print0(f">>>>> Working on EMA {ema:.3f} and Epoch {checkpoint_epochs}")
 
             # Generate 50k images
-            checkpoint_epochs = abs(find_numbers(checkpoint_filename)[-2])
-            checkpoint_filepath = os.path.join(checkpoints_dir, checkpoint_filename)
-            temp_dir = os.path.join(checkpoints_dir, "temp_images")            
+            temp_dir = os.path.join(checkpoints_dir, "temp_images")
             image_iter = generate_images(checkpoint_filepath, gnet=guide_path, outdir=temp_dir,
                                          guidance=guidance_weight, class_idx=class_idx, seeds=seeds,
                                          verbose=verbose, device=device, **DEFAULT_SAMPLER)
@@ -115,9 +116,8 @@ def calculate_metrics_for_checkpoints(
                 ref = calc.load_stats(path=ref_path) # do this first, just in case it fails
             
             # Calculate metrics for generated images
-            temp_file = os.path.join(checkpoints_dir, "temp_stats.json")
             stats_iter = calc.calculate_stats_for_files(dataset_name="folder", image_path=temp_dir,
-                                                        metrics=metrics, dest_path=temp_file, device=device)
+                                                        metrics=metrics, device=device)
             for r in tqdm.tqdm(stats_iter, unit='batch', disable=(dist.get_rank() != 0)): pass
             if dist.get_rank() == 0:
                 results = calc.calculate_metrics_from_stats(stats=r.stats, ref=ref, metrics=metrics, verbose=verbose)
