@@ -121,7 +121,7 @@ def calculate_metrics_for_checkpoints(
             for r in tqdm.tqdm(stats_iter, unit='batch', disable=(dist.get_rank() != 0)): pass
             if dist.get_rank() == 0:
                 results = calc.calculate_metrics_from_stats(stats=r.stats, ref=ref, metrics=metrics, verbose=verbose)
-                run.log(dict({"Validation Epoch": checkpoint_epochs, 
+                run.log(dict({"Epoch": checkpoint_epochs, 
                               f"Validation FID"+tag: results["fid"],
                               f"Validation FD-DINOv2"+tag: results["fd_dinov2"]}))
             torch.distributed.barrier()
