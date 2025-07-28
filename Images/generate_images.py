@@ -281,6 +281,17 @@ def parse_int_list(s):
 #----------------------------------------------------------------------------
 # Command line interface.
 
+DEFAULT_SAMPLER = EasyDict(dict(
+    num_steps = 32,             # Number of sampling steps
+    sigma_min = 0.002,      # Lowest noise level
+    sigma_max = 80,         # Highest noise level
+    rho = 7,                # Time step exponent
+    S_churn = 0,            # Stochasticity strength
+    S_min = 0,              # Stoch. min noise level
+    S_max = "inf",          # Stoch. max noise level
+    S_noise = 1,            # Stoch. noise inflation
+))
+
 @click.command()
 @click.option('--preset',                   help='Configuration preset', metavar='STR',                             type=str, default=None)
 @click.option('--net',                      help='Main network pickle filename', metavar='PATH|URL',                type=str, default=None)
@@ -292,16 +303,16 @@ def parse_int_list(s):
 @click.option('--class', 'class_idx',       help='Class label  [default: random]', metavar='INT',                   type=click.IntRange(min=0), default=None)
 @click.option('--batch', 'max_batch_size',  help='Maximum batch size', metavar='INT',                               type=click.IntRange(min=1), default=32, show_default=True)
 
-@click.option('--steps', 'num_steps',       help='Number of sampling steps', metavar='INT',                         type=click.IntRange(min=1), default=32, show_default=True)
-@click.option('--sigma-min', "sigma_min",   help='Lowest noise level', metavar='FLOAT',                             type=click.FloatRange(min=0, min_open=True), default=0.002, show_default=True)
-@click.option('--sigma-max', "sigma_max",   help='Highest noise level', metavar='FLOAT',                            type=click.FloatRange(min=0, min_open=True), default=80, show_default=True)
-@click.option('--rho',                      help='Time step exponent', metavar='FLOAT',                             type=click.FloatRange(min=0, min_open=True), default=7, show_default=True)
+@click.option('--steps', 'num_steps',       help='Number of sampling steps', metavar='INT',                         type=click.IntRange(min=1), default=DEFAULT_SAMPLER.num_steps, show_default=True)
+@click.option('--sigma-min', "sigma_min",   help='Lowest noise level', metavar='FLOAT',                             type=click.FloatRange(min=0, min_open=True), default=DEFAULT_SAMPLER.sigma_min, show_default=True)
+@click.option('--sigma-max', "sigma_max",   help='Highest noise level', metavar='FLOAT',                            type=click.FloatRange(min=0, min_open=True), default=DEFAULT_SAMPLER.sigma_max, show_default=True)
+@click.option('--rho',                      help='Time step exponent', metavar='FLOAT',                             type=click.FloatRange(min=0, min_open=True), default=DEFAULT_SAMPLER.rho, show_default=True)
 @click.option('--guide-weight', "guidance_weight",
                                             help='Guidance weight  [default: 1; no guidance]', metavar='FLOAT',     type=float, default=None)
-@click.option('--S-churn', 'S_churn',       help='Stochasticity strength', metavar='FLOAT',                         type=click.FloatRange(min=0), default=0, show_default=True)
-@click.option('--S-min', 'S_min',           help='Stoch. min noise level', metavar='FLOAT',                         type=click.FloatRange(min=0), default=0, show_default=True)
-@click.option('--S-max', 'S_max',           help='Stoch. max noise level', metavar='FLOAT',                         type=click.FloatRange(min=0), default='inf', show_default=True)
-@click.option('--S-noise', 'S_noise',       help='Stoch. noise inflation', metavar='FLOAT',                         type=float, default=1, show_default=True)
+@click.option('--S-churn', 'S_churn',       help='Stochasticity strength', metavar='FLOAT',                         type=click.FloatRange(min=0), default=DEFAULT_SAMPLER.S_churn, show_default=True)
+@click.option('--S-min', 'S_min',           help='Stoch. min noise level', metavar='FLOAT',                         type=click.FloatRange(min=0), default=DEFAULT_SAMPLER.S_min, show_default=True)
+@click.option('--S-max', 'S_max',           help='Stoch. max noise level', metavar='FLOAT',                         type=click.FloatRange(min=0), default=DEFAULT_SAMPLER.S_max, show_default=True)
+@click.option('--S-noise', 'S_noise',       help='Stoch. noise inflation', metavar='FLOAT',                         type=float, default=DEFAULT_SAMPLER.S_noise, show_default=True)
 
 @click.option('--guidance/--no-guidance',   help='Apply guidance, if possible?', metavar='BOOL',                    type=bool, default=True)
 

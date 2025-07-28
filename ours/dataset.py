@@ -30,10 +30,14 @@ def get_dataset_kwargs(dataset_name, image_path=None, use_labels=True):
         else:
             raise ValueError("Dataset path is required for 'folder' datasets")
     dataset_kwargs = dnnlib.EasyDict(dataset_kwargs)
+    try:
+        dataset_kwargs.path = dataset_kwargs.image_path
+    except AttributeError:
+        dataset_kwargs.path = image_path
     if dataset_name != "folder": 
         dataset_kwargs.name = dataset_name
     else:
-        dataset_kwargs.name = dataset_kwargs.image_path
+        dataset_kwargs.name = dataset_kwargs.path
     dataset_kwargs.use_labels = use_labels
     return dataset_kwargs
 
