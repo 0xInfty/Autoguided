@@ -8,9 +8,10 @@
 
 import pyvdirs.dirs as dirs
 import sys
-sys.path.insert(0, dirs.SYSTEM_HOME)
-
 import os
+sys.path.insert(0, dirs.SYSTEM_HOME)
+sys.path.insert(0, os.path.join(dirs.SYSTEM_HOME, "Images"))
+
 import click
 import tqdm
 import pickle
@@ -151,13 +152,15 @@ def save_stats(stats, path, verbose=True):
 def calculate_stats_for_iterable(
     image_iter,                         # Iterable of image batches: NCHW, uint8, 3 channels.
     metrics     = ['fid', 'fd_dinov2'], # Metrics to compute the statistics for.
+    detectors   = None,                 # Detectors to use to compute the statistics.
     verbose     = True,                 # Enable status prints?
     dest_path   = None,                 # Where to save the statistics. None = do not save.
     device      = torch.device('cuda'), # Which compute device to use.
 ):
     # Initialize.
     num_batches = len(image_iter)
-    detectors = [get_detector(metric, verbose=verbose) for metric in metrics]
+    if detectors is None:
+        detectors = [get_detector(metric, verbose=verbose) for metric in metrics]
     if verbose:
         dist.print0('Calculating feature statistics...')
 

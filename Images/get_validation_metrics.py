@@ -7,6 +7,7 @@ sys.path.insert(0, os.path.join(dirs.SYSTEM_HOME, "karras"))
 import shutil
 import tqdm
 import click
+import time
 import numpy as np
 import torch
 import wandb
@@ -28,15 +29,29 @@ def calculate_metrics_for_checkpoints(
         ref_path = None,                # Filepath to dataset reference metrics.
         guide_path = None,              # Filepath to guide model.
         guidance_weight = 1,            # Guidance weight. Default = 1 (no guidance).
-        class_idx = None,               # Class label. None = select randomly.
-        seeds = range(0, int(50e3)),    # List of random seeds.
+        class_idx = None,               # Class label. None = use automatic selection.
+        random_class = False,           # Automatic selection can be uniformly random or forced exact distribution.
+        seeds = range(0, int(2e3)),     # List of random seeds.
         chosen_emas = None,             # List of chosen EMAs. Default: use all.
+        save_nimg = 0,                  # How many images to keep, the rest will be deleted.
         verbose = True,                 # Enable status prints?
         device = torch.device("cuda"),  # Which compute device to use.
 ):
-    
-    # Identify the W&B run ID from the checkpoints folder
-    wandb_id = get_wandb_id(checkpoints_dir)
+
+    # Get reference stats
+    assert dataset_name in DATASET_OPTIONS.keys(), "Unrecognized dataset"
+    if dataset_name=="folder": raise NotImplementedError
+    # if dataset_name=="folder" and ref_path is None: 
+    #     raise ValueError("Reference path needed for unrecognized dataset")
+    # elif dataset_name=="folder":
+    #     ref_path = os.path.join(dirs.DATA_HOME, "dataset_refs", ref_path)
+    else:
+        ref_path = os.path.join(dirs.DATA_HOME, "dataset_refs", dataset_name+".pkl")
+    if dist.get_rank() == 0:
+        ref_exists = os.path.isfile(ref_path)
+    if not ref_exists: raise NotImplementedError
+    if dist.get_rank() == 0:
+        ref = calc.load_stats(path=ref_path) # do this first, just in case it fails
 
     # Get available checkpoints
     checkpoint_filenames = filter_by_string_must(os.listdir(checkpoints_dir), ".pkl")    
@@ -61,6 +76,7 @@ def calculate_metrics_for_checkpoints(
 
     # Configure distributed execution and resume W&B logging
     dist.init()
+    wandb_id = get_wandb_id(checkpoints_dir)
     run = wandb.init(entity="ajest", project="Images", id=wandb_id, resume="allow",
         config=dict(validation_kwargs=dict(dataset_name=dataset_name, ref_path=ref_path, 
                                            guide_path=guide_path, guidance_weight=guidance_weight,
@@ -69,51 +85,47 @@ def calculate_metrics_for_checkpoints(
 
     # For each EMA in chosen EMAs, and for each checkpoint inside the directory
     metrics = calc.parse_metric_list("fid,fd_dinov2")
+    detectors = [calc.get_detector(metric, verbose=verbose) for metric in metrics]
     for i, checkpoint_filenames in enumerate(checkpoint_filenames_by_ema):
         if guidance_weight!=1 and guide_path is not None:
-            tag = f" (EMA={ema:.3f}, Guidance={guidance_weight:.2f})"
+            tag = f" [EMA={ema:.3f}, Guidance={guidance_weight:.2f}]"
         else:
-            tag = f" (EMA={ema:.3f})"
+            tag = f" [EMA={ema:.3f}]"
         for checkpoint_filename in checkpoint_filenames:
             checkpoint_filepath = os.path.join(checkpoints_dir, checkpoint_filename)
             checkpoint_epochs = abs(find_numbers(checkpoint_filename)[-2])
             if verbose: dist.print0(f">>>>> Working on EMA {ema:.3f} and Epoch {checkpoint_epochs}")
 
-            # Generate 50k images
-            temp_dir = os.path.join(checkpoints_dir, "temp_images")
+            # Generate images
+            temp_dir = os.path.join(checkpoints_dir, "gen_images", checkpoint_filename.split(".pkl")[0])
             image_iter = generate_images(checkpoint_filepath, gnet=guide_path, outdir=temp_dir,
-                                         guidance=guidance_weight, class_idx=class_idx, seeds=seeds,
-                                         verbose=verbose, device=device, **DEFAULT_SAMPLER)
+                                         guidance=guidance_weight, class_idx=class_idx, random_class=random_class, 
+                                         seeds=seeds, verbose=verbose, device=device, **DEFAULT_SAMPLER)
             for _r in tqdm.tqdm(image_iter, unit='batch', disable=(dist.get_rank() != 0)): pass
-
-            # Get reference stats
-            assert dataset_name in DATASET_OPTIONS.keys(), "Unrecognized dataset"
-            if dataset_name=="folder": raise NotImplementedError
-            # if dataset_name=="folder" and ref_path is None: 
-            #     raise ValueError("Reference path needed for unrecognized dataset")
-            # elif dataset_name=="folder":
-            #     ref_path = os.path.join(dirs.DATA_HOME, "dataset_refs", ref_path)
-            else:
-                ref_path = os.path.join(dirs.DATA_HOME, "dataset_refs", dataset_name+".pkl")
-            if dist.get_rank() == 0:
-                ref_exists = os.path.isfile(ref_path)
-            if not ref_exists: raise NotImplementedError
-            if dist.get_rank() == 0:
-                ref = calc.load_stats(path=ref_path) # do this first, just in case it fails
             
             # Calculate metrics for generated images
             stats_iter = calc.calculate_stats_for_files(dataset_name="folder", image_path=temp_dir,
-                                                        metrics=metrics, device=device)
+                                                        metrics=metrics, detectors=detectors, device=device)
             for r in tqdm.tqdm(stats_iter, unit='batch', disable=(dist.get_rank() != 0)): pass
             if dist.get_rank() == 0:
+                initial_time = time.time()
                 results = calc.calculate_metrics_from_stats(stats=r.stats, ref=ref, metrics=metrics, verbose=verbose)
                 run.log(dict({"Epoch": checkpoint_epochs, 
                               f"Validation FID"+tag: results["fid"],
                               f"Validation FD-DINOv2"+tag: results["fd_dinov2"]}))
+                cumulative_time = time.time() - initial_time
+                dist.print0(f"Time to get metrics = {cumulative_time:.2f} sec")
             torch.distributed.barrier()
 
             # Delete temporary images
-            shutil.rmtree(temp_dir)
+            if dist.get_rank()==0:
+                if save_nimg==0:
+                    shutil.rmtree(temp_dir)
+                else:
+                    contents = os.listdir(temp_dir)
+                    contents.sort()
+                    for i in range(save_nimg,len(contents)): os.remove(os.path.join(temp_dir, contents[i]))
+            torch.distributed.barrier()
 
 @click.command()
 @click.option("--models-dir", "models_dir", help="Relative path to directory containing the model checkpoints", metavar='PATH', required=True)
@@ -122,14 +134,15 @@ def calculate_metrics_for_checkpoints(
 @click.option('--guide-path', 'guide_path', help='Guide model filepath', metavar='PATH', type=str, default=None, show_default=True)
 @click.option('--guidance-weight', 'guidance_weight', help='Guidance strength: default is 1 (no guidance)', metavar='PATH', type=float, default=1.0, show_default=True)
 @click.option('--emas', help='Chosen EMA length/s', required=False, multiple=True, default=None, show_default=True)
+@click.option('--save-nimg', help='Number of generated images to keep', type=int, required=False, default=0, show_default=True)
 @click.option('--seeds', help='List of random seeds (e.g. 1,2,5-10)', metavar='LIST', type=parse_int_list, default='0-49999', show_default=True)
-def get_validation_metrics(models_dir, dataset_name, ref_path, guide_path, guidance_weight, emas, seeds):
+def get_validation_metrics(models_dir, dataset_name, ref_path, guide_path, guidance_weight, emas, save_nimg, seeds):
     models_dir = os.path.join(dirs.MODELS_HOME, "Images", models_dir)
     if len(emas)==0: emas=None
     calculate_metrics_for_checkpoints(models_dir,
         dataset_name=dataset_name, ref_path=ref_path,
         guide_path=guide_path, guidance_weight=guidance_weight,
-        chosen_emas=emas, seeds=seeds)
+        chosen_emas=emas, save_nimg=save_nimg, seeds=seeds)
 
 if __name__ == "__main__":
     get_validation_metrics()

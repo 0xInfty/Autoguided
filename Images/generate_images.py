@@ -167,7 +167,8 @@ def generate_images(
     outdir              = None,                 # Where to save the output images. None = do not save.
     subdirs             = False,                # Create subdirectory for every 1000 seeds?
     seeds               = range(16, 24),        # List of random seeds.
-    class_idx           = None,                 # Class label. None = select randomly.
+    class_idx           = None,                 # Class label. None = use automatic selection.
+    random_class        = True,                 # Automatic selection can be uniformly random or forced exact distribution.
     max_batch_size      = 32,                   # Maximum batch size for the diffusion model.
     encoder_batch_size  = 4,                    # Maximum batch size for the encoder. None = default.
     verbose             = True,                 # Enable status prints?
@@ -229,7 +230,8 @@ def generate_images(
         def __iter__(self):
             # Loop over batches.
             for batch_idx, indices in enumerate(rank_batches):
-                r = EasyDict(images=None, labels=None, noise=None, batch_idx=batch_idx, num_batches=len(rank_batches), indices=indices)
+                r = EasyDict(images=None, labels=None, labels_indices=None, noise=None, 
+                             batch_idx=batch_idx, num_batches=len(rank_batches), indices=indices)
                 r.seeds = [seeds[idx] for idx in indices]
                 if len(r.seeds) > 0:
 
@@ -238,10 +240,19 @@ def generate_images(
                     r.noise = rnd.randn([len(r.seeds), net.img_channels, net.img_resolution, net.img_resolution], device=device)
                     r.labels = None
                     if net.label_dim > 0:
-                        r.labels = torch.eye(net.label_dim, device=device)[rnd.randint(net.label_dim, size=[len(r.seeds)], device=device)]
                         if class_idx is not None:
-                            r.labels[:, :] = 0
+                            r.labels = torch.zeros((net.label_dim,net.label_dim), device=device)
                             r.labels[:, class_idx] = 1
+                            r.labels_indices = np.ones(len(r.seeds), dtype=np.uint32)*class_idx
+                        elif random_class:
+                            r.labels_indices = rnd.randint(net.label_dim, size=[len(r.seeds)], device=device)
+                            r.labels = torch.eye(net.label_dim, device=device)[r.labels_indices]
+                        elif not random_class:
+                            # If the overall seeds is a continuous range of integers, we'll get an equal number of examples per class
+                            r.labels_indices = np.array([i%(net.label_dim-1) for i in r.seeds], dtype=np.uint32)
+                            r.labels = torch.eye(net.label_dim, device=device)[r.labels_indices]
+                            # No images are generated using unconditional generation 
+                            # because we go from 0 to label_dim-1; label_dim is the null class
 
                     # Generate images.
                     latents = call_func_by_name(func_name=sampler_fn, net=net, noise=r.noise,
@@ -250,10 +261,10 @@ def generate_images(
 
                     # Save images.
                     if outdir is not None:
-                        for seed, image in zip(r.seeds, r.images.permute(0, 2, 3, 1).cpu().numpy()):
+                        for seed, image, lab in zip(r.seeds, r.images.permute(0, 2, 3, 1).cpu().numpy(), r.labels_indices):
                             image_dir = os.path.join(outdir, f'{seed//1000*1000:06d}') if subdirs else outdir
                             os.makedirs(image_dir, exist_ok=True)
-                            PIL.Image.fromarray(image, 'RGB').save(os.path.join(image_dir, f'{seed:06d}.png'))
+                            PIL.Image.fromarray(image, 'RGB').save(os.path.join(image_dir, f'{seed:06d}_{lab:05d}.png'))
 
                 # Yield results.
                 torch.distributed.barrier() # keep the ranks in sync
