@@ -78,9 +78,10 @@ def calculate_metrics_for_checkpoints(
     dist.init()
     wandb_id = get_wandb_id(checkpoints_dir)
     run = wandb.init(entity="ajest", project="Images", id=wandb_id, resume="allow",
-        config=dict(validation_kwargs=dict(dataset_name=dataset_name, ref_path=ref_path, 
+        config=dict(validation_kwargs=dict(dataset_name=dataset_name, ref_path=os.path.split(ref_path)[-1], 
                                            guide_path=guide_path, guidance_weight=guidance_weight,
-                                           class_idx=class_idx, seeds=seeds, chosen_emas=chosen_emas)),
+                                           class_idx=class_idx, random_class=random_class, 
+                                           seeds=seeds, chosen_emas=chosen_emas)),
         settings=wandb.Settings(x_disable_stats=True))
 
     # For each EMA in chosen EMAs, and for each checkpoint inside the directory
@@ -135,7 +136,7 @@ def calculate_metrics_for_checkpoints(
 @click.option('--guidance-weight', 'guidance_weight', help='Guidance strength: default is 1 (no guidance)', metavar='PATH', type=float, default=1.0, show_default=True)
 @click.option('--emas', help='Chosen EMA length/s', required=False, multiple=True, default=None, show_default=True)
 @click.option('--save-nimg', help='Number of generated images to keep', type=int, required=False, default=0, show_default=True)
-@click.option('--seeds', help='List of random seeds (e.g. 1,2,5-10)', metavar='LIST', type=parse_int_list, default='0-49999', show_default=True)
+@click.option('--seeds', help='List of random seeds (e.g. 1,2,5-10)', metavar='LIST', type=parse_int_list, default='0-1999', show_default=True)
 def get_validation_metrics(models_dir, dataset_name, ref_path, guide_path, guidance_weight, emas, save_nimg, seeds):
     models_dir = os.path.join(dirs.MODELS_HOME, "Images", models_dir)
     if len(emas)==0: emas=None
@@ -146,8 +147,3 @@ def get_validation_metrics(models_dir, dataset_name, ref_path, guide_path, guida
 
 if __name__ == "__main__":
     get_validation_metrics()
-    # calculate_metrics_for_checkpoints("/mnt/hdd/vale/models/SCID/Images/04_Tiny_LR/AJEST/02",
-    #                                   seeds=range(16,32),
-    #                                   chosen_emas=0.1)
-    # calculate_metrics_for_checkpoints("/mnt/hdd/vale/models/SCID/Images/04_Tiny_LR/AJEST/03",
-    #                                   seeds=range(16,32))
