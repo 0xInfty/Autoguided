@@ -92,8 +92,11 @@ def is_sample_in_fractal(samples, ground_truth_distribution, sigma=0):
 
 def get_wandb_ids(checkpoints_dir):
     """Identify the W&B run ID from the checkpoints folder"""
-    contents = os.listdir(os.path.join(checkpoints_dir, "wandb"))
-    wandb_folders = filter_by_string_must(contents, "run-")    
+    try:
+        contents = os.listdir(os.path.join(checkpoints_dir, "wandb"))
+        wandb_folders = filter_by_string_must(contents, "run-")
+    except FileNotFoundError:
+        wandb_folders = []
     if len(wandb_folders) >= 1:
         wandb_logs_filepath = [os.path.join(checkpoints_dir, "wandb", f, "files", "output.log") for f in wandb_folders]
         wandb_logs_sizes = [os.path.getsize(f) for f in wandb_logs_filepath] # Rank 0 will log the most

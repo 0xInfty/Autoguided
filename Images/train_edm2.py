@@ -16,6 +16,7 @@ import json
 import warnings
 import click
 import torch
+from pyvtorch.aux import get_device_number
 
 import karras.dnnlib as dnnlib
 import karras.torch_utils.distributed as dist
@@ -64,6 +65,7 @@ config_presets = {
 }
 config_presets["test-training"] = config_presets["edm2-cifar10-xxs"]
 config_presets["test-training"].duration = 20*2048 # Just for 20 epochs
+config_presets["test-training"].checkpoint_period = 20 # Just for 20 epochs
 config_presets["test-random"] = config_presets["test-training"]
 config_presets["test-random"]["selection_func"] = "ours.selection.random_baseline"
 
@@ -155,12 +157,25 @@ def print_training_config(run_dir, c):
 # Launch training.
 
 def launch_training(run_dir, c):
-    if dist.get_rank() == 0 and not os.path.isdir(run_dir):
-        dist.print0('Creating output directory...')
-        os.makedirs(run_dir)
-        with open(os.path.join(run_dir, 'training_options.json'), 'wt') as f:
-            json.dump(c, f, indent=2)
-
+    break_training = False
+    if dist.get_rank() == 0:
+        if not os.path.isdir(run_dir):
+            dist.print0('Creating output directory...')
+            os.makedirs(run_dir)
+        elif os.path.isfile(os.path.join(run_dir, 'training_options.json')):
+            with open(os.path.join(run_dir, 'training_options.json'), 'r') as f:
+                old_c = json.load(f)
+            for k in old_c.keys():
+                if old_c[k] != c[k]: break_training = True
+        if not break_training:
+            with open(os.path.join(run_dir, 'training_options.json'), 'wt') as f:
+                json.dump(c, f, indent=2)
+    torch.distributed.barrier()
+    sync_tensor = torch.tensor([break_training], dtype=torch.bool, 
+                               device=torch.device(f"cuda:{get_device_number()}"))
+    torch.distributed.all_reduce(sync_tensor, op=torch.distributed.ReduceOp.MAX)
+    break_training = bool(sync_tensor.item())
+    if break_training: raise ValueError("Training configuration does not match existing configuration")
     torch.distributed.barrier()
     dnnlib.util.Logger(file_name=os.path.join(run_dir, 'log.txt'), file_mode='a', should_flush=True)
     trn.training_loop(run_dir=run_dir, **c)
