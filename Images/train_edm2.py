@@ -171,8 +171,7 @@ def launch_training(run_dir, c):
             with open(os.path.join(run_dir, 'training_options.json'), 'wt') as f:
                 json.dump(c, f, indent=2)
     torch.distributed.barrier()
-    sync_tensor = torch.tensor([break_training], dtype=torch.bool, 
-                               device=torch.device(f"cuda:{get_device_number()}"))
+    sync_tensor = torch.tensor([break_training], dtype=torch.bool, device=torch.device("cuda"))
     torch.distributed.all_reduce(sync_tensor, op=torch.distributed.ReduceOp.MAX)
     break_training = bool(sync_tensor.item())
     if break_training: raise ValueError("Training configuration does not match existing configuration")
