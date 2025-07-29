@@ -25,7 +25,6 @@ import json
 
 import karras.dnnlib as dnnlib
 import karras.torch_utils.distributed as dist
-import karras.torch_utils.training_stats as training_stats
 import karras.torch_utils.persistence as persistence
 import karras.torch_utils.misc as misc
 from ours.utils import move_wandb_files, get_wandb_name, get_wandb_tags, get_wandb_ids
