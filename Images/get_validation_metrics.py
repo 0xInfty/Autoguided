@@ -111,7 +111,7 @@ def calculate_metrics_for_checkpoints(
             if dist.get_rank() == 0:
                 initial_time = time.time()
                 results = calc.calculate_metrics_from_stats(stats=r.stats, ref=ref, metrics=metrics, verbose=verbose)
-                run.log(dict({"Epoch": checkpoint_epochs, 
+                run.log(dict({"Validation Epoch": checkpoint_epochs, 
                               f"Validation FID"+tag: results["fid"],
                               f"Validation FD-DINOv2"+tag: results["fd_dinov2"]}))
                 cumulative_time = time.time() - initial_time
