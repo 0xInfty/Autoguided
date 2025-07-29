@@ -169,3 +169,19 @@ def get_stats(array):
         return (float(array.min()), float(array.sum())/array.size, float(array.max()), array.shape)
     else:
         return (float(array.min()), float(array.sum())/array.numel(), float(array.max()), tuple(array.shape))
+
+def check_nested_dict(old_dict, new_dict, is_alright=True, exception_keys=None, verbose=False):
+    if exception_keys is None: exception_keys = []
+    for k in old_dict.keys():
+        if k in new_dict.keys() and k not in exception_keys:
+            if isinstance(old_dict[k], dict):
+                is_alright = check_nested_dict(old_dict[k], new_dict[k], is_alright, 
+                                               exception_keys=exception_keys, verbose=verbose)
+            else:
+                if old_dict[k] != new_dict[k]: 
+                    if verbose:
+                        print("Detected problem with key", k)
+                        print("> Old:", old_dict[k])
+                        print("> New:", new_dict[k])
+                    is_alright = False
+    return is_alright
