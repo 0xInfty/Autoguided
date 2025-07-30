@@ -12,9 +12,9 @@ import numpy as np
 import torch
 import wandb
 from pyvtools.text import filter_by_string_must, find_numbers
-import pyvtorch.aux as taux
 
 import karras.torch_utils.distributed as dist
+from karras.dnnlib.util import EasyDict
 from generate_images import DEFAULT_SAMPLER, generate_images, parse_int_list
 import calculate_metrics as calc
 from ours.dataset import DATASET_OPTIONS
@@ -37,6 +37,7 @@ def calculate_metrics_for_checkpoints(
         verbose = True,                 # Enable status prints?
         log_to_wandb = True,            # Log to W&B?
         device = torch.device("cuda"),  # Which compute device to use.
+        **sampler_kwargs
 ):
 
     # Get reference stats
@@ -75,6 +76,11 @@ def calculate_metrics_for_checkpoints(
         these_filenames.sort()
         checkpoint_filenames_by_ema.append(these_filenames)
 
+    # Configure sampler
+    final_sampler_kwargs = EasyDict(DEFAULT_SAMPLER)
+    for k in sampler_kwargs.keys(): final_sampler_kwargs[k] = sampler_kwargs[k]
+    # final_sampler_kwargs.sampler_fn = "Images.generate_images.edm_full_sampler"
+
     # Configure distributed execution and resume W&B logging
     dist.init()
     if log_to_wandb:
@@ -103,7 +109,7 @@ def calculate_metrics_for_checkpoints(
             temp_dir = os.path.join(checkpoints_dir, "gen_images", checkpoint_filename.split(".pkl")[0])
             image_iter = generate_images(checkpoint_filepath, gnet=guide_path, outdir=temp_dir,
                                          guidance=guidance_weight, class_idx=class_idx, random_class=random_class, 
-                                         seeds=seeds, verbose=verbose, device=device, **DEFAULT_SAMPLER)
+                                         seeds=seeds, verbose=verbose, device=device, **final_sampler_kwargs)
             for _r in tqdm.tqdm(image_iter, unit='batch', disable=(dist.get_rank() != 0)): pass
             
             # Calculate metrics for generated images
@@ -152,6 +158,7 @@ def get_validation_metrics(models_dir, dataset_name, ref_path, guide_path, guida
     if ref_path is not None: ref_path = os.path.join(dirs.DATA_HOME, "dataset_refs", ref_path)
     if guide_path is not None: guide_path = os.path.join(dirs.MODELS_HOME, "Images", guide_path)
     if len(emas)==0: emas=None
+    else: emas = [float(ema) for ema in emas]
     calculate_metrics_for_checkpoints(models_dir,
         dataset_name=dataset_name, ref_path=ref_path,
         guide_path=guide_path, guidance_weight=guidance_weight,
