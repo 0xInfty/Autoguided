@@ -296,14 +296,14 @@ def generate_images(
 
                     # Save images.
                     if outdir is not None:
-                        for seed, image, lab, trajs in zip(r.seeds, 
-                                                           r.images.permute(0, 2, 3, 1).cpu().numpy(), 
-                                                           r.labels_indices,
-                                                           r.trajectories):
+                        for idx, (seed, image, lab) in enumerate(zip(r.seeds, 
+                                                                     r.images.permute(0, 2, 3, 1).cpu().numpy(), 
+                                                                     r.labels_indices)):
                             image_dir = os.path.join(outdir, f'{seed//1000*1000:06d}') if subdirs else outdir
                             os.makedirs(image_dir, exist_ok=True)
                             PIL.Image.fromarray(image, 'RGB').save(os.path.join(image_dir, f'{seed:06d}_{lab:05d}.png'))
-                            if trajs is not None:
+                            if r.trajectories is not None:
+                                trajs = r.trajectories[idx]
                                 fig, axes = plt.subplots(ncols=math.ceil((len(trajs)-1)/4), nrows=4)
                                 for t, (x_t, ax) in enumerate(zip(trajs[:-1], axes.flatten())):
                                     ax.imshow(encoder.decode(x_t).cpu().detach().numpy().swapaxes(0,1).swapaxes(1,2))
