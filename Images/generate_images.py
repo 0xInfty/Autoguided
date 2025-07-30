@@ -12,6 +12,7 @@ import os
 sys.path.insert(0, dirs.SYSTEM_HOME)
 sys.path.insert(0, os.path.join(dirs.SYSTEM_HOME, "karras"))
 
+import math
 import re
 import warnings
 import click
@@ -20,6 +21,7 @@ import pickle
 import numpy as np
 import torch
 import PIL.Image
+import matplotlib.pyplot as plt
 
 from karras.dnnlib.util import EasyDict, construct_class_by_name, open_url, call_func_by_name
 import karras.torch_utils.distributed as dist
@@ -35,6 +37,17 @@ warnings.filterwarnings('ignore', '1Torch was not compiled with flash attention'
 
 #----------------------------------------------------------------------------
 # Configuration presets.
+
+DEFAULT_SAMPLER = EasyDict(dict(
+    num_steps = 32,         # Number of sampling steps
+    sigma_min = 0.002,      # Lowest noise level
+    sigma_max = 80,         # Highest noise level
+    rho = 7,                # Time step exponent
+    S_churn = 0,            # Stochasticity strength
+    S_min = 0,              # Stoch. min noise level
+    S_max = float("inf"),   # Stoch. max noise level
+    S_noise = 1,            # Stoch. noise inflation
+))
 
 model_root = 'https://nvlabs-fi-cdn.nvidia.com/edm2/posthoc-reconstructions'
 models_dir = os.path.join(dirs.MODELS_HOME, "Images")
@@ -91,7 +104,7 @@ config_presets = {
 # "Elucidating the Design Space of Diffusion-Based Generative Models",
 # extended to support classifier-free guidance.
 
-def edm_sampler(
+def edm_full_sampler(
     net, noise, labels=None, gnet=None,
     num_steps=32, sigma_min=0.002, sigma_max=80, rho=7, guidance=1,
     S_churn=0, S_min=0, S_max=float('inf'), S_noise=1,
@@ -112,6 +125,7 @@ def edm_sampler(
 
     # Main sampling loop.
     x_next = noise.to(dtype) * t_steps[0]
+    x_trajectory = [x_next]
     for i, (t_cur, t_next) in enumerate(zip(t_steps[:-1], t_steps[1:])): # 0, ..., N-1
         x_cur = x_next
 
@@ -133,6 +147,21 @@ def edm_sampler(
             d_prime = (x_next - denoise(x_next, t_next)) / t_next
             x_next = x_hat + (t_next - t_hat) * (0.5 * d_cur + 0.5 * d_prime)
 
+        x_trajectory.append(x_next)
+
+    return x_next, x_trajectory
+
+def edm_sampler(
+    net, noise, labels=None, gnet=None,
+    num_steps=32, sigma_min=0.002, sigma_max=80, rho=7, guidance=1,
+    S_churn=0, S_min=0, S_max=float('inf'), S_noise=1,
+    dtype=torch.float32, randn_like=torch.randn_like,
+):
+    
+    x_next, _ = edm_full_sampler(net, noise, labels=labels, gnet=gnet, num_steps=num_steps, 
+                                 sigma_min=sigma_min, sigma_max=sigma_max, rho=rho, guidance=guidance,
+                                 S_churn=S_churn, S_min=S_min, S_max=S_max, S_noise=S_noise,
+                                 dtype=dtype, randn_like=randn_like)
     return x_next
 
 #----------------------------------------------------------------------------
@@ -179,7 +208,8 @@ def generate_images(
     # Rank 0 goes first.
     if dist.get_rank() != 0:
         torch.distributed.barrier()
-
+    dist.print0("Sampler kwargs", sampler_kwargs)
+    
     # Load main network.
     if isinstance(net, str):
         if verbose:
@@ -257,14 +287,36 @@ def generate_images(
                     # Generate images.
                     latents = call_func_by_name(func_name=sampler_fn, net=net, noise=r.noise,
                         labels=r.labels, gnet=gnet, randn_like=rnd.randn_like, **sampler_kwargs)
-                    r.images = encoder.decode(latents)
+                    if isinstance(latents, torch.Tensor):
+                        r.images = encoder.decode(latents)
+                        r.trajectories = None
+                    else:
+                        r.images = encoder.decode(latents[0])
+                        r.trajectories = torch.stack(latents[1]).swapaxes(0,1)
 
                     # Save images.
                     if outdir is not None:
-                        for seed, image, lab in zip(r.seeds, r.images.permute(0, 2, 3, 1).cpu().numpy(), r.labels_indices):
+                        for seed, image, lab, trajs in zip(r.seeds, 
+                                                           r.images.permute(0, 2, 3, 1).cpu().numpy(), 
+                                                           r.labels_indices,
+                                                           r.trajectories):
                             image_dir = os.path.join(outdir, f'{seed//1000*1000:06d}') if subdirs else outdir
                             os.makedirs(image_dir, exist_ok=True)
                             PIL.Image.fromarray(image, 'RGB').save(os.path.join(image_dir, f'{seed:06d}_{lab:05d}.png'))
+                            if trajs is not None:
+                                fig, axes = plt.subplots(ncols=math.ceil((len(trajs)-1)/4), nrows=4)
+                                for t, (x_t, ax) in enumerate(zip(trajs[:-1], axes.flatten())):
+                                    ax.imshow(encoder.decode(x_t).cpu().detach().numpy().swapaxes(0,1).swapaxes(1,2))
+                                    ax.axis('off')
+                                    ax.set_title(str(t))
+                                plt.suptitle(f"Label {int(lab)}")
+                                plt.tight_layout()
+                                plt.show()
+                                fig_dir = image_dir.replace("gen_images","gen_trajectories")
+                                if fig_dir == image_dir: fig_dir = os.path.join(image_dir,"gen_trajectories")
+                                os.makedirs(fig_dir, exist_ok=True)
+                                plt.savefig(os.path.join(fig_dir, f'{seed:06d}_{lab:05d}.png'))
+                                plt.close(fig)
 
                 # Yield results.
                 torch.distributed.barrier() # keep the ranks in sync
@@ -291,17 +343,6 @@ def parse_int_list(s):
 
 #----------------------------------------------------------------------------
 # Command line interface.
-
-DEFAULT_SAMPLER = EasyDict(dict(
-    num_steps = 32,             # Number of sampling steps
-    sigma_min = 0.002,      # Lowest noise level
-    sigma_max = 80,         # Highest noise level
-    rho = 7,                # Time step exponent
-    S_churn = 0,            # Stochasticity strength
-    S_min = 0,              # Stoch. min noise level
-    S_max = "inf",          # Stoch. max noise level
-    S_noise = 1,            # Stoch. noise inflation
-))
 
 @click.command()
 @click.option('--preset',                   help='Configuration preset', metavar='STR',                             type=str, default=None)
