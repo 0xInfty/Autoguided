@@ -464,7 +464,7 @@ def training_loop(
 
         # Update EMA and training state.
         if ema is not None:
-            ema.update(cur_nimg=state.cur_nimg, batch_size=batch_size)
+            ema.update(cur_nimg=state.cur_nimg, batch_size=epoch_nimg)
         state.training_time += (time.time() - batch_start_time)
 
         # Report status.
