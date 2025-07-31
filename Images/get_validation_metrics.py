@@ -62,12 +62,14 @@ def calculate_metrics_for_checkpoints(
     checkpoint_filenames = filter_by_string_must(checkpoint_filenames, "0000000", must=False) # Skip randomly initialized networks
     checkpoint_emas = [abs(find_numbers(f)[-1]) for f in checkpoint_filenames]
     if min_epoch is not None or max_epoch is not None:
-        checkpoint_epochs = [abs(find_numbers(f)[0] for f in checkpoint_filenames)]
+        checkpoint_filenames = np.array(checkpoint_filenames)
+        checkpoint_epochs = np.array([abs(find_numbers(f)[0]) for f in checkpoint_filenames], dtype=np.int32)
         if min_epoch is not None:
             checkpoint_filenames = checkpoint_filenames[checkpoint_epochs >= min_epoch]
-            checkpoint_epochs = [abs(find_numbers(f)[0] for f in checkpoint_filenames)]
+            checkpoint_epochs = np.array([abs(find_numbers(f)[0]) for f in checkpoint_filenames], dtype=np.int32)
         if max_epoch is not None:
             checkpoint_filenames = checkpoint_filenames[checkpoint_epochs <= max_epoch]
+        checkpoint_filenames = list(checkpoint_filenames)
     
     # Separate by EMA and filter EMAs, if specified
     available_emas = list(set(checkpoint_emas))
