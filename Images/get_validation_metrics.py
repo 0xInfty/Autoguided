@@ -33,6 +33,8 @@ def calculate_metrics_for_checkpoints(
         random_class = False,           # Automatic selection can be uniformly random or forced exact distribution.
         seeds = range(0, int(2e3)),     # List of random seeds.
         chosen_emas = None,             # List of chosen EMAs. Default: use all.
+        min_epoch = None,               # Number of epochs to start processing from.
+        max_epoch = None,               # Number of epochs to stop processing at.
         save_nimg = 0,                  # How many images to keep, the rest will be deleted.
         verbose = True,                 # Enable status prints?
         log_to_wandb = True,            # Log to W&B?
@@ -59,6 +61,13 @@ def calculate_metrics_for_checkpoints(
     checkpoint_filenames = filter_by_string_must(os.listdir(checkpoints_dir), ".pkl")    
     checkpoint_filenames = filter_by_string_must(checkpoint_filenames, "0000000", must=False) # Skip randomly initialized networks
     checkpoint_emas = [abs(find_numbers(f)[-1]) for f in checkpoint_filenames]
+    if min_epoch is not None or max_epoch is not None:
+        checkpoint_epochs = [abs(find_numbers(f)[0] for f in checkpoint_filenames)]
+        if min_epoch is not None:
+            checkpoint_filenames = checkpoint_filenames[checkpoint_epochs >= min_epoch]
+            checkpoint_epochs = [abs(find_numbers(f)[0] for f in checkpoint_filenames)]
+        if max_epoch is not None:
+            checkpoint_filenames = checkpoint_filenames[checkpoint_epochs <= max_epoch]
     
     # Separate by EMA and filter EMAs, if specified
     available_emas = list(set(checkpoint_emas))
@@ -140,23 +149,26 @@ def calculate_metrics_for_checkpoints(
                     for i in range(save_nimg,len(contents)): os.remove(os.path.join(temp_dir, contents[i]))
             torch.distributed.barrier()
 
-    torch.distributed.barrier()
-    try: run.finish()
-    except AttributeError: pass
-    torch.distributed.barrier()
+    if log_to_wandb:
+        torch.distributed.barrier()
+        try: run.finish()
+        except AttributeError: pass
+        torch.distributed.barrier()
 
 @click.command()
-@click.option("--models-dir", "models_dir", help="Relative path to directory containing the model checkpoints", metavar='PATH', required=True)
+@click.option("--models-dir", "models_dir", help="Relative path to directory containing the model checkpoints", type=str, metavar='PATH', required=True)
 @click.option('--dataset', 'dataset_name', help='Dataset to be used', type=click.Choice(list(DATASET_OPTIONS.keys())), default="tiny", show_default=True)
-@click.option('--ref', 'ref_path', help='Dataset reference statistics ', type=str, required=False, default=None, show_default=True)
-@click.option('--guide-path', 'guide_path', help='Guide model filepath', metavar='PATH', type=str, default=None, show_default=True)
-@click.option('--guidance-weight', 'guidance_weight', help='Guidance strength: default is 1 (no guidance)', metavar='PATH', type=float, default=1.0, show_default=True)
-@click.option('--random/--no-random', 'random_class',  help='Use random classes?', metavar='BOOL', type=bool, default=False, show_default=True)
+@click.option('--ref', 'ref_path', help='Dataset reference statistics ', type=str, metavar='PATH', required=False, default=None, show_default=True)
+@click.option('--guide-path', 'guide_path', help='Guide model filepath', type=str, metavar='PATH', default=None, show_default=True)
+@click.option('--guidance-weight', 'guidance_weight', help='Guidance strength: default is 1 (no guidance)', type=float, default=1.0, show_default=True)
+@click.option('--random/--no-random', 'random_class',  help='Use random classes?', type=bool, default=False, show_default=True)
 @click.option('--emas', help='Chosen EMA length/s', required=False, multiple=True, default=None, show_default=True)
+@click.option('--min-epoch', help='Number of batches at which to start', type=int, required=False, default=None, show_default=True)
+@click.option('--max-epoch', help='Number of batches at which to stop', type=int, required=False, default=None, show_default=True)
 @click.option('--save-nimg', help='Number of generated images to keep', type=int, required=False, default=0, show_default=True)
 @click.option('--seeds', help='List of random seeds (e.g. 1,2,5-10)', metavar='LIST', type=parse_int_list, default='0-1999', show_default=True)
-@click.option('--wandb/--no-wandb', 'log_to_wandb',  help='Log to W&B?', metavar='BOOL', type=bool, default=True, show_default=True)
-def get_validation_metrics(models_dir, dataset_name, ref_path, guide_path, guidance_weight, random_class, emas, seeds, save_nimg, log_to_wandb):
+@click.option('--wandb/--no-wandb', 'log_to_wandb',  help='Log to W&B?', type=bool, default=True, show_default=True)
+def get_validation_metrics(models_dir, dataset_name, ref_path, guide_path, guidance_weight, random_class, emas, min_epoch, max_epoch, seeds, save_nimg, log_to_wandb):
     models_dir = os.path.join(dirs.MODELS_HOME, "Images", models_dir)
     if ref_path is not None: ref_path = os.path.join(dirs.DATA_HOME, "dataset_refs", ref_path)
     if guide_path is not None: guide_path = os.path.join(dirs.MODELS_HOME, "Images", guide_path)
@@ -165,7 +177,8 @@ def get_validation_metrics(models_dir, dataset_name, ref_path, guide_path, guida
     calculate_metrics_for_checkpoints(models_dir,
         dataset_name=dataset_name, ref_path=ref_path,
         guide_path=guide_path, guidance_weight=guidance_weight,
-        random_class=random_class, chosen_emas=emas, seeds=seeds, 
+        random_class=random_class, chosen_emas=emas, 
+        min_epoch=min_epoch, max_epoch=max_epoch, seeds=seeds, 
         save_nimg=save_nimg, log_to_wandb=log_to_wandb)
 
 if __name__ == "__main__":
