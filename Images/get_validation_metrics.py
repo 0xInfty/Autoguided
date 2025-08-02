@@ -71,34 +71,38 @@ def get_classification_metrics(
     # true label being i-th class and
     # predicted label being j-th class
 
-    # Get stats
+    # Configure saving
     saving = save_period is not None
-    last_saved_idx = None
-    last_saved_top_1 = None
-    last_saved_top_5 = None
+    get_numbers = lambda idx, n_seen, acc : f"{idx+1:05d}-{n_seen:07d}-{acc:.4f}"
+    get_fpath = lambda lab, idx, n_seen, acc : os.path.join(save_dir, f"{lab}-{get_numbers(idx, n_seen, acc)}.npy")
+
+    # Get stats
+    n_seen = 0
+    last_conf_mat, last_top_5 = None, None
     for idx, (_, images, onehots) in tqdm.tqdm(enumerate(data_loader), total=n_batches):
         if idx>=n_batches: break
         labels = onehots.argmax(axis=1)
         upsampled = torch.stack([upsample(384, image) for image in images])
         predictions = model(upsampled)
         predicted_labels = predictions.argmax(axis=1)
-        confusion_matrix[labels, predicted_labels] += 1
         top_5_labels = predictions.argsort(axis=1)[:,-5:]
-        for gt, top_5 in zip(labels, top_5_labels):
+        for gt, top_1, top_5 in zip(labels, predicted_labels, top_5_labels):
+            confusion_matrix[gt, top_1] += 1
             top_5_correct[gt] += gt in top_5
+        n_seen += len(images)
         if (saving and (idx-1)%save_period==0) or idx==n_batches-1:
-            if last_saved_idx is not None:
-                os.remove(os.path.join(save_dir, f"conf-{last_saved_idx+1:05d}-{last_saved_top_1:.4f}.npy"))
-                os.remove(os.path.join(save_dir, f"topf-{last_saved_idx+1:05d}-{last_saved_top_5:.4f}.npy"))
+            if last_conf_mat is not None:
+                os.remove(last_conf_mat)
+                os.remove(last_top_5)
             elif n_batches>save_period: 
                 os.makedirs(save_dir, exist_ok=True)
-            top_1_accuracy = float( confusion_matrix.diagonal().sum() / n_samples )
-            top_5_accuracy = float( top_5_correct.sum() / n_samples )
-            np.save(os.path.join(save_dir, f"conf-{idx+1:05d}-{top_1_accuracy:.4f}.npy"), confusion_matrix)
-            np.save(os.path.join(save_dir, f"topf-{idx+1:05d}-{top_5_accuracy:.4f}.npy"), top_5_correct)
-            last_saved_idx = idx
-            last_saved_top_1 = top_1_accuracy
-            last_saved_top_5 = top_5_accuracy
+            top_1_accuracy = float( confusion_matrix.diagonal().sum() / n_seen )
+            top_5_accuracy = float( top_5_correct.sum() / n_seen )
+            last_conf_mat = get_fpath("conf", idx, n_seen, top_1_accuracy)
+            last_top_5 = get_fpath("topf", idx, n_seen, top_5_accuracy)
+            np.save(last_conf_mat, confusion_matrix)
+            np.save(last_top_5, top_5_correct)
+    if n_seen != n_samples: print(f"Inconsistency found: n_seen is {n_seen}, but n_samples is {n_samples}")
     if verbose:
         print("Top-1 Accuracy", top_1_accuracy)
         print("Top-5 Accuracy", top_5_accuracy)
