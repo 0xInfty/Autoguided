@@ -7,6 +7,7 @@ sys.path.insert(0, os.path.join(dirs.SYSTEM_HOME, "ToyExample"))
 import shutil
 import numpy as np
 import torch
+import PIL
 from re import finditer
 
 from pyvtools.text import filter_by_string_must
@@ -188,3 +189,26 @@ def check_nested_dict(old_dict, new_dict, is_alright=True, exception_keys=None, 
                         print("> New:", new_dict[k])
                     is_alright = False
     return is_alright
+
+#%% IMAGE PROCESSING
+
+def upsample(image_size, image):
+
+    is_torch = isinstance(image, torch.Tensor)
+    if is_torch:
+        device = image.device
+        torch_dtype = image.dtype
+        image = image.swapaxes(0,1).swapaxes(1,2).detach().cpu().numpy().astype(np.uint8)
+    numpy_dtype = image.dtype
+    pil_image = PIL.Image.fromarray(image)
+    
+    scale = image_size / min(*pil_image.size)
+    new_size = tuple(round(x * scale) for x in pil_image.size)
+    assert len(new_size) == 2
+    pil_image = pil_image.resize(new_size, resample=PIL.Image.Resampling.BICUBIC)
+    
+    new_image = np.asarray(pil_image).astype(numpy_dtype).swapaxes(1,2).swapaxes(0,1)
+    if is_torch:
+        new_image = torch.Tensor(new_image, device=device).to(torch_dtype)
+
+    return new_image

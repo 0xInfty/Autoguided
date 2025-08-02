@@ -11,14 +11,68 @@ import time
 import numpy as np
 import torch
 import wandb
+import timm
 from pyvtools.text import filter_by_string_must, find_numbers
 
 import karras.torch_utils.distributed as dist
-from karras.dnnlib.util import EasyDict
+from karras.dnnlib.util import EasyDict, construct_class_by_name
 from generate_images import DEFAULT_SAMPLER, generate_images, parse_int_list
 import calculate_metrics as calc
 from ours.dataset import DATASET_OPTIONS
-from ours.utils import get_wandb_id
+from ours.utils import get_wandb_id, upsample
+
+#----------------------------------------------------------------------------
+# Calculate metrics for all stored models as a post-hoc validation curve
+
+def get_classification_metrics(
+        dataset_name="tiny",
+        n_samples=None,
+        verbose=False,
+):
+    
+    # Load dataset
+    if dataset_name != "tiny": raise NotImplementedError("No classification model available")
+    dataset_kwargs = calc.get_dataset_kwargs(dataset_name)
+    dataset_obj = construct_class_by_name(**dataset_kwargs, random_seed=0)
+    n_classes = dataset_obj.n_classes
+    n_examples = len(dataset_obj)
+    if n_samples is None: n_samples = n_examples
+
+    # Create Swin-L model
+    model = timm.create_model('swin_large_patch4_window12_384', pretrained=False, drop_path_rate=0.1).cpu()
+    for param in model.parameters():
+        param.requires_grad = False
+    model.reset_classifier(num_classes=200)
+
+    # Load pre-trained weights (fine-tuned on Tiny ImageNet)
+    checkpoint = torch.load("/mnt/hdd/vale/models/SCID/Images/00_PreTrained/swin_large_384.pth")
+    model.load_state_dict(checkpoint['model_state_dict'])
+
+    # Top-5 accuracy per class
+    top_5_correct = np.zeros(n_classes, dtype=np.uint32)
+
+    # Confusion matrix --> Can be used to get Top-1 accuracy per class
+    confusion_matrix = np.zeros((n_classes, n_classes), dtype=np.uint32)
+    # i-th row and j-th column indicate the number of samples with
+    # true label being i-th class and
+    # predicted label being j-th class
+
+    # Get stats
+    for index in tqdm.tqdm(range(min(len(dataset_obj),n_samples))):
+        image, onehot = dataset_obj[index][1:]
+        label = int(onehot.argmax())
+        upsampled = upsample(384, image).unsqueeze(0)
+        prediction = model(upsampled)
+        predicted_label = int(prediction.argmax())
+        confusion_matrix[label, predicted_label] += 1
+        top_5_labels = prediction.argsort()[:,-5:]
+        if label in top_5_labels: 
+            top_5_correct[label] += 1
+    if verbose:
+        print("Top-1 Accuracy", float( confusion_matrix.diagonal().sum() / n_samples ))
+        print("Top-5 Accuracy", float( top_5_correct.sum() / n_samples ))
+    
+    return confusion_matrix, top_5_correct
 
 #----------------------------------------------------------------------------
 # Calculate metrics for all stored models as a post-hoc validation curve
