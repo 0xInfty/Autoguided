@@ -86,7 +86,7 @@ def get_classification_metrics(
         top_5_labels = predictions.argsort(axis=1)[:,-5:]
         for gt, top_5 in zip(labels, top_5_labels):
             top_5_correct[gt] += gt in top_5
-        if saving and idx>0 and ((idx-1)%save_period==0 or idx==n_batches-1):
+        if (saving and (idx-1)%save_period==0) or idx==n_batches-1:
             if last_saved_idx is not None:
                 os.remove(os.path.join(save_dir, f"conf-{last_saved_idx+1:05d}-{last_saved_top_1:.4f}.npy"))
                 os.remove(os.path.join(save_dir, f"topf-{last_saved_idx+1:05d}-{last_saved_top_5:.4f}.npy"))
@@ -99,7 +99,6 @@ def get_classification_metrics(
             last_saved_idx = idx
             last_saved_top_1 = top_1_accuracy
             last_saved_top_5 = top_5_accuracy
-
     if verbose:
         print("Top-1 Accuracy", top_1_accuracy)
         print("Top-5 Accuracy", top_5_accuracy)
@@ -243,7 +242,18 @@ def calculate_metrics_for_checkpoints(
         except AttributeError: pass
         torch.distributed.barrier()
 
-@click.command()
+@click.group()
+def cmdline(): pass
+
+@cmdline.command()
+@click.option('--batch', 'batch_size', help='Batch size', type=int, required=False, default=128, show_default=True)
+@click.option('--n', 'n_samples', help='Number of samples to consider', type=int, required=False, default=None, show_default=True)
+@click.option('--period', 'save_period', help='Saving period, expressed in batches', type=int, required=False, default=None, show_default=True)
+def classification_dataset(batch_size, n_samples, save_period):
+    get_classification_metrics(n_samples=n_samples, batch_size=batch_size, 
+                               save_period=save_period, verbose=True);
+
+@cmdline.command()
 @click.option("--models-dir", "models_dir", help="Relative path to directory containing the model checkpoints", type=str, metavar='PATH', required=True)
 @click.option('--dataset', 'dataset_name', help='Dataset to be used', type=click.Choice(list(DATASET_OPTIONS.keys())), default="tiny", show_default=True)
 @click.option('--ref', 'ref_path', help='Dataset reference statistics ', type=str, metavar='PATH', required=False, default=None, show_default=True)
@@ -256,7 +266,7 @@ def calculate_metrics_for_checkpoints(
 @click.option('--save-nimg', help='Number of generated images to keep', type=int, required=False, default=0, show_default=True)
 @click.option('--seeds', help='List of random seeds (e.g. 1,2,5-10)', metavar='LIST', type=parse_int_list, default='0-1999', show_default=True)
 @click.option('--wandb/--no-wandb', 'log_to_wandb',  help='Log to W&B?', type=bool, default=True, show_default=True)
-def get_validation_metrics(models_dir, dataset_name, ref_path, guide_path, guidance_weight, random_class, emas, min_epoch, max_epoch, seeds, save_nimg, log_to_wandb):
+def validation(models_dir, dataset_name, ref_path, guide_path, guidance_weight, random_class, emas, min_epoch, max_epoch, seeds, save_nimg, log_to_wandb):
     models_dir = os.path.join(dirs.MODELS_HOME, "Images", models_dir)
     if ref_path is not None: ref_path = os.path.join(dirs.DATA_HOME, "dataset_refs", ref_path)
     if guide_path is not None: guide_path = os.path.join(dirs.MODELS_HOME, "Images", guide_path)
@@ -270,4 +280,4 @@ def get_validation_metrics(models_dir, dataset_name, ref_path, guide_path, guida
         save_nimg=save_nimg, log_to_wandb=log_to_wandb)
 
 if __name__ == "__main__":
-    get_validation_metrics()
+    cmdline()
