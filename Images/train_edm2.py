@@ -181,12 +181,22 @@ def launch_training(run_dir, c):
     trn.training_loop(run_dir=run_dir, **c)
 
 def replace_config_values(old_c): # Ensure backwards compatibility
-    try: old_c["status_period"] = int(old_c["status_nimg"] / 2048)
-    except KeyError: pass
-    try: old_c["snapshot_period"] = int(old_c["snapshot_nimg"] / 2048)
-    except KeyError: pass
-    try: old_c["checkpoint_period"] = int(old_c["checkpoint_nimg"] / 2048)
-    except KeyError: pass
+    for k in old_c.keys():
+        if isinstance(old_c[k], dict):
+            old_c[k] = replace_config_values(old_c[k])
+        else:
+            try:
+                if old_c["class_name"] == "ours.dataset.HuggingFaceDataset" and old_c["name"]=="tiny":
+                    old_c["class_name"] = "ours.dataset.TinyImageNetDataset"
+            except KeyError: pass
+            try: old_c["status_period"] = int(old_c["status_nimg"] / 2048)
+            except KeyError: pass
+            try: old_c["snapshot_period"] = int(old_c["snapshot_nimg"] / 2048)
+            except KeyError: pass
+            try: old_c["checkpoint_period"] = int(old_c["checkpoint_nimg"] / 2048)
+            except KeyError: pass
+            try: old_c["class_name"] = int(old_c["checkpoint_nimg"] / 2048)
+            except KeyError: pass
     return old_c
 
 EXCEPTION_KEYS = ["status_period", "snapshot_period", "checkpoint_period"]
