@@ -16,7 +16,7 @@ DATASET_OPTIONS = {
     "img512": dict(class_name='karras.training.dataset.ImageFolderDataset', path=os.path.join(dirs.DATA_HOME, "img512.zip")),
     "img64": dict(class_name='karras.training.dataset.ImageFolderDataset', path=os.path.join(dirs.DATA_HOME, "img512-sd.zip")),
     "cifar10": dict(class_name='ours.dataset.HuggingFaceDataset', path="uoft-cs/cifar10", n_classes=10, key_image="img", key_label="label"),
-    "tiny": dict(class_name='ours.dataset.HuggingFaceDataset', path="zh-plus/tiny-imagenet", n_classes=200, key_image="image", key_label="label"),
+    "tiny": dict(class_name='ours.dataset.TinyImageNetDataset', path="zh-plus/tiny-imagenet", n_classes=200, key_image="image", key_label="label"),
     "folder": dict(class_name='karras.training.dataset.ImageFolderDataset'),
 }
 
@@ -53,6 +53,17 @@ class HuggingFaceDataset(Dataset):
         cache_dir       = dirs.DATA_HOME, # Cache dir to store the Hugging Face dataset
         **super_kwargs,         # Additional arguments for the Dataset base class.
     ):
+        
+        self._set_up(path, n_classes, key_image, key_label, cache_dir)
+
+        name = name or os.path.splitext(path)[-1]
+        raw_shape = [len(self._dataset)] + list(self._load_raw_image(0).shape)
+        if resolution is not None and (raw_shape[2] != resolution or raw_shape[3] != resolution):
+            raise IOError('Image files do not match the specified resolution')
+        super().__init__(name=name, raw_shape=raw_shape, **super_kwargs)
+    
+    def _set_up(self, path, n_classes, key_image, key_label, cache_dir=dirs.DATA_HOME):
+
         self._path = path        
         self._cache_dir = cache_dir
 
@@ -68,12 +79,6 @@ class HuggingFaceDataset(Dataset):
         
         self.data.set_format(type="torch", columns=[self.key_image,self.key_label])
 
-        name = name or os.path.splitext(path)[-1]
-        raw_shape = [len(self._dataset)] + list(self._load_raw_image(0).shape)
-        if resolution is not None and (raw_shape[2] != resolution or raw_shape[3] != resolution):
-            raise IOError('Image files do not match the specified resolution')
-        super().__init__(name=name, raw_shape=raw_shape, **super_kwargs)
-    
     @property
     def path(self):
         return self._path
@@ -150,16 +155,51 @@ class HuggingFaceDataset(Dataset):
         d = dnnlib.EasyDict()
         d.raw_idx = int(self._raw_idx[idx])
         d.xflip = (int(self._xflip[idx]) != 0)
-        d.raw_label = self._load_raw_label(d.raw_idx).copy()
+        d.raw_label = int(self._load_raw_label(d.raw_idx))
+        try:
+            d.name_label = self.data.features[self.key_label].names[d.raw_idx]
+        except:
+            d.name_label = None
         return d
 
-if __name__ == "__main__":
+class TinyImageNetDataset(HuggingFaceDataset):
 
-    # split = vhfdat.get_splits_combination("uoft-cs/cifar10", cache_dir=cache_dir)
-    # dataset = hfdat.load_dataset("uoft-cs/cifar10", split="train", cache_dir=cache_dir)
-    # dataset.set_format(type="torch", columns=["img","label"])
-    # print(dataset[0])
+    def __init__(self,
+        path,                   # Path to Hugging Face dataset
+        n_classes,              # Specify number of classes for one hot encoding
+        key_image,              # String identifier of the images column
+        key_label,              # String identifier of the labels column
+        resolution      = None, # Ensure specific resolution, None = anything goes.
+        name            = None, # Name of the dataset, optional
+        cache_dir       = dirs.DATA_HOME, # Cache dir to store the Hugging Face dataset
+        names_filename  = "words.txt", # Classes' textual names (e.g. Goldfish for n01443537)
+        **super_kwargs,         # Additional arguments for the Dataset base class.
+    ):
+        
+        super().__init__(path, n_classes, key_image, key_label, 
+                         resolution, name, cache_dir, **super_kwargs)
+        
+        dataset_dir = "___".join(os.path.split(path))
+        names_filepath = os.path.join(self.cache_dir, dataset_dir, names_filename)
+        if os.path.isfile(names_filepath):
+            class_names = {k:None for k in self.data.features["label"].names}
+            with open(names_filepath, "r", encoding='UTF-8') as f:
+                for line in f:
+                    k, name = line.rstrip().split("\t")
+                    class_names[k] = name.capitalize()
+            self._class_names = class_names
+        else: self._class_names = None
 
-    dataset = HuggingFaceDataset("uoft-cs/cifar10", 10)
-    # print("Dataset Raw Index", type(dataset._raw_idx), dataset._raw_idx.shape, dataset._raw_idx)
-    print(dataset[0])
+    @property
+    def class_names(self):
+        return self._class_names
+
+    def get_details(self, idx):
+        d = dnnlib.EasyDict()
+        d.raw_idx = int(self._raw_idx[idx])
+        d.xflip = (int(self._xflip[idx]) != 0)
+        d.raw_label = int(self._load_raw_label(d.raw_idx))
+        d.name_label = self.data.features[self.key_label].names[d.raw_idx]
+        if self.class_names is not None:
+            d.words_label = self.class_names[d.name_label]
+        return d
