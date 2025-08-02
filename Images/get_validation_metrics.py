@@ -17,6 +17,7 @@ from pyvtools.text import filter_by_string_must, find_numbers
 
 import karras.torch_utils.distributed as dist
 from karras.dnnlib.util import EasyDict, construct_class_by_name
+from karras.torch_utils.misc import InfiniteSampler
 from generate_images import DEFAULT_SAMPLER, generate_images, parse_int_list
 import calculate_metrics as calc
 from ours.dataset import DATASET_OPTIONS
@@ -30,6 +31,8 @@ def get_classification_metrics(
         n_samples=None,
         batch_size=128,
         shuffle=False,
+        save_period=None,
+        save_dir=os.path.join(dirs.DATA_HOME, "class_metrics", "tiny"),
         verbose=False,
 ):
     
@@ -42,12 +45,6 @@ def get_classification_metrics(
     if n_samples is None: n_samples = n_examples
     n_samples = min(n_samples, n_examples)
 
-    # Set data loader
-    batch_size = min(batch_size, n_samples)
-    n_batches = int(math.ceil( n_samples / batch_size ))
-    data_loader = torch.utils.data.DataLoader(dataset_obj, batch_size, shuffle=shuffle,
-                                              num_workers=2, pin_memory=True, prefetch_factor=2)
-
     # Create Swin-L model
     model = timm.create_model('swin_large_patch4_window12_384', pretrained=False, drop_path_rate=0.1).cpu()
     for param in model.parameters():
@@ -57,6 +54,13 @@ def get_classification_metrics(
     # Load pre-trained weights (fine-tuned on Tiny ImageNet)
     checkpoint = torch.load("/mnt/hdd/vale/models/SCID/Images/00_PreTrained/swin_large_384.pth")
     model.load_state_dict(checkpoint['model_state_dict'])
+
+    # Create a data loader
+    batch_size = min(batch_size, n_samples)
+    n_batches = int(math.ceil( n_samples / batch_size ))
+    # data_sampler = InfiniteSampler(dataset_obj, shuffle=False, start_idx=start_idx)
+    data_loader = torch.utils.data.DataLoader(dataset_obj, batch_size, shuffle=shuffle,
+                                              num_workers=2, pin_memory=True, prefetch_factor=2)
 
     # Top-5 accuracy per class
     top_5_correct = np.zeros(n_classes, dtype=np.uint32)
@@ -68,6 +72,10 @@ def get_classification_metrics(
     # predicted label being j-th class
 
     # Get stats
+    saving = save_period is not None
+    last_saved_idx = None
+    last_saved_top_1 = None
+    last_saved_top_5 = None
     for idx, (_, images, onehots) in tqdm.tqdm(enumerate(data_loader), total=n_batches):
         if idx>=n_batches: break
         labels = onehots.argmax(axis=1)
@@ -78,11 +86,25 @@ def get_classification_metrics(
         top_5_labels = predictions.argsort(axis=1)[:,-5:]
         for gt, top_5 in zip(labels, top_5_labels):
             top_5_correct[gt] += gt in top_5
+        if saving and idx>0 and ((idx-1)%save_period==0 or idx==n_batches-1):
+            if last_saved_idx is not None:
+                os.remove(os.path.join(save_dir, f"conf-{last_saved_idx+1:05d}-{last_saved_top_1:.4f}.npy"))
+                os.remove(os.path.join(save_dir, f"topf-{last_saved_idx+1:05d}-{last_saved_top_5:.4f}.npy"))
+            elif n_batches>save_period: 
+                os.makedirs(save_dir, exist_ok=True)
+            top_1_accuracy = float( confusion_matrix.diagonal().sum() / n_samples )
+            top_5_accuracy = float( top_5_correct.sum() / n_samples )
+            np.save(os.path.join(save_dir, f"conf-{idx+1:05d}-{top_1_accuracy:.4f}.npy"), confusion_matrix)
+            np.save(os.path.join(save_dir, f"topf-{idx+1:05d}-{top_5_accuracy:.4f}.npy"), top_5_correct)
+            last_saved_idx = idx
+            last_saved_top_1 = top_1_accuracy
+            last_saved_top_5 = top_5_accuracy
+
     if verbose:
-        print("Top-1 Accuracy", float( confusion_matrix.diagonal().sum() / n_samples ))
-        print("Top-5 Accuracy", float( top_5_correct.sum() / n_samples ))
+        print("Top-1 Accuracy", top_1_accuracy)
+        print("Top-5 Accuracy", top_5_accuracy)
     
-    return confusion_matrix, top_5_correct
+    return top_1_accuracy, top_5_accuracy, confusion_matrix, top_5_correct
 
 #----------------------------------------------------------------------------
 # Calculate metrics for all stored models as a post-hoc validation curve
