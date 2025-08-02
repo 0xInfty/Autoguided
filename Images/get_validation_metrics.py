@@ -8,6 +8,7 @@ import shutil
 import tqdm
 import click
 import time
+import math
 import numpy as np
 import torch
 import wandb
@@ -27,6 +28,8 @@ from ours.utils import get_wandb_id, upsample
 def get_classification_metrics(
         dataset_name="tiny",
         n_samples=None,
+        batch_size=128,
+        shuffle=False,
         verbose=False,
 ):
     
@@ -37,6 +40,13 @@ def get_classification_metrics(
     n_classes = dataset_obj.n_classes
     n_examples = len(dataset_obj)
     if n_samples is None: n_samples = n_examples
+    n_samples = min(n_samples, n_examples)
+
+    # Set data loader
+    batch_size = min(batch_size, n_samples)
+    n_batches = int(math.ceil( n_samples / batch_size ))
+    data_loader = torch.utils.data.DataLoader(dataset_obj, batch_size, shuffle=shuffle,
+                                              num_workers=2, pin_memory=True, prefetch_factor=2)
 
     # Create Swin-L model
     model = timm.create_model('swin_large_patch4_window12_384', pretrained=False, drop_path_rate=0.1).cpu()
@@ -58,16 +68,16 @@ def get_classification_metrics(
     # predicted label being j-th class
 
     # Get stats
-    for index in tqdm.tqdm(range(min(len(dataset_obj),n_samples))):
-        image, onehot = dataset_obj[index][1:]
-        label = int(onehot.argmax())
-        upsampled = upsample(384, image).unsqueeze(0)
-        prediction = model(upsampled)
-        predicted_label = int(prediction.argmax())
-        confusion_matrix[label, predicted_label] += 1
-        top_5_labels = prediction.argsort()[:,-5:]
-        if label in top_5_labels: 
-            top_5_correct[label] += 1
+    for idx, (_, images, onehots) in tqdm.tqdm(enumerate(data_loader), total=n_batches):
+        if idx>=n_batches: break
+        labels = onehots.argmax(axis=1)
+        upsampled = torch.stack([upsample(384, image) for image in images])
+        predictions = model(upsampled)
+        predicted_labels = predictions.argmax(axis=1)
+        confusion_matrix[labels, predicted_labels] += 1
+        top_5_labels = predictions.argsort(axis=1)[:,-5:]
+        for gt, top_5 in zip(labels, top_5_labels):
+            top_5_correct[gt] += gt in top_5
     if verbose:
         print("Top-1 Accuracy", float( confusion_matrix.diagonal().sum() / n_samples ))
         print("Top-5 Accuracy", float( top_5_correct.sum() / n_samples ))
