@@ -344,11 +344,14 @@ def classification_dataset(model, batch_size, n_samples, save_period, verbose):
     if model == "ResNet":
         model = load_resnet_101_model(verbose=verbose)
         do_upsample = False
+        save_dir = os.path.join(dirs.DATA_HOME, "class_metrics", "tiny", "resnet")
     elif model == "Swin":
         model = load_swin_l_model(verbose=True)
         do_upsample = True
+        save_dir = os.path.join(dirs.DATA_HOME, "class_metrics", "tiny", "swin")
     get_classification_metrics(model, n_samples=n_samples, batch_size=batch_size, 
-                               save_period=save_period, do_upsampl=do_upsample, verbose=verbose);
+                               save_period=save_period, do_upsample=do_upsample, 
+                               save_dir=save_dir, verbose=verbose);
 
 @cmdline.command()
 @click.option("--models-dir", "models_dir", help="Relative path to directory containing the model checkpoints", type=str, metavar='PATH', required=True)
