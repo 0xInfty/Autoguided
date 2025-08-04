@@ -116,6 +116,35 @@ def load_resnet_101_model(verbose=False):
     return model
 
 #--------------------------------------------------------------------------------
+# Utilities to calculate classification metrics
+
+def get_classification_metrics_dir(model):
+    if model not in ["Swin", "ResNet"]: raise NotImplementedError("Unknown model")
+
+    if model == "ResNet":
+        save_dir = os.path.join(dirs.DATA_HOME, "class_metrics", "tiny", "resnet")
+    elif model == "Swin":
+        save_dir = os.path.join(dirs.DATA_HOME, "class_metrics", "tiny", "swin")
+    return save_dir
+
+def load_last_classification_metrics(model):
+    save_dir = get_classification_metrics_dir(model)
+
+    contents = os.listdir(save_dir)
+
+    conf_files = filter_by_string_must(contents, "conf")
+    conf_files.sort()
+    conf_filepath = os.path.join(save_dir, conf_files[-1])
+
+    topf_files = filter_by_string_must(contents, "topf")
+    topf_files.sort()
+    topf_filepath = os.path.join(save_dir, topf_files[-1])
+
+    confusion_matrix = np.load(conf_filepath)
+    top_5_correct = np.load(topf_filepath)
+    return confusion_matrix, top_5_correct
+
+#--------------------------------------------------------------------------------
 # Calculate classification metrics for a given classifier for the whole dataset
 
 def get_classification_metrics(
@@ -341,14 +370,13 @@ def cmdline(): pass
 @click.option('--period', 'save_period', help='Saving period, expressed in batches', type=int, required=False, default=None, show_default=True)
 @click.option('--verbose/--no-verbose', 'verbose',  help='Show prints?', metavar='BOOL', type=bool, default=True, show_default=True)
 def classification_dataset(model, batch_size, n_samples, save_period, verbose):
+    save_dir = get_classification_metrics_dir(model)
     if model == "ResNet":
         model = load_resnet_101_model(verbose=verbose)
         do_upsample = False
-        save_dir = os.path.join(dirs.DATA_HOME, "class_metrics", "tiny", "resnet")
     elif model == "Swin":
         model = load_swin_l_model(verbose=True)
         do_upsample = True
-        save_dir = os.path.join(dirs.DATA_HOME, "class_metrics", "tiny", "swin")
     get_classification_metrics(model, n_samples=n_samples, batch_size=batch_size, 
                                save_period=save_period, do_upsample=do_upsample, 
                                save_dir=save_dir, verbose=verbose);
