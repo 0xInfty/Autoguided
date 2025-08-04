@@ -157,7 +157,7 @@ class HuggingFaceDataset(Dataset):
         d.xflip = (int(self._xflip[idx]) != 0)
         d.raw_label = int(self._load_raw_label(d.raw_idx))
         try:
-            d.name_label = self.data.features[self.key_label].names[d.raw_idx]
+            d.name_label = self.data.features[self.key_label].names[d.raw_label]
         except:
             d.name_label = None
         return d
@@ -199,7 +199,7 @@ class TinyImageNetDataset(HuggingFaceDataset):
         d.raw_idx = int(self._raw_idx[idx])
         d.xflip = (int(self._xflip[idx]) != 0)
         d.raw_label = int(self._load_raw_label(d.raw_idx))
-        d.name_label = self.data.features[self.key_label].names[d.raw_idx]
+        d.name_label = self.data.features[self.key_label].names[d.raw_label]
         if self.class_names is not None:
             d.words_label = self.class_names[d.name_label]
         return d
