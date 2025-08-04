@@ -11,39 +11,39 @@ import time
 import math
 import numpy as np
 import torch
+import torchvision as torchv
 import wandb
 import timm
 from pyvtools.text import filter_by_string_must, find_numbers
+from pyvtorch.aux import load_weights_and_check
 
 import karras.torch_utils.distributed as dist
 from karras.dnnlib.util import EasyDict, construct_class_by_name
 from karras.torch_utils.misc import InfiniteSampler
+from karras.training.encoders import PRETRAINED_HOME
 from generate_images import DEFAULT_SAMPLER, generate_images, parse_int_list
 import calculate_metrics as calc
 from ours.dataset import DATASET_OPTIONS
 from ours.utils import get_wandb_id, upsample
 
 #----------------------------------------------------------------------------
-# Calculate metrics for all stored models as a post-hoc validation curve
+# Load classifier model
 
-def get_classification_metrics(
-        dataset_name="tiny",
-        n_samples=None,
-        batch_size=128,
-        shuffle=False,
-        save_period=None,
-        save_dir=os.path.join(dirs.DATA_HOME, "class_metrics", "tiny"),
-        verbose=False,
-):
+def load_swin_l_model(verbose=False):
+    """Tiny ImageNet pre-trained Swin-L model from Hyun et al, 2022.
     
-    # Load dataset
-    if dataset_name != "tiny": raise NotImplementedError("No classification model available")
-    dataset_kwargs = calc.get_dataset_kwargs(dataset_name)
-    dataset_obj = construct_class_by_name(**dataset_kwargs, random_seed=0)
-    n_classes = dataset_obj.n_classes
-    n_examples = len(dataset_obj)
-    if n_samples is None: n_samples = n_examples
-    n_samples = min(n_samples, n_examples)
+    See more
+    --------
+    https://arxiv.org/abs/2205.10660
+    https://github.com/ehuynh1106/TinyImageNet-Transformers/tree/main
+    https://github.com/ehuynh1106/TinyImageNet-Transformers/releases/download/weights/swin_large_384.pth
+    """
+
+    if verbose: print("Loading Swin-L for TinyImageNet")
+
+    # Ensure deterministic algortithms
+    torch.use_deterministic_algorithms(True)
+    # Without it, this Swin-L model can somehow return different values for the same input
 
     # Create Swin-L model
     model = timm.create_model('swin_large_patch4_window12_384', pretrained=False, drop_path_rate=0.1).cpu()
@@ -52,8 +52,92 @@ def get_classification_metrics(
     model.reset_classifier(num_classes=200)
 
     # Load pre-trained weights (fine-tuned on Tiny ImageNet)
-    checkpoint = torch.load("/mnt/hdd/vale/models/SCID/Images/00_PreTrained/swin_large_384.pth")
-    model.load_state_dict(checkpoint['model_state_dict'])
+    model_filepath = os.path.join(PRETRAINED_HOME, "swin_large_384.pth")
+    checkpoint = torch.load(model_filepath)
+    model = load_weights_and_check(model, checkpoint["model_state_dict"], verbose=verbose)
+    model.eval()
+
+    return model
+
+def load_resnet_101_model(verbose=False):
+    """Tiny ImageNet pre-trained ResNet-101 model from Luo et al, 2019.
+    
+    See more
+    --------
+    https://arxiv.org/abs/1912.08136
+    https://github.com/luoyan407/congruency/tree/master
+    https://drive.google.com/open?id=1RLyQIcJ8qNqds9US-Oo2a0uQEL0t6kSZ 
+    """
+
+    if verbose: print("Loading ResNet-101 for TinyImageNet")
+
+    # Create a ResNet-101 model to classify TinyImageNet (200 classes) instead of ImageNet (1000 classes)
+    model = torchv.models.ResNet(torchv.models.resnet.Bottleneck, [3, 4, 23, 3], num_classes=200)
+
+    # Load pre-trained weights (fine-tuned on Tiny ImageNet)
+    model_filepath = os.path.join(PRETRAINED_HOME, "resnet101_dcl_60_1_TinyImageNet.pth.tar")
+    checkpoint = torch.load(model_filepath)
+
+    # Get the trainable parameters from the checkpoint and from the model
+    checkpoint_params = {k:p for k,p in checkpoint["state_dict"].items() if "running" not in k and "num_batches" not in k}
+    checkpoint_params.update( {k:p for k,p in checkpoint["classifier_state_dict"].items() if "running" not in k and "num_batches" not in k} )
+    model_params = dict({k: p for k, p in model.named_parameters()})
+
+    # Make a list of checkpoint keys that will need to be replaced
+    # (the model is from an old library, so the names need to be changed in order to make it compatible with torchvision.models)
+    replace_keys = {}
+    all_matches = True
+    for ((check_k, check_p), (model_k, model_p)) in zip(checkpoint_params.items(), model_params.items()):
+        all_matches = all_matches and check_p.shape==model_p.shape
+        check_k_start = ".".join( check_k.split(".")[:-1] )
+        model_k_start = ".".join( model_k.split(".")[:-1] )
+        if check_k_start not in replace_keys.keys():
+            replace_keys[check_k_start] = model_k_start
+        else:
+            if replace_keys[check_k_start] != model_k_start:
+                print("Beware! Unconsistency for...", check_k_start, model_k_start, replace_keys[check_k_start])
+        if check_p.shape != model_p.shape:
+            print("Beware! Dimensions are unmatched for...", (check_k, check_p.shape), (model_k, model_p.shape))
+    
+    # Build a checkpoint that is compatible with the model
+    all_checkpoint_params = dict(**checkpoint["state_dict"], **checkpoint["classifier_state_dict"])
+    new_checkpoint = {}
+    for k, p in all_checkpoint_params.items():
+        decomposed_k = k.split(".")
+        k_start = ".".join( decomposed_k[:-1] )
+        new_k = replace_keys[k_start] + "." + decomposed_k[-1]
+        # print(k, new_check_k)
+        new_checkpoint[new_k] = p
+        
+    # Load checkpoint into the model
+    model = load_weights_and_check(model, new_checkpoint, verbose=verbose)
+    model.eval()
+
+    return model
+
+#--------------------------------------------------------------------------------
+# Calculate classification metrics for a given classifier for the whole dataset
+
+def get_classification_metrics(
+        model,
+        dataset_name="tiny",
+        n_samples=None,
+        batch_size=128,
+        do_upsample=False,
+        shuffle=False,
+        save_period=None,
+        save_dir=os.path.join(dirs.DATA_HOME, "class_metrics", "tiny"),
+        verbose=False,
+):
+
+    # Load dataset
+    if dataset_name != "tiny": raise NotImplementedError("No classification model available")
+    dataset_kwargs = calc.get_dataset_kwargs(dataset_name)
+    dataset_obj = construct_class_by_name(**dataset_kwargs, random_seed=0)
+    n_classes = dataset_obj.n_classes
+    n_examples = len(dataset_obj)
+    if n_samples is None: n_samples = n_examples
+    n_samples = min(n_samples, n_examples)
 
     # Create a data loader
     batch_size = min(batch_size, n_samples)
@@ -82,8 +166,9 @@ def get_classification_metrics(
     for idx, (_, images, onehots) in tqdm.tqdm(enumerate(data_loader), total=n_batches):
         if idx>=n_batches: break
         labels = onehots.argmax(axis=1)
-        upsampled = torch.stack([upsample(384, image) for image in images])
-        predictions = model(upsampled)
+        if do_upsample:
+            images = torch.stack([upsample(384, image) for image in images])
+        predictions = model(images)
         predicted_labels = predictions.argmax(axis=1)
         top_5_labels = predictions.argsort(axis=1)[:,-5:]
         for gt, top_1, top_5 in zip(labels, predicted_labels, top_5_labels):
@@ -250,12 +335,20 @@ def calculate_metrics_for_checkpoints(
 def cmdline(): pass
 
 @cmdline.command()
+@click.option('--model', help='Model to be used', type=click.Choice(["Swin", "ResNet"]), required=False, default="ResNet", show_default=True)
 @click.option('--batch', 'batch_size', help='Batch size', type=int, required=False, default=128, show_default=True)
 @click.option('--n', 'n_samples', help='Number of samples to consider', type=int, required=False, default=None, show_default=True)
 @click.option('--period', 'save_period', help='Saving period, expressed in batches', type=int, required=False, default=None, show_default=True)
-def classification_dataset(batch_size, n_samples, save_period):
-    get_classification_metrics(n_samples=n_samples, batch_size=batch_size, 
-                               save_period=save_period, verbose=True);
+@click.option('--verbose/--no-verbose', 'verbose',  help='Show prints?', metavar='BOOL', type=bool, default=True, show_default=True)
+def classification_dataset(model, batch_size, n_samples, save_period, verbose):
+    if model == "ResNet":
+        model = load_resnet_101_model(verbose=verbose)
+        do_upsample = False
+    elif model == "Swin":
+        model = load_swin_l_model(verbose=True)
+        do_upsample = True
+    get_classification_metrics(model, n_samples=n_samples, batch_size=batch_size, 
+                               save_period=save_period, do_upsampl=do_upsample, verbose=verbose);
 
 @cmdline.command()
 @click.option("--models-dir", "models_dir", help="Relative path to directory containing the model checkpoints", type=str, metavar='PATH', required=True)
