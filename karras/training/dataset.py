@@ -16,6 +16,7 @@ import zipfile
 import PIL.Image
 import json
 import torch
+import matplotlib.pyplot as plt
 
 import karras.dnnlib as dnnlib
 
@@ -113,12 +114,24 @@ class Dataset(torch.utils.data.Dataset):
             label = onehot
         return label.copy()
 
+    def get_raw_idx(self, idx):
+        return int(self._raw_idx[idx])
+
+    def get_raw_label(self, idx):
+        return int(self._get_raw_labels()[self._raw_idx[idx]])
+
     def get_details(self, idx):
         d = dnnlib.EasyDict()
-        d.raw_idx = int(self._raw_idx[idx])
+        d.raw_idx = self.get_raw_idx(idx)
         d.xflip = (int(self._xflip[idx]) != 0)
         d.raw_label = self._get_raw_labels()[d.raw_idx].copy()
         return d
+    
+    def visualize(self, idx):
+        img = self[idx][1]
+        lab = self.get_raw_label(idx)
+        plt.imshow( img.detach().cpu().numpy().swapaxes(0,1).swapaxes(1,2).astype(np.float32)/255 )
+        plt.title(f"Class {lab}")
 
     @property
     def name(self):

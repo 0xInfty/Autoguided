@@ -7,6 +7,7 @@ import os
 import numpy as np
 import torch
 import datasets as hfdat
+import matplotlib.pyplot as plt
 
 import karras.dnnlib as dnnlib
 from karras.training.dataset import Dataset
@@ -48,6 +49,7 @@ class HuggingFaceDataset(Dataset):
         n_classes,              # Specify number of classes for one hot encoding
         key_image,              # String identifier of the images column
         key_label,              # String identifier of the labels column
+        transform       = lambda x : x,   # Optional image transformation
         resolution      = None, # Ensure specific resolution, None = anything goes.
         name            = None, # Name of the dataset, optional
         cache_dir       = dirs.DATA_HOME, # Cache dir to store the Hugging Face dataset
@@ -55,6 +57,8 @@ class HuggingFaceDataset(Dataset):
     ):
         
         self._set_up(path, n_classes, key_image, key_label, cache_dir)
+
+        self.transform = transform
 
         name = name or os.path.splitext(path)[-1]
         raw_shape = [len(self._dataset)] + list(self._load_raw_image(0).shape)
@@ -127,7 +131,7 @@ class HuggingFaceDataset(Dataset):
         if self._xflip[idx]:
             assert image.ndim == 3 # CHW
             image = image[:, :, ::-1]
-        return idx, image, self.get_label(idx)
+        return idx, self.transform(image), self.get_label(idx)
 
     def _load_raw_image(self, raw_idx):
         raw_idx = np.array([raw_idx], dtype=int)
@@ -139,9 +143,9 @@ class HuggingFaceDataset(Dataset):
     def _load_raw_label(self, raw_idx):
         raw_idx = np.array([raw_idx], dtype=int)
         return self.data[raw_idx][self.key_label]
-    
+
     def get_label(self, idx):
-        raw_idx = self._raw_idx[idx]
+        raw_idx = self.get_raw_idx(idx)
         label = self._load_raw_label(raw_idx) # Assume this is an int
         onehot = np.zeros(self.label_shape, dtype=np.float32)
         onehot[label] = 1
@@ -153,7 +157,7 @@ class HuggingFaceDataset(Dataset):
 
     def get_details(self, idx):
         d = dnnlib.EasyDict()
-        d.raw_idx = int(self._raw_idx[idx])
+        d.raw_idx = self.get_raw_idx(idx)
         d.xflip = (int(self._xflip[idx]) != 0)
         d.raw_label = int(self._load_raw_label(d.raw_idx))
         try:
@@ -161,6 +165,32 @@ class HuggingFaceDataset(Dataset):
         except:
             d.name_label = None
         return d
+
+    def get_raw_label(self, idx):
+        raw_idx = self.get_raw_idx(idx)
+        return int(self._load_raw_label(raw_idx))
+
+    def get_name_label(self, idx):
+        try:
+            raw_label = self.get_raw_label(idx)
+            return self.data.features[self.key_label].names[raw_label]
+        except:
+            raise NotImplementedError("This dataset does not have names for its labels")
+    
+    def get_name_from_label(self, label):
+        try:
+            return self.data.features[self.key_label].names[label]
+        except:
+            raise NotImplementedError("This dataset does not have names for its labels")
+    
+    def visualize(self, idx):
+        img = self[idx][1]
+        try:
+            lab = self.get_name_label(idx)
+        except NotImplementedError:
+            lab = self.get_raw_label(idx)
+        plt.imshow( img.detach().cpu().numpy().swapaxes(0,1).swapaxes(1,2).astype(np.float32)/255 )
+        plt.title(f"Class {lab}")
 
 class TinyImageNetDataset(HuggingFaceDataset):
 
@@ -177,7 +207,7 @@ class TinyImageNetDataset(HuggingFaceDataset):
         **super_kwargs,         # Additional arguments for the Dataset base class.
     ):
         
-        super().__init__(path, n_classes, key_image, key_label, 
+        super().__init__(path, n_classes, key_image, key_label, transform,
                          resolution, name, cache_dir, **super_kwargs)
         
         dataset_dir = "___".join(os.path.split(path))
@@ -190,8 +220,6 @@ class TinyImageNetDataset(HuggingFaceDataset):
                     class_names[k] = name.capitalize()
             self._class_names = class_names
         else: self._class_names = None
-
-        self.transform = transform
 
     @property
     def class_names(self):
@@ -206,6 +234,31 @@ class TinyImageNetDataset(HuggingFaceDataset):
         if self.class_names is not None:
             d.words_label = self.class_names[d.name_label]
         return d
+
+    def get_name_label(self, idx):
+        raw_label = self.get_raw_label(idx)
+        return self.data.features[self.key_label].names[raw_label]
+
+    def get_words_label(self, idx):
+        if self.class_names is not None:
+            name_label = self.get_name_label(idx)
+            return self.class_names[name_label]
+        else:
+            raise NotImplementedError("This dataset does not have words labels")
     
-    def __getitem__(self, idx):
-        return self.transform(super().__getitem__(idx))
+    def visualize(self, idx):
+        img = self[idx][1]
+        try:
+            lab = self.get_words_label(idx)
+            title = lab
+        except NotImplementedError:
+            lab = self.get_name_label(idx)
+            title = f"Class {lab}"
+        plt.imshow( img.detach().cpu().numpy().swapaxes(0,1).swapaxes(1,2).astype(np.float32)/255 )
+        plt.title( title )
+    
+    def get_name_from_label(self, raw_label):
+        return self.data.features[self.key_label].names[raw_label]
+    
+    def get_words_from_label(self, raw_label):
+        return self.class_names[self.get_name_from_label(raw_label)]
