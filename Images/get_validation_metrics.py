@@ -21,6 +21,7 @@ import karras.torch_utils.distributed as dist
 from karras.dnnlib.util import EasyDict, construct_class_by_name
 from karras.torch_utils.misc import InfiniteSampler
 from karras.training.encoders import PRETRAINED_HOME
+from jeevan.wavemix.classification import WaveMix
 from generate_images import DEFAULT_SAMPLER, generate_images, parse_int_list
 import calculate_metrics as calc
 from ours.dataset import DATASET_OPTIONS
@@ -115,16 +116,38 @@ def load_resnet_101_model(verbose=False):
 
     return model
 
+def load_wavemix_model(verbose=False):
+
+    model = WaveMix(num_classes = 200,
+                    depth = 16,
+                    mult = 2,
+                    ff_channel = 192,
+                    final_dim = 192,
+                    dropout = 0.5,
+                    level = 3,
+                    initial_conv = 'pachify',
+                    patch_size = 4)
+
+    model_filepath = os.path.join(PRETRAINED_HOME, "tiny_78.76.pth")
+    checkpoint = torch.load(model_filepath)
+
+    model = load_weights_and_check(model, checkpoint, verbose=verbose)
+    model.eval()
+
+    return model
+
 #--------------------------------------------------------------------------------
 # Utilities to calculate classification metrics
 
 def get_classification_metrics_dir(model):
-    if model not in ["Swin", "ResNet"]: raise NotImplementedError("Unknown model")
+    if model not in ["Swin", "ResNet", "WaveMix"]: raise NotImplementedError("Unknown model")
 
     if model == "ResNet":
         save_dir = os.path.join(dirs.DATA_HOME, "class_metrics", "tiny", "resnet")
     elif model == "Swin":
         save_dir = os.path.join(dirs.DATA_HOME, "class_metrics", "tiny", "swin")
+    elif model == "WaveMix":
+        save_dir = os.path.join(dirs.DATA_HOME, "class_metrics", "tiny", "wavemix")
     return save_dir
 
 def load_last_classification_metrics(model):
@@ -153,6 +176,7 @@ def get_classification_metrics(
         n_samples=None,
         batch_size=128,
         do_upsample=False,
+        upsample_dim=128,
         shuffle=False,
         save_period=None,
         save_dir=os.path.join(dirs.DATA_HOME, "class_metrics", "tiny"),
@@ -196,7 +220,7 @@ def get_classification_metrics(
         if idx>=n_batches: break
         labels = onehots.argmax(axis=1)
         if do_upsample:
-            images = torch.stack([upsample(384, image) for image in images])
+            images = torch.stack([upsample(upsample_dim, image) for image in images])
         predictions = model(images)
         predicted_labels = predictions.argmax(axis=1)
         top_5_labels = predictions.argsort(axis=1)[:,-5:]
@@ -364,7 +388,7 @@ def calculate_metrics_for_checkpoints(
 def cmdline(): pass
 
 @cmdline.command()
-@click.option('--model', help='Model to be used', type=click.Choice(["Swin", "ResNet"]), required=False, default="ResNet", show_default=True)
+@click.option('--model', help='Model to be used', type=click.Choice(["Swin", "ResNet", "WaveMix"]), required=False, default="ResNet", show_default=True)
 @click.option('--batch', 'batch_size', help='Batch size', type=int, required=False, default=128, show_default=True)
 @click.option('--n', 'n_samples', help='Number of samples to consider', type=int, required=False, default=None, show_default=True)
 @click.option('--period', 'save_period', help='Saving period, expressed in batches', type=int, required=False, default=None, show_default=True)
@@ -377,9 +401,14 @@ def classification_dataset(model, batch_size, n_samples, save_period, verbose):
     elif model == "Swin":
         model = load_swin_l_model(verbose=True)
         do_upsample = True
+        upsample_dim = 384
+    elif model == "WaveMix":
+        model = load_wavemix_model(verbose=True)
+        do_upsample = True
+        upsample_dim = 128
     get_classification_metrics(model, n_samples=n_samples, batch_size=batch_size, 
-                               save_period=save_period, do_upsample=do_upsample, 
-                               save_dir=save_dir, verbose=verbose);
+                               do_upsample=do_upsample, upsample_dim=upsample_dim,
+                               save_period=save_period, save_dir=save_dir, verbose=verbose);
 
 @cmdline.command()
 @click.option("--models-dir", "models_dir", help="Relative path to directory containing the model checkpoints", type=str, metavar='PATH', required=True)
