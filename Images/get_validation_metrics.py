@@ -17,6 +17,8 @@ import timm
 from pyvtools.text import filter_by_string_must, find_numbers
 from pyvtorch.aux import load_weights_and_check
 
+import torchvision.transforms as transforms
+
 import karras.torch_utils.distributed as dist
 from karras.dnnlib.util import EasyDict, construct_class_by_name
 from karras.torch_utils.misc import InfiniteSampler
@@ -196,7 +198,10 @@ def get_classification_metrics(
     batch_size = min(batch_size, n_samples)
     n_batches = int(math.ceil( n_samples / batch_size ))
     # data_sampler = InfiniteSampler(dataset_obj, shuffle=False, start_idx=start_idx)
-    data_loader = torch.utils.data.DataLoader(dataset_obj, batch_size, shuffle=shuffle,
+    normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                     std=[0.229, 0.224, 0.225])
+    data_loader = torch.utils.data.DataLoader(dataset_obj, batch_size, normalize, 
+                                              shuffle=shuffle,
                                               num_workers=2, pin_memory=True, prefetch_factor=2)
 
     # Top-5 accuracy per class
@@ -228,6 +233,7 @@ def get_classification_metrics(
             confusion_matrix[gt, top_1] += 1
             top_5_correct[gt] += gt in top_5
         n_seen += len(images)
+        print("GT", labels, "\nPred", predicted_labels, "\nTop 5", top_5_labels)
         if (saving and (idx-1)%save_period==0) or idx==n_batches-1:
             if last_conf_mat is not None:
                 os.remove(last_conf_mat)
@@ -240,6 +246,7 @@ def get_classification_metrics(
             last_top_5 = get_fpath("topf", idx, n_seen, top_5_accuracy)
             np.save(last_conf_mat, confusion_matrix)
             np.save(last_top_5, top_5_correct)
+        break
     if n_seen != n_samples: print(f"Inconsistency found: n_seen is {n_seen}, but n_samples is {n_samples}")
     if verbose:
         print("Top-1 Accuracy", top_1_accuracy)

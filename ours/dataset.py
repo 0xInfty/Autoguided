@@ -173,6 +173,7 @@ class TinyImageNetDataset(HuggingFaceDataset):
         name            = None, # Name of the dataset, optional
         cache_dir       = dirs.DATA_HOME, # Cache dir to store the Hugging Face dataset
         names_filename  = "words.txt", # Classes' textual names (e.g. Goldfish for n01443537)
+        transform       = lambda x : x,
         **super_kwargs,         # Additional arguments for the Dataset base class.
     ):
         
@@ -190,6 +191,8 @@ class TinyImageNetDataset(HuggingFaceDataset):
             self._class_names = class_names
         else: self._class_names = None
 
+        self.transform = transform
+
     @property
     def class_names(self):
         return self._class_names
@@ -203,3 +206,6 @@ class TinyImageNetDataset(HuggingFaceDataset):
         if self.class_names is not None:
             d.words_label = self.class_names[d.name_label]
         return d
+    
+    def __getitem__(self, idx):
+        return self.transform(super().__getitem__(idx))
