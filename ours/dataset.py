@@ -41,6 +41,10 @@ def get_dataset_kwargs(dataset_name, image_path=None, use_labels=True):
         dataset_kwargs.name = dataset_kwargs.path
     dataset_kwargs.use_labels = use_labels
     return dataset_kwargs
+    
+class Identity(torch.nn.Module):
+    def forward(self, img):
+        return img
 
 class HuggingFaceDataset(Dataset):
 
@@ -49,7 +53,7 @@ class HuggingFaceDataset(Dataset):
         n_classes,              # Specify number of classes for one hot encoding
         key_image,              # String identifier of the images column
         key_label,              # String identifier of the labels column
-        transform       = lambda x : x,   # Optional image transformation
+        transform       = None, # Optional image transformation
         resolution      = None, # Ensure specific resolution, None = anything goes.
         name            = None, # Name of the dataset, optional
         cache_dir       = dirs.DATA_HOME, # Cache dir to store the Hugging Face dataset
@@ -58,6 +62,8 @@ class HuggingFaceDataset(Dataset):
         
         self._set_up(path, n_classes, key_image, key_label, cache_dir)
 
+        if transform is None:
+            transform = Identity()
         self.transform = transform
 
         name = name or os.path.splitext(path)[-1]
@@ -203,7 +209,7 @@ class TinyImageNetDataset(HuggingFaceDataset):
         name            = None, # Name of the dataset, optional
         cache_dir       = dirs.DATA_HOME, # Cache dir to store the Hugging Face dataset
         names_filename  = "words.txt", # Classes' textual names (e.g. Goldfish for n01443537)
-        transform       = lambda x : x,
+        transform       = None, # Optional image transformation
         **super_kwargs,         # Additional arguments for the Dataset base class.
     ):
         
