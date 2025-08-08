@@ -21,6 +21,7 @@ from pyvtorch.aux import load_weights_and_check
 import karras.torch_utils.distributed as dist
 from karras.dnnlib.util import EasyDict, construct_class_by_name
 from karras.training.encoders import PRETRAINED_HOME, From8bitTo01
+from karras.torch_utils.misc import InfiniteSampler
 from jeevan.wavemix.classification import WaveMix
 from generate_images import DEFAULT_SAMPLER, generate_images, parse_int_list
 import calculate_metrics as calc
@@ -177,6 +178,7 @@ def get_classification_metrics(
         batch_size=128,
         do_upsample=False,
         upsample_dim=128,
+        start_idx=None,
         shuffle=False,
         save_period=None,
         save_dir=os.path.join(dirs.DATA_HOME, "class_metrics", "tiny"),
@@ -203,9 +205,10 @@ def get_classification_metrics(
     # Create a data loader
     batch_size = min(batch_size, n_samples)
     n_batches = int(math.ceil( n_samples / batch_size ))
-    # data_sampler = InfiniteSampler(dataset_obj, shuffle=False, start_idx=start_idx)
+    data_sampler = InfiniteSampler(dataset_obj, shuffle=False, start_idx=start_idx)
     data_loader = torch.utils.data.DataLoader(dataset_obj, batch_size, shuffle=shuffle,
-                                              num_workers=2, pin_memory=True, prefetch_factor=2)
+                                              num_workers=2, pin_memory=True, prefetch_factor=2,
+                                              sampler=data_sampler)
 
     # Top-5 accuracy per class
     top_5_correct = np.zeros(n_classes, dtype=np.uint32)
