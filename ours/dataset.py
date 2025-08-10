@@ -295,3 +295,7 @@ class TinyImageNetDataset(HuggingFaceDataset):
         indices = find_all_indices(words, list(self.class_names.values()))
         names = [list(self.class_names.keys())[i] for i in indices] 
         return names
+    
+    def get_all_names_from_label(self, label):
+        words = self.get_words_from_label(label)
+        return self.get_all_names_from_words_label(words)
