@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 
 import karras.dnnlib as dnnlib
 from karras.training.dataset import Dataset
-# import pyvtorch.huggingface as vhfdat
+from ours.utils import find_all_indices
 
 DATASET_OPTIONS = {
     "img512": dict(class_name='karras.training.dataset.ImageFolderDataset', path=os.path.join(dirs.DATA_HOME, "img512.zip")),
@@ -189,6 +189,12 @@ class HuggingFaceDataset(Dataset):
         except:
             raise NotImplementedError("This dataset does not have names for its labels")
     
+    def get_label_from_name(self, name):
+        try:
+            return self.data.features[self.key_label].names.index(name)
+        except:
+            raise NotImplementedError("This dataset does not have names for its labels")
+    
     def visualize(self, idx):
         img = self[idx][1]
         try:
@@ -244,6 +250,22 @@ class TinyImageNetDataset(HuggingFaceDataset):
     def get_name_label(self, idx):
         raw_label = self.get_raw_label(idx)
         return self.data.features[self.key_label].names[raw_label]
+    
+    def get_name_from_label(self, label):
+        return self.data.features[self.key_label].names[label]
+    
+    def get_label_from_name(self, name):
+        try:
+            return self.data.features[self.key_label].names.index(name)
+        except:
+            words_label = self.get_words_from_name(name)
+            all_names = self.get_all_names_from_words_label(words_label)
+            for n in all_names:
+                if n in self.data.features[self.key_label].names:
+                    return self.data.features[self.key_label].names.index(n)
+
+    def get_words_from_name(self, name):
+        return self.class_names[name]
 
     def get_words_label(self, idx):
         if self.class_names is not None:
@@ -268,3 +290,8 @@ class TinyImageNetDataset(HuggingFaceDataset):
     
     def get_words_from_label(self, raw_label):
         return self.class_names[self.get_name_from_label(raw_label)]
+    
+    def get_all_names_from_words_label(self, words):
+        indices = find_all_indices(words, list(self.class_names.values()))
+        names = [list(self.class_names.keys())[i] for i in indices] 
+        return names

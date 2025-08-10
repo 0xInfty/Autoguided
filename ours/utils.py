@@ -190,6 +190,10 @@ def check_nested_dict(old_dict, new_dict, is_alright=True, exception_keys=None, 
                     is_alright = False
     return is_alright
 
+def find_all_indices(value, list_of_values):
+    is_here = [v == value for v in list_of_values]
+    return [int(i) for i in np.where(is_here)[0]]
+
 #%% IMAGE PROCESSING
 
 def upsample(image_size, image):
