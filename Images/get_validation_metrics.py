@@ -147,6 +147,7 @@ def get_classification_metrics_dir(model, dataset_name="tiny", image_path=None):
     if dataset_name=="generated":
         assert image_path is not None, ValueError("Generated dataset requires image path")
         folder_path, folder_name = os.path.split(image_path)
+        if "gen_images" in folder_path: folder_path = os.path.split(folder_path)[0]
         save_dir = os.path.join(folder_path, "class_metrics", folder_name)
     else:
         if model == "ResNet":
