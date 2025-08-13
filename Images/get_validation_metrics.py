@@ -20,7 +20,7 @@ from pyvtorch.aux import load_weights_and_check
 
 import karras.torch_utils.distributed as dist
 from karras.dnnlib.util import EasyDict, construct_class_by_name
-from karras.training.encoders import PRETRAINED_HOME, From8bitTo01, From8bitToMinus11
+from karras.training.encoders import PRETRAINED_HOME, From8bitTo01, From8bitToMinus11, FromNumpyToTorch
 from torchvision.transforms.functional import InterpolationMode
 from karras.torch_utils.misc import InfiniteSampler
 from jeevan.wavemix.classification import WaveMix
@@ -141,19 +141,24 @@ def load_wavemix_model(verbose=False):
 #--------------------------------------------------------------------------------
 # Utilities to calculate classification metrics
 
-def get_classification_metrics_dir(model):
+def get_classification_metrics_dir(model, dataset_name="tiny", image_path=None):
     if model not in ["Swin", "ResNet", "WaveMix"]: raise NotImplementedError("Unknown model")
-
-    if model == "ResNet":
-        save_dir = os.path.join(dirs.DATA_HOME, "class_metrics", "tiny", "resnet")
-    elif model == "Swin":
-        save_dir = os.path.join(dirs.DATA_HOME, "class_metrics", "tiny", "swin")
-    elif model == "WaveMix":
-        save_dir = os.path.join(dirs.DATA_HOME, "class_metrics", "tiny", "wavemix")
+    assert dataset_name in ["tiny", "generated"], NotImplementedError("Dataset is not supported")
+    if dataset_name=="generated":
+        assert image_path is not None, ValueError("Generated dataset requires image path")
+        folder_path, folder_name = os.path.split(image_path)
+        save_dir = os.path.join(folder_path, "class_metrics", folder_name)
+    else:
+        if model == "ResNet":
+            save_dir = os.path.join(dirs.DATA_HOME, "class_metrics", "tiny", "resnet")
+        elif model == "Swin":
+            save_dir = os.path.join(dirs.DATA_HOME, "class_metrics", "tiny", "swin")
+        elif model == "WaveMix":
+            save_dir = os.path.join(dirs.DATA_HOME, "class_metrics", "tiny", "wavemix")
     return save_dir
 
-def load_last_classification_metrics(model):
-    save_dir = get_classification_metrics_dir(model)
+def load_last_classification_metrics(model, dataset_name="tiny", image_path=None):
+    save_dir = get_classification_metrics_dir(model, dataset_name=dataset_name, image_path=image_path)
 
     contents = os.listdir(save_dir)
 
@@ -212,6 +217,8 @@ def load_dataset(dataset_name="tiny",
     
     dataset_kwargs = calc.get_dataset_kwargs(dataset_name, image_path=image_path)
     transformations = []
+    if dataset_name=="generated":
+        transformations.append( FromNumpyToTorch() )
     if do_upsample:
         transformations.append( transforms.Resize(upsample_dim, interpolation=InterpolationMode.BICUBIC) )
     if do_01_rescale:
@@ -247,7 +254,7 @@ def get_classification_metrics(
 ):
 
     # Load dataset
-    if dataset_name != "tiny": raise NotImplementedError("No classification model available")
+    if dataset_name not in ["tiny", "generated"]: raise NotImplementedError("Dataset is not supported yet")
     dataset_obj = load_dataset(dataset_name=dataset_name, image_path=image_path,
                                do_minus11_rescale=do_minus11_rescale, do_01_rescale=do_01_rescale,
                                do_upsample=do_upsample, upsample_dim=upsample_dim,
@@ -260,6 +267,7 @@ def get_classification_metrics(
     # Create a data loader
     batch_size = min(batch_size, n_samples)
     n_batches = int(math.ceil( n_samples / batch_size ))
+    last_batch_size = n_samples % batch_size
     data_sampler = InfiniteSampler(dataset_obj, shuffle=False, start_idx=start_idx)
     data_loader = torch.utils.data.DataLoader(dataset_obj, batch_size, shuffle=shuffle,
                                               num_workers=2, pin_memory=True, prefetch_factor=2,
@@ -288,6 +296,7 @@ def get_classification_metrics(
     last_conf_mat, last_top_5 = None, None
     for idx, (_, images, onehots) in tqdm.tqdm(enumerate(data_loader), total=n_batches):
         if idx>=n_batches: break
+        elif idx==n_batches-1: images, onehots = images[:last_batch_size], onehots[:last_batch_size]
         labels = onehots.argmax(axis=1) # HuggingFace
         predictions = model(images)
         predicted_labels = predictions.argmax(axis=1) # Kaggle
@@ -316,6 +325,36 @@ def get_classification_metrics(
         print("Top-5 Accuracy", top_5_accuracy)
     
     return top_1_accuracy, top_5_accuracy, confusion_matrix, top_5_correct
+
+def calculate_classification_metrics(model="Swin", dataset_name="tiny", 
+                                     image_path=None, batch_size=128, n_samples=None, 
+                                     save_period=1, verbose=False):
+    save_dir = get_classification_metrics_dir(model, dataset_name, image_path)
+    if model == "ResNet":
+        model = load_resnet_101_model(verbose=verbose)
+        do_upsample = False
+        do_normalize = True
+        do_01_rescale = True
+        do_minus11_rescale = False
+    elif model == "Swin":
+        model = load_swin_l_model(verbose=verbose)
+        do_upsample = True
+        upsample_dim = 384
+        do_normalize = True
+        do_01_rescale = True
+        do_minus11_rescale = False
+    elif model == "WaveMix":
+        model = load_wavemix_model(verbose=verbose)
+        do_upsample = True
+        upsample_dim = 128
+        do_normalize = True
+        do_01_rescale = True
+        do_minus11_rescale = False
+    get_classification_metrics(model, dataset_name=dataset_name, image_path=image_path, 
+                               n_samples=n_samples, batch_size=batch_size, 
+                               do_upsample=do_upsample, upsample_dim=upsample_dim, do_normalize=do_normalize,
+                               do_01_rescale=do_01_rescale, do_minus11_rescale=do_minus11_rescale,
+                               save_period=save_period, save_dir=save_dir, verbose=verbose);
 
 #----------------------------------------------------------------------------
 # Calculate metrics for all stored models as a post-hoc validation curve
@@ -453,10 +492,10 @@ def calculate_metrics_for_checkpoints(
 
             # Calculate classification metrics on the generated images using a pre-trained model 
             if class_metrics:
-                class_results = classification_dataset(model="Swin", dataset_name="folder",
-                                                       image_path=temp_dir,
-                                                       batch_size=128, n_samples=None, 
-                                                       save_period=1, verbose=verbose)
+                class_results = calculate_classification_metrics(model="Swin", dataset_name="generated", 
+                                                                 image_path=temp_dir, 
+                                                                 batch_size=128, n_samples=None, 
+                                                                 save_period=1, verbose=verbose)
                 top_1_accuracy, top_5_accuracy, confusion_matrix, top_5_correct = class_results
                 if log_to_wandb:
                     wandb_logs.update({f"Swin-L Top-1 Accuracy"+tag: top_1_accuracy,
@@ -499,32 +538,9 @@ def cmdline(): pass
 @click.option('--period', 'save_period', help='Saving period, expressed in batches', type=int, required=False, default=None, show_default=True)
 @click.option('--verbose/--no-verbose', 'verbose',  help='Show prints?', metavar='BOOL', type=bool, default=True, show_default=True)
 def classification_dataset(model, dataset_name, image_path, batch_size, n_samples, save_period, verbose):
-    save_dir = get_classification_metrics_dir(model)
-    if model == "ResNet":
-        model = load_resnet_101_model(verbose=verbose)
-        do_upsample = False
-        do_normalize = True
-        do_01_rescale = True
-        do_minus11_rescale = False
-    elif model == "Swin":
-        model = load_swin_l_model(verbose=verbose)
-        do_upsample = True
-        upsample_dim = 384
-        do_normalize = True
-        do_01_rescale = True
-        do_minus11_rescale = False
-    elif model == "WaveMix":
-        model = load_wavemix_model(verbose=verbose)
-        do_upsample = True
-        upsample_dim = 128
-        do_normalize = True
-        do_01_rescale = True
-        do_minus11_rescale = False
-    get_classification_metrics(model, dataset_name=dataset_name, image_path=image_path, 
-                               n_samples=n_samples, batch_size=batch_size, 
-                               do_upsample=do_upsample, upsample_dim=upsample_dim, do_normalize=do_normalize,
-                               do_01_rescale=do_01_rescale, do_minus11_rescale=do_minus11_rescale,
-                               save_period=save_period, save_dir=save_dir, verbose=verbose);
+    calculate_classification_metrics(model=model, dataset_name=dataset_name, image_path=image_path, 
+                                     batch_size=batch_size, n_samples=n_samples, 
+                                     save_period=save_period, verbose=verbose)
 
 @cmdline.command()
 @click.option("--models-dir", "models_dir", help="Relative path to directory containing the model checkpoints", type=str, metavar='PATH', required=True)

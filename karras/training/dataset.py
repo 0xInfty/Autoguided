@@ -92,14 +92,18 @@ class Dataset(torch.utils.data.Dataset):
 
     def __len__(self):
         return self._raw_idx.size
-
-    def __getitem__(self, idx):
+    
+    def __getimg__(self, idx):
         raw_idx = self._raw_idx[idx]
         image = self._cached_images.get(raw_idx, None)
         if image is None:
             image = self._load_raw_image(raw_idx)
             if self._cache:
                 self._cached_images[raw_idx] = image
+        return image
+
+    def __getitem__(self, idx):
+        image = self.__getimg__(idx)
         assert isinstance(image, np.ndarray)
         assert list(image.shape) == self._raw_shape[1:]
         if self._xflip[idx]:
@@ -129,7 +133,7 @@ class Dataset(torch.utils.data.Dataset):
         return d
     
     def visualize(self, idx):
-        img = self[idx][1]
+        img = self.__getimg__(idx)
         lab = self.get_raw_label(idx)
         plt.imshow( img.detach().cpu().numpy().swapaxes(0,1).swapaxes(1,2).astype(np.float32)/255 )
         plt.title(f"Class {lab}")
@@ -167,6 +171,10 @@ class Dataset(torch.utils.data.Dataset):
     def label_dim(self):
         assert len(self.label_shape) == 1
         return self.label_shape[0]
+
+    @property
+    def n_classes(self):
+        return self.label_dim
 
     @property
     def has_labels(self):
@@ -273,12 +281,7 @@ class ImageFolderDataset(Dataset):
         return labels
     
     def __getitem__(self, idx):
-        raw_idx = self._raw_idx[idx]
-        image = self._cached_images.get(raw_idx, None)
-        if image is None:
-            image = self._load_raw_image(raw_idx)
-            if self._cache:
-                self._cached_images[raw_idx] = image
+        image = self.__getimg__(idx)
         assert isinstance(image, np.ndarray)
         assert list(image.shape) == self._raw_shape[1:]
         if self._xflip[idx]:

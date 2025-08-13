@@ -8,11 +8,12 @@ import numpy as np
 import torch
 import datasets as hfdat
 import matplotlib.pyplot as plt
+from pyvtools.text import find_numbers
 
 import karras.dnnlib as dnnlib
-from karras.training.dataset import Dataset
-from ours.utils import find_all_indices
+from karras.training.dataset import Dataset, ImageFolderDataset
 from karras.training.encoders import Identity
+from ours.utils import find_all_indices
 
 DATASET_OPTIONS = {
     "img512": dict(class_name='karras.training.dataset.ImageFolderDataset', path=os.path.join(dirs.DATA_HOME, "img512.zip")),
@@ -20,6 +21,7 @@ DATASET_OPTIONS = {
     "cifar10": dict(class_name='ours.dataset.HuggingFaceDataset', path="uoft-cs/cifar10", n_classes=10, key_image="img", key_label="label"),
     "tiny": dict(class_name='ours.dataset.TinyImageNetDataset', path="zh-plus/tiny-imagenet", n_classes=200, key_image="image", key_label="label"),
     "folder": dict(class_name='karras.training.dataset.ImageFolderDataset'),
+    "generated": dict(class_name='ours.dataset.GeneratedFolderDataset'),
 }
 
 def get_dataset_kwargs(dataset_name, image_path=None, use_labels=True):
@@ -52,11 +54,16 @@ class HuggingFaceDataset(Dataset):
         key_label,              # String identifier of the labels column
         resolution      = None, # Ensure specific resolution, None = anything goes.
         name            = None, # Name of the dataset, optional
+        transform       = None, # Optional image transformation
         cache_dir       = dirs.DATA_HOME, # Cache dir to store the Hugging Face dataset
         **super_kwargs,         # Additional arguments for the Dataset base class.
     ):
         
         self._set_up(path, n_classes, key_image, key_label, cache_dir)
+        
+        if transform is None:
+            transform = Identity()
+        self.transform = transform
 
         name = name or os.path.splitext(path)[-1]
         raw_shape = [len(self._dataset)] + list(self._load_raw_image(0).shape)
@@ -108,8 +115,8 @@ class HuggingFaceDataset(Dataset):
     @property
     def key_label(self):
         return self._key_label
-
-    def __getitem__(self, idx):
+    
+    def __getimg__(self, idx):
         raw_idx = self._raw_idx[idx]
         image = self._cached_images.get(raw_idx, None)
         if image is None:
@@ -121,6 +128,10 @@ class HuggingFaceDataset(Dataset):
                 image = image.copy()
             else:
                 image = image.detach().clone()
+        return image
+
+    def __getitem__(self, idx):
+        image = self.__getimg__(idx)
         if list(image.shape) != self._raw_shape[1:]:
             if list(image.shape) == self._raw_shape[2:]: # Grayscale image detected
                 image = image.repeat(self._raw_shape[1], 1, 1) # Repeat on all channels
@@ -188,7 +199,7 @@ class HuggingFaceDataset(Dataset):
             raise NotImplementedError("This dataset does not have names for its labels")
     
     def visualize(self, idx):
-        img = self[idx][1]
+        img = self.__getimg__(idx)
         try:
             lab = self.get_name_label(idx)
         except NotImplementedError:
@@ -266,7 +277,7 @@ class TinyImageNetDataset(HuggingFaceDataset):
             raise NotImplementedError("This dataset does not have words labels")
     
     def visualize(self, idx):
-        img = self[idx][1]
+        img = self.__getimg__(idx)
         try:
             lab = self.get_words_label(idx)
             title = lab
@@ -290,3 +301,11 @@ class TinyImageNetDataset(HuggingFaceDataset):
     def get_all_names_from_label(self, label):
         words = self.get_words_from_label(label)
         return self.get_all_names_from_words_label(words)
+    
+class GeneratedFolderDataset(ImageFolderDataset):
+
+    def _load_raw_labels(self):
+        labels = [find_numbers(fname)[-1] for fname in self._all_fnames]
+        labels = np.array(labels)
+        labels = labels.astype({1: np.int64, 2: np.float32}[labels.ndim])
+        return labels

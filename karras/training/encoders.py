@@ -33,6 +33,9 @@ def from_8_bit_to_0_1(img):
 def from_8_bit_to_minus1_1(img):
     return img / 127.5 - 1
 
+def from_minus1_1_to_0_1(img):
+    return (img + 1) / 2
+
 class From8bitTo01(torch.nn.Module):
     # def __init__(self, *args, **kwargs):
     #     super().__init__(*args, **kwargs)
@@ -45,6 +48,18 @@ class From8bitToMinus11(torch.nn.Module):
     def forward(self, img):
         return from_8_bit_to_minus1_1(img)
     
+class FromNumpyToTorch(torch.nn.Module):
+    def __init__(self, swap_axes=False):
+        self.swap_axes = swap_axes
+        super().__init__()
+    def forward(self, img, device=None):
+        if self.swap_axes:
+            img = torch.Tensor( img.swapaxes(2,1).swapaxes(1,0) )
+        else: img = torch.Tensor( img )
+        if device is not None:
+            return img.to(device)
+        else: return img
+
 class Identity(torch.nn.Module):
     def forward(self, img):
         return img
