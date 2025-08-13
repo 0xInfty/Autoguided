@@ -12,6 +12,7 @@ import matplotlib.pyplot as plt
 import karras.dnnlib as dnnlib
 from karras.training.dataset import Dataset
 from ours.utils import find_all_indices
+from karras.training.encoders import Identity
 
 DATASET_OPTIONS = {
     "img512": dict(class_name='karras.training.dataset.ImageFolderDataset', path=os.path.join(dirs.DATA_HOME, "img512.zip")),
@@ -41,10 +42,6 @@ def get_dataset_kwargs(dataset_name, image_path=None, use_labels=True):
         dataset_kwargs.name = dataset_kwargs.path
     dataset_kwargs.use_labels = use_labels
     return dataset_kwargs
-    
-class Identity(torch.nn.Module):
-    def forward(self, img):
-        return img
 
 class HuggingFaceDataset(Dataset):
 
@@ -53,7 +50,6 @@ class HuggingFaceDataset(Dataset):
         n_classes,              # Specify number of classes for one hot encoding
         key_image,              # String identifier of the images column
         key_label,              # String identifier of the labels column
-        transform       = None, # Optional image transformation
         resolution      = None, # Ensure specific resolution, None = anything goes.
         name            = None, # Name of the dataset, optional
         cache_dir       = dirs.DATA_HOME, # Cache dir to store the Hugging Face dataset
@@ -61,10 +57,6 @@ class HuggingFaceDataset(Dataset):
     ):
         
         self._set_up(path, n_classes, key_image, key_label, cache_dir)
-
-        if transform is None:
-            transform = Identity()
-        self.transform = transform
 
         name = name or os.path.splitext(path)[-1]
         raw_shape = [len(self._dataset)] + list(self._load_raw_image(0).shape)
@@ -215,11 +207,10 @@ class TinyImageNetDataset(HuggingFaceDataset):
         name            = None, # Name of the dataset, optional
         cache_dir       = dirs.DATA_HOME, # Cache dir to store the Hugging Face dataset
         names_filename  = "words.txt", # Classes' textual names (e.g. Goldfish for n01443537)
-        transform       = None, # Optional image transformation
         **super_kwargs,         # Additional arguments for the Dataset base class.
     ):
         
-        super().__init__(path, n_classes, key_image, key_label, transform,
+        super().__init__(path, n_classes, key_image, key_label,
                          resolution, name, cache_dir, **super_kwargs)
         
         dataset_dir = "___".join(os.path.split(path))

@@ -19,6 +19,7 @@ import torch
 import matplotlib.pyplot as plt
 
 import karras.dnnlib as dnnlib
+from karras.training.encoders import Identity
 
 try:
     import pyspng
@@ -184,6 +185,7 @@ class ImageFolderDataset(Dataset):
         path,                   # Path to directory or zip.
         resolution      = None, # Ensure specific resolution, None = anything goes.
         name            = None, # Name of the dataset, optional
+        transform       = None, # Optional image transformation
         **super_kwargs,         # Additional arguments for the Dataset base class.
     ):
         self._path = path
@@ -203,6 +205,10 @@ class ImageFolderDataset(Dataset):
         self._image_fnames = sorted(fname for fname in self._all_fnames if self._file_ext(fname) in supported_ext)
         if len(self._image_fnames) == 0:
             raise IOError('No image files found in the specified path')
+
+        if transform is None:
+            transform = Identity()
+        self.transform = transform
 
         name = name or os.path.splitext(os.path.basename(self._path))[-1]
         raw_shape = [len(self._image_fnames)] + list(self._load_raw_image(0).shape)
@@ -265,5 +271,20 @@ class ImageFolderDataset(Dataset):
         labels = np.array(labels)
         labels = labels.astype({1: np.int64, 2: np.float32}[labels.ndim])
         return labels
+    
+    def __getitem__(self, idx):
+        raw_idx = self._raw_idx[idx]
+        image = self._cached_images.get(raw_idx, None)
+        if image is None:
+            image = self._load_raw_image(raw_idx)
+            if self._cache:
+                self._cached_images[raw_idx] = image
+        assert isinstance(image, np.ndarray)
+        assert list(image.shape) == self._raw_shape[1:]
+        if self._xflip[idx]:
+            assert image.ndim == 3 # CHW
+            image = image[:, :, ::-1]
+        return idx, self.transform(image), self.get_label(idx)
+    # If this doesn't work, it might be because image is a numpy array instead of a Torch tensor
 
 #----------------------------------------------------------------------------

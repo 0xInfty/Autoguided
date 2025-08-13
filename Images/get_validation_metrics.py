@@ -203,13 +203,14 @@ def load_labels_translator(from_aux_to_main_filepath=os.path.join(dirs.DATA_HOME
 # Calculate classification metrics for a given classifier for the whole dataset
 
 def load_dataset(dataset_name="tiny",
+                 image_path=None,
                  do_minus11_rescale=False,
                  do_01_rescale=False,
                  do_upsample=False,
                  upsample_dim=128,
                  do_normalize=True):
     
-    dataset_kwargs = calc.get_dataset_kwargs(dataset_name)
+    dataset_kwargs = calc.get_dataset_kwargs(dataset_name, image_path=image_path)
     transformations = []
     if do_upsample:
         transformations.append( transforms.Resize(upsample_dim, interpolation=InterpolationMode.BICUBIC) )
@@ -230,6 +231,7 @@ def load_dataset(dataset_name="tiny",
 def get_classification_metrics(
         model,
         dataset_name="tiny",
+        image_path=None, # Path to a directory or ZIP file containing the images.
         n_samples=None,
         batch_size=128,
         do_minus11_rescale=False,
@@ -246,7 +248,7 @@ def get_classification_metrics(
 
     # Load dataset
     if dataset_name != "tiny": raise NotImplementedError("No classification model available")
-    dataset_obj = load_dataset(dataset_name=dataset_name, 
+    dataset_obj = load_dataset(dataset_name=dataset_name, image_path=image_path,
                                do_minus11_rescale=do_minus11_rescale, do_01_rescale=do_01_rescale,
                                do_upsample=do_upsample, upsample_dim=upsample_dim,
                                do_normalize=do_normalize)
@@ -327,6 +329,8 @@ def calculate_metrics_for_checkpoints(
         class_idx = None,               # Class label. None = use automatic selection.
         random_class = False,           # Automatic selection can be uniformly random or forced exact distribution.
         seeds = range(0, int(2e3)),     # List of random seeds.
+        fd_metrics = True,              # Whether to calculate FID and FD-DINOv2 metrics or not
+        class_metrics = True,           # Whether to calculate classification metrics or not
         chosen_emas = None,             # List of chosen EMAs. Default: use all.
         min_epoch = None,               # Number of epochs to start processing from.
         max_epoch = None,               # Number of epochs to stop processing at.
@@ -336,6 +340,8 @@ def calculate_metrics_for_checkpoints(
         device = torch.device("cuda"),  # Which compute device to use.
         **sampler_kwargs
 ):
+    
+    assert fd_metrics or class_metrics, ValueError("Nothing to calculate")
 
     # Get reference stats
     assert dataset_name in DATASET_OPTIONS.keys(), "Unrecognized dataset"
@@ -399,16 +405,24 @@ def calculate_metrics_for_checkpoints(
             settings=wandb.Settings(x_disable_stats=True))
 
     # For each EMA in chosen EMAs, and for each checkpoint inside the directory
-    metrics = calc.parse_metric_list("fid,fd_dinov2")
-    detectors = [calc.get_detector(metric, verbose=verbose) for metric in metrics]
+    if fd_metrics:
+        metrics = calc.parse_metric_list("fid,fd_dinov2")
+        detectors = [calc.get_detector(metric, verbose=verbose) for metric in metrics]
     for i, checkpoint_filenames in enumerate(checkpoint_filenames_by_ema):
         if guidance_weight!=1 and guide_path is not None:
             tag = f" [EMA={ema:.3f}, Guidance={guidance_weight:.2f}]"
         else:
             tag = f" [EMA={ema:.3f}]"
+        if log_to_wandb: 
+            wandb_logs = {"Validation Epoch": 0}
+            if fd_metrics:
+                wandb_logs.update({f"Validation FID"+tag: 0., f"Validation FD-DINOv2"+tag: 0.})
+            if class_metrics:
+                wandb_logs.update({f"Swin-L Top-1 Accuracy"+tag: 0., f"Swin-L Top-5 Accuracy"+tag: 0.})
         for checkpoint_filename in checkpoint_filenames:
             checkpoint_filepath = os.path.join(checkpoints_dir, checkpoint_filename)
             checkpoint_epochs = abs(find_numbers(checkpoint_filename)[-2])
+            if log_to_wandb: wandb_logs.update({"Validation Epoch": checkpoint_epochs})
             if verbose: dist.print0(f">>>>> Working on EMA {ema:.3f} and Epoch {checkpoint_epochs}")
 
             # Generate images
@@ -421,20 +435,40 @@ def calculate_metrics_for_checkpoints(
                                          seeds=seeds, verbose=verbose, device=device, **final_sampler_kwargs)
             for _r in tqdm.tqdm(image_iter, unit='batch', disable=(dist.get_rank() != 0)): pass
             
-            # Calculate metrics for generated images
-            stats_iter = calc.calculate_stats_for_files(dataset_name="folder", image_path=temp_dir,
-                                                        metrics=metrics, detectors=detectors, device=device)
-            for r in tqdm.tqdm(stats_iter, unit='batch', disable=(dist.get_rank() != 0)): pass
-            if dist.get_rank() == 0:
-                initial_time = time.time()
-                results = calc.calculate_metrics_from_stats(stats=r.stats, ref=ref, metrics=metrics, verbose=verbose)
+            # Calculate FID and FD-DINOv2 metrics for generated images
+            if fd_metrics:
+                stats_iter = calc.calculate_stats_for_files(dataset_name="folder", image_path=temp_dir,
+                                                            metrics=metrics, detectors=detectors, device=device)
+                for r in tqdm.tqdm(stats_iter, unit='batch', disable=(dist.get_rank() != 0)): pass
+                if dist.get_rank() == 0:
+                    initial_time = time.time()
+                    results = calc.calculate_metrics_from_stats(stats=r.stats, ref=ref, metrics=metrics, verbose=verbose)
+                    if log_to_wandb:
+                        wandb_logs.update({f"Validation FID"+tag: results["fid"],
+                                           f"Validation FD-DINOv2"+tag: results["fd_dinov2"]})
+                        # run.log(wandb_logs)
+                    cumulative_time = time.time() - initial_time
+                    dist.print0(f"Time to get metrics = {cumulative_time:.2f} sec")
+                torch.distributed.barrier()
+
+            # Calculate classification metrics on the generated images using a pre-trained model 
+            if class_metrics:
+                class_results = classification_dataset(model="Swin", dataset_name="folder",
+                                                       image_path=temp_dir,
+                                                       batch_size=128, n_samples=None, 
+                                                       save_period=1, verbose=verbose)
+                top_1_accuracy, top_5_accuracy, confusion_matrix, top_5_correct = class_results
                 if log_to_wandb:
-                    run.log(dict({"Validation Epoch": checkpoint_epochs, 
-                                f"Validation FID"+tag: results["fid"],
-                                f"Validation FD-DINOv2"+tag: results["fd_dinov2"]}))
-                cumulative_time = time.time() - initial_time
-                dist.print0(f"Time to get metrics = {cumulative_time:.2f} sec")
-            torch.distributed.barrier()
+                    wandb_logs.update({f"Swin-L Top-1 Accuracy"+tag: top_1_accuracy,
+                                       "Swin-L Top-5 Accuracy"+tag: top_5_accuracy})
+            
+            # Log to W&B
+            if log_to_wandb:
+                if class_metrics and checkpoint_filename==checkpoint_filenames[-1]:
+                    run.log({f"Swin-L Confusion Matrix"+tag: confusion_matrix,
+                             f"Swin-L Top-5 Correct"+tag: top_5_correct,
+                             **wandb_logs})
+                else: run.log(wandb_logs)
 
             # Delete temporary images
             if dist.get_rank()==0:
@@ -442,6 +476,7 @@ def calculate_metrics_for_checkpoints(
                     shutil.rmtree(temp_dir)
                 else:
                     contents = os.listdir(temp_dir)
+                    contents = filter_by_string_must(contents, ["conf", "topf"], must=False)
                     contents.sort()
                     for i in range(save_nimg,len(contents)): os.remove(os.path.join(temp_dir, contents[i]))
             torch.distributed.barrier()
@@ -457,11 +492,13 @@ def cmdline(): pass
 
 @cmdline.command()
 @click.option('--model', help='Model to be used', type=click.Choice(["Swin", "ResNet", "WaveMix"]), required=False, default="ResNet", show_default=True)
+@click.option('--dataset', 'dataset_name',  help='Dataset to be used', metavar='STR', type=click.Choice(list(DATASET_OPTIONS.keys())), default="tiny", show_default=True)
+@click.option('--data', 'image_path', help='Path to the dataset', metavar='PATH|ZIP', type=str, default=None)
 @click.option('--batch', 'batch_size', help='Batch size', type=int, required=False, default=128, show_default=True)
 @click.option('--n', 'n_samples', help='Number of samples to consider', type=int, required=False, default=None, show_default=True)
 @click.option('--period', 'save_period', help='Saving period, expressed in batches', type=int, required=False, default=None, show_default=True)
 @click.option('--verbose/--no-verbose', 'verbose',  help='Show prints?', metavar='BOOL', type=bool, default=True, show_default=True)
-def classification_dataset(model, batch_size, n_samples, save_period, verbose):
+def classification_dataset(model, dataset_name, image_path, batch_size, n_samples, save_period, verbose):
     save_dir = get_classification_metrics_dir(model)
     if model == "ResNet":
         model = load_resnet_101_model(verbose=verbose)
@@ -483,7 +520,8 @@ def classification_dataset(model, batch_size, n_samples, save_period, verbose):
         do_normalize = True
         do_01_rescale = True
         do_minus11_rescale = False
-    get_classification_metrics(model, n_samples=n_samples, batch_size=batch_size, 
+    get_classification_metrics(model, dataset_name=dataset_name, image_path=image_path, 
+                               n_samples=n_samples, batch_size=batch_size, 
                                do_upsample=do_upsample, upsample_dim=upsample_dim, do_normalize=do_normalize,
                                do_01_rescale=do_01_rescale, do_minus11_rescale=do_minus11_rescale,
                                save_period=save_period, save_dir=save_dir, verbose=verbose);
@@ -494,6 +532,8 @@ def classification_dataset(model, batch_size, n_samples, save_period, verbose):
 @click.option('--ref', 'ref_path', help='Dataset reference statistics ', type=str, metavar='PATH', required=False, default=None, show_default=True)
 @click.option('--guide-path', 'guide_path', help='Guide model filepath', type=str, metavar='PATH', default=None, show_default=True)
 @click.option('--guidance-weight', 'guidance_weight', help='Guidance strength: default is 1 (no guidance)', type=float, default=1.0, show_default=True)
+@click.option('--fd-metrics/--no-fd-metrics', 'fd_metrics',  help='Calculate FID and FD-DINOv2 metrics?', type=bool, default=True, show_default=True)
+@click.option('--class-metrics/--no-class-metrics', 'class_metrics',  help='Calculate classification metric?', type=bool, default=True, show_default=True)
 @click.option('--random/--no-random', 'random_class',  help='Use random classes?', type=bool, default=False, show_default=True)
 @click.option('--emas', help='Chosen EMA length/s', required=False, multiple=True, default=None, show_default=True)
 @click.option('--min-epoch', help='Number of batches at which to start', type=int, required=False, default=None, show_default=True)
@@ -501,7 +541,8 @@ def classification_dataset(model, batch_size, n_samples, save_period, verbose):
 @click.option('--save-nimg', help='Number of generated images to keep', type=int, required=False, default=0, show_default=True)
 @click.option('--seeds', help='List of random seeds (e.g. 1,2,5-10)', metavar='LIST', type=parse_int_list, default='0-1999', show_default=True)
 @click.option('--wandb/--no-wandb', 'log_to_wandb',  help='Log to W&B?', type=bool, default=True, show_default=True)
-def validation(models_dir, dataset_name, ref_path, guide_path, guidance_weight, random_class, emas, min_epoch, max_epoch, seeds, save_nimg, log_to_wandb):
+def validation(models_dir, dataset_name, ref_path, guide_path, guidance_weight, fd_metrics, class_metrics,
+               random_class, emas, min_epoch, max_epoch, seeds, save_nimg, log_to_wandb):
     models_dir = os.path.join(dirs.MODELS_HOME, "Images", models_dir)
     if ref_path is not None: ref_path = os.path.join(dirs.DATA_HOME, "dataset_refs", ref_path)
     if guide_path is not None: guide_path = os.path.join(dirs.MODELS_HOME, "Images", guide_path)
@@ -510,6 +551,7 @@ def validation(models_dir, dataset_name, ref_path, guide_path, guidance_weight, 
     calculate_metrics_for_checkpoints(models_dir,
         dataset_name=dataset_name, ref_path=ref_path,
         guide_path=guide_path, guidance_weight=guidance_weight,
+        fd_metrics=fd_metrics, class_metrics=class_metrics,
         random_class=random_class, chosen_emas=emas, 
         min_epoch=min_epoch, max_epoch=max_epoch, seeds=seeds, 
         save_nimg=save_nimg, log_to_wandb=log_to_wandb)

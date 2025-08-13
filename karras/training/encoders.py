@@ -44,6 +44,10 @@ class From8bitToMinus11(torch.nn.Module):
     #     super().__init__(*args, **kwargs)
     def forward(self, img):
         return from_8_bit_to_minus1_1(img)
+    
+class Identity(torch.nn.Module):
+    def forward(self, img):
+        return img
 
 #----------------------------------------------------------------------------
 # Abstract base class for encoders/decoders that convert back and forth
