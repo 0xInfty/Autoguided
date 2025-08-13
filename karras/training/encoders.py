@@ -14,6 +14,7 @@ import os
 import warnings
 import numpy as np
 import torch
+import torchvision.transforms as transforms
 import karras.torch_utils.persistence as persistence
 import karras.torch_utils.misc as misc
 
@@ -22,6 +23,27 @@ warnings.filterwarnings('ignore', '`resume_download` is deprecated')
 
 PRETRAINED_HOME = os.path.join(dirs.MODELS_HOME, "Images", "00_PreTrained")
 if not os.path.isdir(PRETRAINED_HOME): os.mkdir(PRETRAINED_HOME)
+
+#----------------------------------------------------------------------------
+# Simple transformations
+
+def from_8_bit_to_0_1(img):
+    return img / 255.
+
+def from_8_bit_to_minus1_1(img):
+    return img / 127.5 - 1
+
+class From8bitTo01(torch.nn.Module):
+    # def __init__(self, *args, **kwargs):
+    #     super().__init__(*args, **kwargs)
+    def forward(self, img):
+        return from_8_bit_to_0_1(img)
+    
+class From8bitToMinus11(torch.nn.Module):
+    # def __init__(self, *args, **kwargs):
+    #     super().__init__(*args, **kwargs)
+    def forward(self, img):
+        return from_8_bit_to_minus1_1(img)
 
 #----------------------------------------------------------------------------
 # Abstract base class for encoders/decoders that convert back and forth
