@@ -20,13 +20,14 @@ from pyvtorch.aux import load_weights_and_check
 
 import karras.torch_utils.distributed as dist
 from karras.dnnlib.util import EasyDict, construct_class_by_name
-from karras.training.encoders import PRETRAINED_HOME, From8bitTo01
+from karras.training.encoders import PRETRAINED_HOME, From8bitTo01, From8bitToMinus11
+from torchvision.transforms.functional import InterpolationMode
 from karras.torch_utils.misc import InfiniteSampler
 from jeevan.wavemix.classification import WaveMix
 from generate_images import DEFAULT_SAMPLER, generate_images, parse_int_list
 import calculate_metrics as calc
 from ours.dataset import DATASET_OPTIONS
-from ours.utils import get_wandb_id, upsample
+from ours.utils import get_wandb_id
 
 #----------------------------------------------------------------------------
 # Load classifier model
@@ -168,35 +169,87 @@ def load_last_classification_metrics(model):
     top_5_correct = np.load(topf_filepath)
     return confusion_matrix, top_5_correct
 
+class LabelsTranslator:
+
+    def __init__(self, from_aux_to_main_indices):
+        if not isinstance(from_aux_to_main_indices, list):
+            from_aux_to_main_indices = [int(i) for i in from_aux_to_main_indices]
+        self._indices_from_aux = from_aux_to_main_indices
+        self._indices_to_aux = [from_aux_to_main_indices.index(i) for i in range(len(from_aux_to_main_indices))]
+
+    @property
+    def indices_from_aux(self):
+        return self._indices_from_aux
+    
+    @property
+    def indices_to_aux(self):
+        return self._indices_to_aux
+
+    def from_aux_to_main(self, aux_index):
+        return self.indices_from_aux[ aux_index ]
+    
+    def to_aux_from_main(self, main_index):
+        return self.indices_to_aux[ main_index ]
+
+def load_labels_translator(from_aux_to_main_filepath=os.path.join(dirs.DATA_HOME, 
+                                                                  "tiny_kaggle_to_huggingface.txt")):
+
+    from_aux_to_main_indices = np.loadtxt(from_aux_to_main_filepath).astype(int)
+    labels_translator = LabelsTranslator(from_aux_to_main_indices)
+
+    return labels_translator
+
 #--------------------------------------------------------------------------------
 # Calculate classification metrics for a given classifier for the whole dataset
+
+def load_dataset(dataset_name="tiny",
+                 do_minus11_rescale=False,
+                 do_01_rescale=False,
+                 do_upsample=False,
+                 upsample_dim=128,
+                 do_normalize=True):
+    
+    dataset_kwargs = calc.get_dataset_kwargs(dataset_name)
+    transformations = []
+    if do_upsample:
+        transformations.append( transforms.Resize(upsample_dim, interpolation=InterpolationMode.BICUBIC) )
+    if do_01_rescale:
+        transformations.append( From8bitTo01() )
+    elif do_minus11_rescale:
+        transformations.append( From8bitToMinus11() )
+    if do_normalize:
+        transformations.append( transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                                     std=[0.229, 0.224, 0.225]) )
+    if len(transformations)>0:
+        transformations = transforms.Compose( transformations )
+    else: transformations = None
+    dataset_obj = construct_class_by_name(**dataset_kwargs, random_seed=0, transform=transformations)
+
+    return dataset_obj
 
 def get_classification_metrics(
         model,
         dataset_name="tiny",
         n_samples=None,
         batch_size=128,
+        do_minus11_rescale=False,
+        do_01_rescale=False,
         do_upsample=False,
         upsample_dim=128,
-        start_idx=None,
+        do_normalize=True,
+        start_idx=0,
         shuffle=False,
         save_period=None,
         save_dir=os.path.join(dirs.DATA_HOME, "class_metrics", "tiny"),
-        do_normalize=True,
         verbose=False,
 ):
 
     # Load dataset
     if dataset_name != "tiny": raise NotImplementedError("No classification model available")
-    dataset_kwargs = calc.get_dataset_kwargs(dataset_name)
-    if do_normalize:
-        normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                         std=[0.229, 0.224, 0.225])
-        transform = transforms.Compose([From8bitTo01(), normalize])
-        dataset_obj = construct_class_by_name(**dataset_kwargs, random_seed=0, 
-                                              transform=transform)
-    else:
-        dataset_obj = construct_class_by_name(**dataset_kwargs, random_seed=0)
+    dataset_obj = load_dataset(dataset_name=dataset_name, 
+                               do_minus11_rescale=do_minus11_rescale, do_01_rescale=do_01_rescale,
+                               do_upsample=do_upsample, upsample_dim=upsample_dim,
+                               do_normalize=do_normalize)
     n_classes = dataset_obj.n_classes
     n_examples = len(dataset_obj)
     if n_samples is None: n_samples = n_examples
@@ -209,6 +262,10 @@ def get_classification_metrics(
     data_loader = torch.utils.data.DataLoader(dataset_obj, batch_size, shuffle=shuffle,
                                               num_workers=2, pin_memory=True, prefetch_factor=2,
                                               sampler=data_sampler)
+    
+    # Define a labels translator to compensate order discrepancy
+    # reorder_filepath = os.path.join(dirs.DATA_HOME, "tiny_kaggle_to_huggingface.txt")
+    # labels_translator = load_labels_translator(reorder_filepath)
 
     # Top-5 accuracy per class
     top_5_correct = np.zeros(n_classes, dtype=np.uint32)
@@ -229,12 +286,12 @@ def get_classification_metrics(
     last_conf_mat, last_top_5 = None, None
     for idx, (_, images, onehots) in tqdm.tqdm(enumerate(data_loader), total=n_batches):
         if idx>=n_batches: break
-        labels = onehots.argmax(axis=1)
-        if do_upsample:
-            images = torch.stack([upsample(upsample_dim, image) for image in images])
+        labels = onehots.argmax(axis=1) # HuggingFace
         predictions = model(images)
-        predicted_labels = predictions.argmax(axis=1)
+        predicted_labels = predictions.argmax(axis=1) # Kaggle
+        # predicted_labels = [labels_translator.from_aux_to_main(i) for i in predicted_labels] # HuggingFace
         top_5_labels = predictions.argsort(axis=1)[:,-5:]
+        # top_5_labels = [[labels_translator.from_aux_to_main(i) for i in top_5_labs] for top_5_labs in top_5_labels]
         for gt, top_1, top_5 in zip(labels, predicted_labels, top_5_labels):
             confusion_matrix[gt, top_1] += 1
             top_5_correct[gt] += gt in top_5
@@ -409,16 +466,26 @@ def classification_dataset(model, batch_size, n_samples, save_period, verbose):
     if model == "ResNet":
         model = load_resnet_101_model(verbose=verbose)
         do_upsample = False
+        do_normalize = True
+        do_01_rescale = True
+        do_minus11_rescale = False
     elif model == "Swin":
-        model = load_swin_l_model(verbose=True)
+        model = load_swin_l_model(verbose=verbose)
         do_upsample = True
         upsample_dim = 384
+        do_normalize = True
+        do_01_rescale = True
+        do_minus11_rescale = False
     elif model == "WaveMix":
-        model = load_wavemix_model(verbose=True)
+        model = load_wavemix_model(verbose=verbose)
         do_upsample = True
         upsample_dim = 128
+        do_normalize = True
+        do_01_rescale = True
+        do_minus11_rescale = False
     get_classification_metrics(model, n_samples=n_samples, batch_size=batch_size, 
-                               do_upsample=do_upsample, upsample_dim=upsample_dim,
+                               do_upsample=do_upsample, upsample_dim=upsample_dim, do_normalize=do_normalize,
+                               do_01_rescale=do_01_rescale, do_minus11_rescale=do_minus11_rescale,
                                save_period=save_period, save_dir=save_dir, verbose=verbose);
 
 @cmdline.command()
