@@ -220,9 +220,8 @@ class TinyImageNetDataset(HuggingFaceDataset):
         names_filename  = "words.txt", # Classes' textual names (e.g. Goldfish for n01443537)
         **super_kwargs,         # Additional arguments for the Dataset base class.
     ):
-        
-        super().__init__(path, n_classes, key_image, key_label,
-                         resolution, name, cache_dir, **super_kwargs)
+        super().__init__(path=path, n_classes=n_classes, key_image=key_image, key_label=key_label,
+                         resolution=resolution, name=name, cache_dir=cache_dir, **super_kwargs)
         
         dataset_dir = "___".join(os.path.split(path))
         names_filepath = os.path.join(self.cache_dir, dataset_dir, names_filename)

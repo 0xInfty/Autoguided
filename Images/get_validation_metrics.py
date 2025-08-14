@@ -236,6 +236,9 @@ def load_dataset(dataset_name="tiny",
 
     return dataset_obj
 
+REORDER_FILEPATH = os.path.join(dirs.DATA_HOME, "tiny_swin_to_huggingface.txt") # Swin-L Classifier
+# REORDER_FILEPATH = os.path.join(dirs.DATA_HOME, "tiny_kaggle_to_huggingface.txt") # Kaggle
+
 def get_classification_metrics(
         model,
         dataset_name="tiny",
@@ -268,15 +271,14 @@ def get_classification_metrics(
     # Create a data loader
     batch_size = min(batch_size, n_samples)
     n_batches = int(math.ceil( n_samples / batch_size ))
-    last_batch_size = n_samples % batch_size
+    last_batch_size = max(n_samples % batch_size, batch_size)
     data_sampler = InfiniteSampler(dataset_obj, shuffle=False, start_idx=start_idx)
     data_loader = torch.utils.data.DataLoader(dataset_obj, batch_size, shuffle=shuffle,
                                               num_workers=2, pin_memory=True, prefetch_factor=2,
                                               sampler=data_sampler)
     
     # Define a labels translator to compensate order discrepancy
-    # reorder_filepath = os.path.join(dirs.DATA_HOME, "tiny_kaggle_to_huggingface.txt")
-    # labels_translator = load_labels_translator(reorder_filepath)
+    labels_translator = load_labels_translator(REORDER_FILEPATH)
 
     # Top-5 accuracy per class
     top_5_correct = np.zeros(n_classes, dtype=np.uint32)
@@ -299,11 +301,13 @@ def get_classification_metrics(
         if idx>=n_batches: break
         elif idx==n_batches-1: images, onehots = images[:last_batch_size], onehots[:last_batch_size]
         labels = onehots.argmax(axis=1) # HuggingFace
-        predictions = model(images)
-        predicted_labels = predictions.argmax(axis=1) # Kaggle
-        # predicted_labels = [labels_translator.from_aux_to_main(i) for i in predicted_labels] # HuggingFace
-        top_5_labels = predictions.argsort(axis=1)[:,-5:]
-        # top_5_labels = [[labels_translator.from_aux_to_main(i) for i in top_5_labs] for top_5_labs in top_5_labels]
+        predictions = model(images) # Classifier
+        predictions = predictions[:, labels_translator.indices_from_aux] # HuggingFace
+        predicted_labels = predictions.argmax(axis=1)
+        print("labels", labels)
+        print("fixed predicted_labels", predicted_labels)
+        top_5_labels = predictions.argsort(axis=1)[:,-5:] # Classifier
+        print("fixed top_5_labels", top_5_labels)
         for gt, top_1, top_5 in zip(labels, predicted_labels, top_5_labels):
             confusion_matrix[gt, top_1] += 1
             top_5_correct[gt] += gt in top_5
@@ -333,29 +337,19 @@ def calculate_classification_metrics(model="Swin", dataset_name="tiny",
     save_dir = get_classification_metrics_dir(model, dataset_name, image_path)
     if model == "ResNet":
         model = load_resnet_101_model(verbose=verbose)
-        do_upsample = False
-        do_normalize = True
-        do_01_rescale = True
-        do_minus11_rescale = False
+        transform_kwargs = dict(do_upsample=False, do_normalize=True,
+                                do_01_rescale=True, do_minus11_rescale=False)
     elif model == "Swin":
         model = load_swin_l_model(verbose=verbose)
-        do_upsample = True
-        upsample_dim = 384
-        do_normalize = True
-        do_01_rescale = True
-        do_minus11_rescale = False
+        transform_kwargs = dict(do_upsample=True, upsample_dim=384, do_normalize=True,
+                                do_01_rescale=True, do_minus11_rescale=False)
     elif model == "WaveMix":
         model = load_wavemix_model(verbose=verbose)
-        do_upsample = True
-        upsample_dim = 128
-        do_normalize = True
-        do_01_rescale = True
-        do_minus11_rescale = False
-    get_classification_metrics(model, dataset_name=dataset_name, image_path=image_path, 
-                               n_samples=n_samples, batch_size=batch_size, 
-                               do_upsample=do_upsample, upsample_dim=upsample_dim, do_normalize=do_normalize,
-                               do_01_rescale=do_01_rescale, do_minus11_rescale=do_minus11_rescale,
-                               save_period=save_period, save_dir=save_dir, verbose=verbose);
+        transform_kwargs = dict(do_upsample=True, upsample_dim=128, do_normalize=True,
+                                do_01_rescale=True, do_minus11_rescale=False)
+    return get_classification_metrics(model, dataset_name=dataset_name, image_path=image_path, 
+                                      n_samples=n_samples, batch_size=batch_size, **transform_kwargs,
+                                      save_period=save_period, save_dir=save_dir, verbose=verbose)
 
 #----------------------------------------------------------------------------
 # Calculate metrics for all stored models as a post-hoc validation curve
@@ -541,7 +535,7 @@ def cmdline(): pass
 def classification_dataset(model, dataset_name, image_path, batch_size, n_samples, save_period, verbose):
     calculate_classification_metrics(model=model, dataset_name=dataset_name, image_path=image_path, 
                                      batch_size=batch_size, n_samples=n_samples, 
-                                     save_period=save_period, verbose=verbose)
+                                     save_period=save_period, verbose=verbose);
 
 @cmdline.command()
 @click.option("--models-dir", "models_dir", help="Relative path to directory containing the model checkpoints", type=str, metavar='PATH', required=True)
