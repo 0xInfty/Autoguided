@@ -30,6 +30,7 @@ except ImportError:
 # Abstract base class for datasets.
 
 class Dataset(torch.utils.data.Dataset):
+
     def __init__(self,
         name,                   # Name of the dataset.
         raw_shape,              # Shape of the raw image data (NCHW).
@@ -39,13 +40,15 @@ class Dataset(torch.utils.data.Dataset):
         random_seed = 0,        # Random seed to use when applying max_size.
         cache       = False,    # Cache images in CPU memory?
     ):
+        
+        self._set_up(name, raw_shape, use_labels, max_size, xflip, random_seed, cache)
+        
+    def _set_up(self, name, raw_shape, use_labels, max_size, xflip, random_seed, cache):
         self._name = name
         self._raw_shape = list(raw_shape)
         self._use_labels = use_labels
         self._cache = cache
         self._cached_images = dict() # {raw_idx: np.ndarray, ...}
-        self._raw_labels = None
-        self._label_shape = None
 
         # Apply max_size.
         self._raw_idx = np.arange(self._raw_shape[0], dtype=np.int64)
@@ -53,27 +56,30 @@ class Dataset(torch.utils.data.Dataset):
             np.random.RandomState(random_seed % (1 << 31)).shuffle(self._raw_idx)
             self._raw_idx = np.sort(self._raw_idx[:max_size])
 
+        # Set up raw labels
+        self._set_up_raw_labels()
+        self._label_shape = None
+
         # Apply xflip.
         self._xflip = np.zeros(self._raw_idx.size, dtype=np.uint8)
         if xflip:
             self._raw_idx = np.tile(self._raw_idx, 2)
             self._xflip = np.concatenate([self._xflip, np.ones_like(self._xflip)])
 
-    def _get_raw_labels(self):
+    def _set_up_raw_labels(self):
+        self._raw_labels = self._load_raw_labels() if self._use_labels else None
         if self._raw_labels is None:
-            self._raw_labels = self._load_raw_labels() if self._use_labels else None
-            if self._raw_labels is None:
-                self._raw_labels = np.zeros([self._raw_shape[0], 0], dtype=np.float32)
-            assert isinstance(self._raw_labels, np.ndarray)
-            assert self._raw_labels.shape[0] == self._raw_shape[0]
-            assert self._raw_labels.dtype in [np.float32, np.int64]
-            if self._raw_labels.dtype == np.int64:
-                assert self._raw_labels.ndim == 1
-                assert np.all(self._raw_labels >= 0)
+            self._raw_labels = np.zeros([self._raw_shape[0], 0], dtype=np.float32)
+        assert isinstance(self._raw_labels, np.ndarray)
+        assert self._raw_labels.shape[0] == self._raw_shape[0]
+        assert self._raw_labels.dtype in [np.float32, np.int64]
+        if self._raw_labels.dtype == np.int64:
+            assert self._raw_labels.ndim == 1
+            assert np.all(self._raw_labels >= 0)
+    
+    @property
+    def raw_labels(self):
         return self._raw_labels
-
-    def close(self): # to be overridden by subclass
-        pass
 
     def _load_raw_image(self, raw_idx): # to be overridden by subclass
         raise NotImplementedError
@@ -83,12 +89,6 @@ class Dataset(torch.utils.data.Dataset):
 
     def __getstate__(self):
         return dict(self.__dict__, _raw_labels=None)
-
-    def __del__(self):
-        try:
-            self.close()
-        except:
-            pass
 
     def __len__(self):
         return self._raw_idx.size
@@ -112,7 +112,7 @@ class Dataset(torch.utils.data.Dataset):
         return idx, image.copy(), self.get_label(idx)
 
     def get_label(self, idx):
-        label = self._get_raw_labels()[self._raw_idx[idx]]
+        label = self.raw_labels[self._raw_idx[idx]]
         if label.dtype == np.int64:
             onehot = np.zeros(self.label_shape, dtype=np.float32)
             onehot[label] = 1
@@ -123,13 +123,13 @@ class Dataset(torch.utils.data.Dataset):
         return int(self._raw_idx[idx])
 
     def get_raw_label(self, idx):
-        return int(self._get_raw_labels()[self._raw_idx[idx]])
+        return int(self.raw_labels[self._raw_idx[idx]])
 
     def get_details(self, idx):
         d = dnnlib.EasyDict()
         d.raw_idx = self.get_raw_idx(idx)
         d.xflip = (int(self._xflip[idx]) != 0)
-        d.raw_label = self._get_raw_labels()[d.raw_idx].copy()
+        d.raw_label = self.raw_labels[d.raw_idx].copy()
         return d
     
     def visualize(self, idx):
@@ -160,11 +160,10 @@ class Dataset(torch.utils.data.Dataset):
     @property
     def label_shape(self):
         if self._label_shape is None:
-            raw_labels = self._get_raw_labels()
-            if raw_labels.dtype == np.int64:
-                self._label_shape = [int(np.max(raw_labels)) + 1]
+            if self.raw_labels.dtype == np.int64:
+                self._label_shape = [int(np.max(self.raw_labels)) + 1]
             else:
-                self._label_shape = raw_labels.shape[1:]
+                self._label_shape = self.raw_labels.shape[1:]
         return list(self._label_shape)
 
     @property
@@ -182,7 +181,7 @@ class Dataset(torch.utils.data.Dataset):
 
     @property
     def has_onehot_labels(self):
-        return self._get_raw_labels().dtype == np.int64
+        return self.raw_labels.dtype == np.int64
 
 #----------------------------------------------------------------------------
 # Dataset subclass that loads images recursively from the specified directory
@@ -196,12 +195,19 @@ class ImageFolderDataset(Dataset):
         transform       = None, # Optional image transformation
         **super_kwargs,         # Additional arguments for the Dataset base class.
     ):
+        self._inspect_and_setup_folder(path)
+        self._set_up_transform(transform)
+        name, raw_shape = self._infer_name_and_raw_shape(path, name, resolution)
+        super().__init__(name=name, raw_shape=raw_shape, **super_kwargs)
+
+    def _inspect_and_setup_folder(self, path):
+
         self._path = path
         self._zipfile = None
 
         if os.path.isdir(self._path):
             self._type = 'dir'
-            self._all_fnames = {os.path.relpath(os.path.join(root, fname), start=self._path) for root, _dirs, files in os.walk(self._path) for fname in files}
+            self._all_fnames = {os.path.relpath(os.path.join(root, fname), start=self._path) for root, _, files in os.walk(self._path) for fname in files}
         elif self._file_ext(self._path) == '.zip':
             self._type = 'zip'
             self._all_fnames = set(self._get_zipfile().namelist())
@@ -213,16 +219,21 @@ class ImageFolderDataset(Dataset):
         self._image_fnames = sorted(fname for fname in self._all_fnames if self._file_ext(fname) in supported_ext)
         if len(self._image_fnames) == 0:
             raise IOError('No image files found in the specified path')
+        
+    def _set_up_transform(self, transform=None):
 
         if transform is None:
             transform = Identity()
         self.transform = transform
 
-        name = name or os.path.splitext(os.path.basename(self._path))[-1]
+    def _infer_name_and_raw_shape(self, path, name=None, resolution=None):
+
+        name = name or os.path.splitext(os.path.basename(path))[-1]
         raw_shape = [len(self._image_fnames)] + list(self._load_raw_image(0).shape)
         if resolution is not None and (raw_shape[2] != resolution or raw_shape[3] != resolution):
             raise IOError('Image files do not match the specified resolution')
-        super().__init__(name=name, raw_shape=raw_shape, **super_kwargs)
+    
+        return name, raw_shape
 
     @staticmethod
     def _file_ext(fname):
@@ -247,6 +258,12 @@ class ImageFolderDataset(Dataset):
                 self._zipfile.close()
         finally:
             self._zipfile = None
+
+    def __del__(self):
+        try:
+            self.close()
+        except:
+            pass
 
     def __getstate__(self):
         return dict(super().__getstate__(), _zipfile=None)
