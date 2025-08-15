@@ -90,6 +90,15 @@ def visualize_images(dataset, img_ids, are_ids_selected=None, n_cols=32):
     # Create landscape figure
     fig, axes = set_up_figure(n_rows, n_cols, portrait=False, facecolor="k", padding=0.5, aspect="equal")
 
+    # Check image type
+    _, img, _ = dataset[img_ids[0]]
+    if isinstance(img, torch.Tensor): # Assume 0-255 (C,H,W) Torch tensor
+        preprocess = lambda img : img.numpy().swapaxes(0,1).swapaxes(1,2) / 255
+    elif img.shape[0] in [1,3]: # Assume 0-255 (C,H,W) Numpy array
+        preprocess = lambda img : img.swapaxes(0,1).swapaxes(1,2) / 255
+    else: # Assume 0-255 (H,W,C) Numpy array
+        preprocess = lambda img : img / 255
+
     # Plot images
     for idx, (img_id, is_selected) in enumerate(zip(img_ids, are_ids_selected)):
         row = idx // n_cols
@@ -98,8 +107,8 @@ def visualize_images(dataset, img_ids, are_ids_selected=None, n_cols=32):
         ax.set_facecolor("black")
         if plot_all or is_selected:
             _, img, _ = dataset[img_id]
-            img = img.to(torch.float32) / 255
-            ax.imshow(img.numpy().swapaxes(0,1).swapaxes(1,2))
+            img = preprocess(img)
+            ax.imshow(img)
         ax.axis('off')
 
     # Final layout and export
@@ -107,6 +116,7 @@ def visualize_images(dataset, img_ids, are_ids_selected=None, n_cols=32):
 
     return fig, axes
 
+# Per AJEST iteration, but can be generalized to anything
 def visualize_images_per_iteration(dataset, img_ids, are_ids_selected, N_iterations=16):
 
     # Get parameters for figure
