@@ -240,15 +240,15 @@ class TinyImageNetDataset(HuggingFaceDataset):
     ):
         super().__init__(path=path, n_classes=n_classes, key_image=key_image, key_label=key_label,
                          resolution=resolution, name=name, cache_dir=cache_dir, **super_kwargs)
-        self._set_up_class_words(path, words_filename)
-    
-    def _set_up_class_words(self, path, words_filename):
-        
         dataset_dir = "___".join(os.path.split(path))
-        names_filepath = os.path.join(self.cache_dir, dataset_dir, words_filename)
-        if os.path.isfile(names_filepath):
-            class_words = {k:None for k in self.data.features["label"].names}
-            with open(names_filepath, "r", encoding='UTF-8') as f:
+        words_filepath = os.path.join(self.cache_dir, dataset_dir, words_filename)
+        self._set_up_class_words(words_filepath)
+    
+    def _set_up_class_words(self, words_filepath):
+        
+        if os.path.isfile(words_filepath):
+            class_words = {k:None for k in self.class_names}
+            with open(words_filepath, "r", encoding='UTF-8') as f:
                 for line in f:
                     k, name = line.rstrip().split("\t")
                     class_words[k] = name.capitalize()
@@ -333,7 +333,6 @@ class GeneratedFolderDataset(TinyImageNetDataset):
         xflip       = False,    # Artificially double the size of the dataset via x-flips. Applied after max_size.
         random_seed = 0,        # Random seed to use when applying max_size.
         cache       = False,    # Cache images in CPU memory?
-        cache_dir   = dirs.DATA_HOME, # Cache dir storing the Hugging Face dataset with class words information
     ):
 
         self._path = path
@@ -342,8 +341,8 @@ class GeneratedFolderDataset(TinyImageNetDataset):
         self._set_up_class_names(names_filename)
         name, raw_shape = self._infer_name_and_raw_shape(path, name, resolution)
         self._set_up(name, raw_shape, use_labels, max_size, xflip, random_seed, cache)
-        self._cache_dir = cache_dir
-        self._set_up_class_words(path, words_filename)
+        words_filepath = os.path.join(dirs.DATA_HOME, "zh-plus___tiny-imagenet", words_filename)
+        self._set_up_class_words(words_filepath)
 
     def _inspect_and_setup_folder(self, path): # From karras.training.ImageFolderDataset
 
@@ -382,6 +381,10 @@ class GeneratedFolderDataset(TinyImageNetDataset):
         with open(names_filepath, 'rb') as f:
             names = pickle.load(f)
         self._class_names = names
+
+    @property
+    def class_names(self):
+        return self._class_names
 
     def _infer_name_and_raw_shape(self, path, name=None, resolution=None): # Original from this class
 
