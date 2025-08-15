@@ -26,6 +26,8 @@ import matplotlib.pyplot as plt
 from karras.dnnlib.util import EasyDict, construct_class_by_name, open_url, call_func_by_name
 import karras.torch_utils.distributed as dist
 from karras.training.encoders import PRETRAINED_HOME
+import Images.calculate_metrics as calc
+import ours.visualize as vis
 
 import logs
 
@@ -326,6 +328,27 @@ def generate_images(
                 yield r
 
     return ImageIterable()
+
+def visualize_generated_images(generated_images_path, n_images=200, batch_size=100,
+                               plot_labels=False, save_dir=None, tight_layout=False):
+
+    dataset_kwargs = calc.get_dataset_kwargs("generated", image_path=generated_images_path)
+    dataset_obj = construct_class_by_name(**dataset_kwargs, random_seed=0)
+
+    saving = save_dir is not None
+    if tight_layout: kwargs = dict(bbox_inches="tight")
+    else: kwargs = dict()
+    for start, end in zip(np.arange(0, n_images+batch_size, batch_size)[:-1], 
+                          np.arange(0, n_images+batch_size, batch_size)[1:]):
+        fig, _ = vis.visualize_images(dataset_obj, np.arange(start, end), n_cols=10)
+        if plot_labels:
+            fig_2, _ = vis.visualize_classes(dataset_obj, np.arange(start, end), n_cols=10)
+        if saving:
+            fig.savefig(os.path.join(save_dir, f"imgs-{start:07.0f}-{end:07.0f}.png"), **kwargs)
+            plt.close(fig)
+            if plot_labels:
+                fig_2.savefig(os.path.join(save_dir, f"labs-{start:07.0f}-{end:07.0f}.png"), **kwargs)
+                plt.close(fig_2)
 
 #----------------------------------------------------------------------------
 # Parse a comma separated list of numbers or ranges and return a list of ints.
