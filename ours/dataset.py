@@ -442,7 +442,7 @@ class GeneratedFolderDataset(TinyImageNetDataset):
         return image
 
     def _load_raw_labels(self): # Original from this class
-        labels = [find_numbers(fname)[-1] for fname in self._all_fnames]
+        labels = [find_numbers(fname)[-1] for fname in self._image_fnames]
         labels = np.array(labels)
         labels = labels.astype({1: np.int64, 2: np.float32}[labels.ndim])
         return labels
