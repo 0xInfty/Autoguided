@@ -6,18 +6,17 @@ sys.path.insert(0, os.path.join(dirs.SYSTEM_HOME, "karras"))
 sys.path.insert(0, os.path.join(dirs.SYSTEM_HOME, "ours"))
 
 import csv
-import numpy as np
-import pandas as pd
-import torch
 import wandb
 import click
 import tqdm
-import matplotlib.pyplot as plt
-import seaborn as sns
 from itertools import chain
+import seaborn as sns
+import numpy as np
+import matplotlib.pyplot as plt
 
 import karras.dnnlib as dnnlib
 from ours.dataset import DATASET_OPTIONS, get_dataset_kwargs
+import ours.visualize as vis
 
 import warnings
 warnings.filterwarnings('ignore', 'No artists with labels found to put in legend')
@@ -52,98 +51,6 @@ def download_metrics(run_ids, output_filepath, max_epochs=None, page_size=100, n
                         img_id = rank_rows[rank_i]["Indices"][round_i][image_i]
                         is_img_id_selected = image_i in rank_rows[rank_i]["Selected indices"][round_i]
                         writer.writerow([rank_i, rank_rows[rank_i]["Epoch"], round_i, img_id, int(is_img_id_selected)])
-
-A4_DIMS = [11.7, 8.3] # H,W in inches; 2480x3508 pixels at 300 dpi
-
-def set_up_figure(n_rows=1, n_cols=1, portrait=True, facecolor="w", padding=0.2, dpi=100, aspect="auto"):
-
-    assert aspect in ["equal", "auto"], "Aspect should be either 'equal' or 'auto'"
-
-    if n_cols==1 and n_rows > 1:
-        kwargs = dict( gridspec_kw=dict(hspace=0), sharey=True )
-    elif n_rows == 1 and n_cols > 1:
-        kwargs = dict( gridspec_kw=dict(wspace=0), sharex=True )
-    else: kwargs = dict()
-
-    if n_rows>4 or n_cols>4:
-        if portrait: fig_size = A4_DIMS[::-1] # Portrait
-        else: fig_size = A4_DIMS # Landscape
-
-        cell_size = (np.array(fig_size)-2*padding)/np.array([n_rows, n_cols])
-        if aspect == "equal":
-            fig_size = 2*padding+min(cell_size)*np.array((n_rows, n_cols))
-        else:
-            fig_size = 2*padding+cell_size*np.array((n_rows, n_cols))
-        fig, axes = plt.subplots(n_rows, n_cols, facecolor=facecolor, figsize=fig_size[::-1], dpi=dpi, **kwargs)
-    else:
-        fig, axes = plt.subplots(n_rows, n_cols, facecolor=facecolor, dpi=dpi, **kwargs)
-
-    return fig, axes
-
-def visualize_images(dataset, img_ids, are_ids_selected=None, n_cols=32):
-
-    # Get parameters for figure
-    n_rows = int(len(img_ids)/n_cols)
-    plot_all = are_ids_selected is None
-    if plot_all: are_ids_selected = [True]*len(img_ids)
-
-    # Create landscape figure
-    fig, axes = set_up_figure(n_rows, n_cols, portrait=False, facecolor="k", padding=0.5, aspect="equal")
-
-    # Check image type
-    _, img, _ = dataset[img_ids[0]]
-    if isinstance(img, torch.Tensor): # Assume 0-255 (C,H,W) Torch tensor
-        preprocess = lambda img : img.numpy().swapaxes(0,1).swapaxes(1,2) / 255
-    elif img.shape[0] in [1,3]: # Assume 0-255 (C,H,W) Numpy array
-        preprocess = lambda img : img.swapaxes(0,1).swapaxes(1,2) / 255
-    else: # Assume 0-255 (H,W,C) Numpy array
-        preprocess = lambda img : img / 255
-
-    # Plot images
-    for idx, (img_id, is_selected) in enumerate(zip(img_ids, are_ids_selected)):
-        row = idx // n_cols
-        col = idx % n_cols
-        ax = axes[row][col]
-        ax.set_facecolor("black")
-        if plot_all or is_selected:
-            _, img, _ = dataset[img_id]
-            img = preprocess(img)
-            ax.imshow(img)
-        ax.axis('off')
-
-    # Final layout and export
-    plt.show()
-
-    return fig, axes
-
-# Per AJEST iteration, but can be generalized to anything
-def visualize_images_per_iteration(dataset, img_ids, are_ids_selected, N_iterations=16):
-
-    # Get parameters for figure
-    n_rows = N_iterations
-    n_cols = int(sum(are_ids_selected)/n_rows)
-    plot_all = are_ids_selected is None
-    if plot_all: are_ids_selected = [True]*len(img_ids)
-
-    # Create figure
-    fig, axes = set_up_figure(n_rows, n_cols, portrait=True, facecolor="black", aspect="equal")
-
-    # Plot images
-    selected_img_ids = img_ids[are_ids_selected]
-    for idx, img_id in enumerate(selected_img_ids):
-        row = idx // n_cols
-        col = idx % n_cols
-        ax = axes[row][col]
-        ax.set_facecolor("black")
-        _, img, _ = dataset[img_id]
-        img = img.to(torch.float32) / 255
-        ax.imshow(img.numpy().swapaxes(0,1).swapaxes(1,2))
-        ax.axis('off')
-
-    # Final layout and export
-    plt.show()
-
-    return fig, axes
 
 def visualize_selection(dataset_name, indices_filepath, ajest_N=None,
                         per_round=False, per_iteration=False, 
@@ -207,17 +114,17 @@ def visualize_selection(dataset_name, indices_filepath, ajest_N=None,
                                 these_img_ids = img_ids[round_i]
                                 are_these_img_ids_selected = are_img_ids_selected[round_i]
                                 if show_images:
-                                    fig, axes = visualize_images(dataset, these_img_ids)
+                                    fig, axes = vis.visualize_images(dataset, these_img_ids)
                                     fig_filepath = os.path.join(folder, f"epoch_{epoch_i}_round_{round_i}_images_all.jpeg")
                                     fig.savefig(fig_filepath, bbox_inches='tight', dpi=fig.dpi); plt.close(fig)
-                                    fig, axes = visualize_images(dataset, these_img_ids, are_these_img_ids_selected)
+                                    fig, axes = vis.visualize_images(dataset, these_img_ids, are_these_img_ids_selected)
                                     fig_filepath = os.path.join(folder, f"epoch_{epoch_i}_round_{round_i}_images.jpeg")
                                     fig.savefig(fig_filepath, bbox_inches='tight', dpi=fig.dpi); plt.close(fig)
                                 if show_labels:
-                                    fig, axes = visualize_classes(dataset, these_img_ids)
+                                    fig, axes = vis.visualize_classes(dataset, these_img_ids)
                                     fig_filepath = os.path.join(folder, f"epoch_{epoch_i}_round_{round_i}_labels_all.jpeg")
                                     fig.savefig(fig_filepath, bbox_inches='tight', dpi=fig.dpi); plt.close(fig)
-                                    fig, axes = visualize_classes(dataset, these_img_ids, are_these_img_ids_selected)
+                                    fig, axes = vis.visualize_classes(dataset, these_img_ids, are_these_img_ids_selected)
                                     fig_filepath = os.path.join(folder, f"epoch_{epoch_i}_round_{round_i}_labels.jpeg")
                                     fig.savefig(fig_filepath, bbox_inches='tight', dpi=fig.dpi); plt.close(fig)
 
@@ -227,32 +134,32 @@ def visualize_selection(dataset_name, indices_filepath, ajest_N=None,
                                 are_these_img_ids_selected = np.array(are_img_ids_selected[round_i], dtype=bool)
                                 if show_images:
                                     fig_filepath = os.path.join(folder, f"epoch_{epoch_i}_round_{round_i}_rank_0_images.jpeg")
-                                    fig, axes = visualize_images_per_iteration(dataset, these_img_ids[0::2], 
-                                                                               are_these_img_ids_selected[0::2], ajest_N)
+                                    fig, axes = vis.visualize_images_per_iteration(dataset, these_img_ids[0::2], 
+                                                                                   are_these_img_ids_selected[0::2], ajest_N)
                                     fig.savefig(fig_filepath, bbox_inches='tight', dpi=fig.dpi); plt.close(fig)
                                     fig_filepath = os.path.join(folder, f"epoch_{epoch_i}_round_{round_i}_rank_1_images.jpeg")
-                                    fig, axes = visualize_images_per_iteration(dataset, these_img_ids[1::2], 
-                                                                               are_these_img_ids_selected[1::2], ajest_N)
+                                    fig, axes = vis.visualize_images_per_iteration(dataset, these_img_ids[1::2], 
+                                                                                   are_these_img_ids_selected[1::2], ajest_N)
                                     fig.savefig(fig_filepath, bbox_inches='tight', dpi=fig.dpi); plt.close(fig)
                                 if show_labels:
                                     fig_filepath = os.path.join(folder, f"epoch_{epoch_i}_round_{round_i}_rank_0_labels.jpeg")
-                                    fig, axes = visualize_classes_per_iteration(dataset, these_img_ids[0::2], 
-                                                                                are_these_img_ids_selected[0::2], ajest_N)
+                                    fig, axes = vis.visualize_classes_per_iteration(dataset, these_img_ids[0::2], 
+                                                                                    are_these_img_ids_selected[0::2], ajest_N)
                                     fig.savefig(fig_filepath, bbox_inches='tight', dpi=fig.dpi); plt.close(fig)
                                     fig_filepath = os.path.join(folder, f"epoch_{epoch_i}_round_{round_i}_rank_1_labels.jpeg")
-                                    fig, axes = visualize_classes_per_iteration(dataset, these_img_ids[1::2], 
-                                                                                are_these_img_ids_selected[1::2], ajest_N)
+                                    fig, axes = vis.visualize_classes_per_iteration(dataset, these_img_ids[1::2], 
+                                                                                    are_these_img_ids_selected[1::2], ajest_N)
                                     fig.savefig(fig_filepath, bbox_inches='tight', dpi=fig.dpi); plt.close(fig)
                                 if show_histograms:
                                     these_img_ids = these_img_ids.reshape((ajest_N,-1))
                                     are_these_img_ids_selected = are_these_img_ids_selected.reshape((ajest_N,-1))
                                     fig_filepath = os.path.join(folder, f"epoch_{epoch_i}_round_{round_i}_rank_0_histogram.jpeg")
-                                    fig, axes = plot_classes_histograms(dataset, these_img_ids[:,0::2], 
-                                                                                 are_these_img_ids_selected[:,0::2])
+                                    fig, axes = vis.plot_classes_histograms(dataset, these_img_ids[:,0::2], 
+                                                                            are_these_img_ids_selected[:,0::2])
                                     fig.savefig(fig_filepath, bbox_inches='tight', dpi=fig.dpi); plt.close(fig)
                                     fig_filepath = os.path.join(folder, f"epoch_{epoch_i}_round_{round_i}_rank_1_histogram.jpeg")
-                                    fig, axes = plot_classes_histograms(dataset, these_img_ids[:,1::2], 
-                                                                                 are_these_img_ids_selected[:,1::2])
+                                    fig, axes = vis.plot_classes_histograms(dataset, these_img_ids[:,1::2], 
+                                                                            vis.are_these_img_ids_selected[:,1::2])
                                     fig.savefig(fig_filepath, bbox_inches='tight', dpi=fig.dpi); plt.close(fig)
                         
                         if i % n_lines_per_epoch == 0:
@@ -260,118 +167,23 @@ def visualize_selection(dataset_name, indices_filepath, ajest_N=None,
                             are_these_img_ids_selected = np.array(list(chain(*are_img_ids_selected)), dtype=bool)
                             if show_images:
                                 fig_filepath = os.path.join(folder, f"epoch_{epoch_i}_images.jpeg")
-                                fig, axes = visualize_images(dataset, these_img_ids[are_these_img_ids_selected], n_cols=24)
+                                fig, axes = vis.visualize_images(dataset, these_img_ids[are_these_img_ids_selected], n_cols=24)
                                 fig.savefig(fig_filepath, bbox_inches='tight', dpi=fig.dpi); plt.close(fig)
                             if show_labels:
                                 fig_filepath = os.path.join(folder, f"epoch_{epoch_i}_labels.jpeg")
-                                fig, axes = visualize_classes(dataset, these_img_ids[are_these_img_ids_selected], n_cols=24)
+                                fig, axes = vis.visualize_classes(dataset, these_img_ids[are_these_img_ids_selected], n_cols=24)
                                 fig.savefig(fig_filepath, bbox_inches='tight', dpi=fig.dpi); plt.close(fig)
                             if show_histograms:
-                                fig, axes = plot_classes_histogram(dataset, these_img_ids, are_these_img_ids_selected)
+                                fig, axes = vis.plot_classes_histogram(dataset, these_img_ids, are_these_img_ids_selected)
                                 fig_filepath = os.path.join(folder, f"epoch_{epoch_i}_histogram.jpeg")
                                 fig.savefig(fig_filepath, bbox_inches='tight', dpi=fig.dpi); plt.close(fig)
                                 if per_round:
-                                    fig, axes = plot_classes_histograms(dataset, img_ids, are_img_ids_selected)
+                                    fig, axes = vis.plot_classes_histograms(dataset, img_ids, are_img_ids_selected)
                                     fig_filepath = os.path.join(folder, f"epoch_{epoch_i}_histogram_per_round.jpeg")
                                     fig.savefig(fig_filepath, bbox_inches='tight', dpi=fig.dpi); plt.close(fig)
                             img_ids, are_img_ids_selected = [], []
 
             if limited_epochs and epoch_i >= max_epochs: break
-
-def visualize_classes(dataset, img_ids, are_ids_selected=None, n_cols=32):
-
-    # Get parameters for figure
-    n_rows = int(len(img_ids)/n_cols)
-    plot_all = are_ids_selected is None
-    if plot_all: are_ids_selected = [True]*len(img_ids)
-
-    # Create landscape figure
-    fig, axes = set_up_figure(n_rows, n_cols, portrait=False, facecolor="k", padding=0.5, aspect="equal")
-
-    # Plot images
-    for idx, (img_id, is_selected) in enumerate(zip(img_ids, are_ids_selected)):
-        row = idx // n_cols
-        col = idx % n_cols
-        ax = axes[row][col]
-        ax.set_facecolor("black")
-        if plot_all or is_selected:
-            _, _, label = dataset[img_id]
-            plt.text(0.5, 0.5, str(list(label).index(1)), fontdict=dict(fontsize="xx-small"),
-                    horizontalalignment='center', verticalalignment='center',
-                    color="w", transform = ax.transAxes)
-        ax.axis('off')
-
-    # Final layout and export
-    plt.show()
-
-    return fig, axes
-
-def visualize_classes_per_iteration(dataset, img_ids, are_ids_selected, N_iterations=16):
-
-    # Get parameters for figure
-    n_rows = N_iterations
-    n_cols = int(sum(are_ids_selected)/n_rows)
-    plot_all = are_ids_selected is None
-    if plot_all: are_ids_selected = [True]*len(img_ids)
-
-    # Create figure
-    fig, axes = set_up_figure(n_rows, n_cols, portrait=True, facecolor="black", aspect="equal")
-
-    # Plot images
-    selected_img_ids = img_ids[are_ids_selected]
-    for idx, img_id in enumerate(selected_img_ids):
-        row = idx // n_cols
-        col = idx % n_cols
-        ax = axes[row][col]
-        ax.set_facecolor("black")
-        _, _, label = dataset[img_id]
-        plt.text(0.5, 0.5, str(list(label).index(1)),
-                horizontalalignment='center', verticalalignment='center',
-                color="w", transform = ax.transAxes)
-        ax.axis('off')
-
-    # Final layout and export
-    plt.show()
-
-    return fig, axes
-
-def plot_classes_histogram(dataset, img_ids, are_ids_selected, ax=None):
-
-    # Create landscape figure
-    creating_fig = ax is None
-    if creating_fig: fig, ax = plt.subplots()
-    else: fig = ax.figure
-
-    # Plot images
-    labels = np.array([dataset[img_id][-1] for img_id in img_ids])
-    n_classes = dataset.label_shape[0]-1
-    labels = np.array([list(lab).index(1) for lab in labels])
-    
-    sns.histplot(data=pd.DataFrame(dict(labels=labels)), bins=n_classes, binrange=(0,n_classes), 
-                 x="labels", color="blue", label="Observed", alpha=0.5, ax=ax)
-    sns.histplot(data=pd.DataFrame(dict(selected=labels))[are_ids_selected], 
-                 bins=n_classes, binrange=(0,n_classes), 
-                 x="selected", color="red", label="Selected", alpha=.7, ax=ax)
-    plt.xlabel("Classes")
-    plt.legend()
-    if creating_fig: plt.show()
-
-    return fig, ax
-
-def plot_classes_histograms(dataset, list_img_ids, list_are_ids_selected):
-
-    # Create figure
-    n_rows = len(list_img_ids)
-    fig, axes = set_up_figure(n_rows=n_rows)
-
-    for round_i, ax in enumerate(axes):
-        fig, ax = plot_classes_histogram(dataset, list_img_ids[round_i], list_are_ids_selected[round_i], ax=ax)
-    for i, ax in enumerate(axes):
-        if i!=0: ax.set_ylabel("")
-        if i<n_rows-1: ax.set_xlabel("")
-    fig.show()
-
-    return fig, ax
 
 @click.group()
 def cmdline():
