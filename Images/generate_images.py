@@ -106,8 +106,11 @@ config_presets = {
 
 def edm_full_sampler(
     net, noise, labels=None, gnet=None,
-    num_steps=32, sigma_min=0.002, sigma_max=80, rho=7, guidance=1,
-    S_churn=0, S_min=0, S_max=float('inf'), S_noise=1,
+    num_steps=DEFAULT_SAMPLER.num_steps, 
+    sigma_min=DEFAULT_SAMPLER.sigma_min, sigma_max=DEFAULT_SAMPLER.sigma_max, 
+    rho=DEFAULT_SAMPLER.rho, guidance=1,
+    S_churn=DEFAULT_SAMPLER.S_churn, S_min=DEFAULT_SAMPLER.S_min, 
+    S_max=DEFAULT_SAMPLER.S_max, S_noise=DEFAULT_SAMPLER.S_noise,
     dtype=torch.float32, randn_like=torch.randn_like,
 ):
     # Guided denoiser.
@@ -352,6 +355,8 @@ def parse_int_list(s):
 @click.option('--results/--no-results',     help='Whether to send output to Results or to Data', metavar='BOOL',    type=bool, default=False, show_default=True)
 @click.option('--subdirs',                  help='Create subdirectory for every 1000 seeds',                        is_flag=True)
 @click.option('--seeds',                    help='List of random seeds (e.g. 1,2,5-10)', metavar='LIST',            type=parse_int_list, default='16-19', show_default=True)
+@click.option('--random/--no-random', 'random_class', 
+                                            help='Whether to generate images from random classes', metavar='BOOL',  type=bool, default=True, show_default=True)
 @click.option('--class', 'class_idx',       help='Class label  [default: random]', metavar='INT',                   type=click.IntRange(min=0), default=None)
 @click.option('--batch', 'max_batch_size',  help='Maximum batch size', metavar='INT',                               type=click.IntRange(min=1), default=32, show_default=True)
 
