@@ -97,7 +97,7 @@ def get_wandb_ids(checkpoints_dir):
         contents = os.listdir(os.path.join(checkpoints_dir, "wandb"))
         wandb_folders = filter_by_string_must(contents, "run-")
         wandb_folders.sort()
-        date_string = wandb_folders[0].split("-")[1]
+        date_string = wandb_folders[0].split("-")[1].split("_")[0]
         wandb_folders = filter_by_string_must(wandb_folders, date_string)
     except FileNotFoundError:
         wandb_folders = []
