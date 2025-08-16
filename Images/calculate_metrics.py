@@ -214,6 +214,38 @@ def calculate_stats_for_iterable(
 
     return StatsIterable()
 
+def use_stats_iterator(stats_iter): # Run on rank 0
+    for r in tqdm.tqdm(stats_iter, unit='batch', disable=(dist.get_rank()!=0)): pass
+    return r
+
+#----------------------------------------------------------------------------
+# Calculate feature statistics for the given dataset in a distributed fashion. 
+# Returns an iterable that yields dnnlib.EasyDict(stats, images, batch_idx, num_batches)
+
+def calculate_stats_for_dataset(
+    dataset,                # Dataset object
+    num_images      = None, # Number of images to use. None = all available images.
+    max_batch_size  = 64,   # Maximum batch size.
+    num_workers     = 2,    # How many subprocesses to use for data loading.
+    prefetch_factor = 2,    # Number of images loaded in advance by each worker.
+    verbose         = True, # Enable status prints?
+    **stats_kwargs,         # Arguments for calculate_stats_for_iterable().
+):
+    
+    if num_images is not None and len(dataset) < num_images:
+        raise click.ClickException(f'Found {len(dataset)} images, but expected at least {num_images}')
+    if len(dataset) < 2:
+        raise click.ClickException(f'Found {len(dataset)} images, but need at least 2 to compute statistics')
+
+    # Divide images into batches.
+    num_batches = max((len(dataset) - 1) // (max_batch_size * dist.get_world_size()) + 1, 1) * dist.get_world_size()
+    rank_batches = np.array_split(np.arange(len(dataset)), num_batches)[dist.get_rank() :: dist.get_world_size()]
+    data_loader = torch.utils.data.DataLoader(dataset, batch_sampler=rank_batches,
+        num_workers=num_workers, prefetch_factor=(prefetch_factor if num_workers > 0 else None))
+
+    # Return an interable for calculating the statistics.
+    return calculate_stats_for_iterable(image_iter=data_loader, verbose=verbose, **stats_kwargs)
+
 #----------------------------------------------------------------------------
 # Calculate feature statistics for the given directory or ZIP of images
 # in a distributed fashion. Returns an iterable that yields
@@ -237,23 +269,15 @@ def calculate_stats_for_files(
     # List images.
     dataset_kwargs = get_dataset_kwargs(dataset_name, image_path=image_path)
     dataset_obj = dnnlib.util.construct_class_by_name(**dataset_kwargs, max_size=num_images, random_seed=seed)
-    if num_images is not None and len(dataset_obj) < num_images:
-        raise click.ClickException(f'Found {len(dataset_obj)} images, but expected at least {num_images}')
-    if len(dataset_obj) < 2:
-        raise click.ClickException(f'Found {len(dataset_obj)} images, but need at least 2 to compute statistics')
 
     # Other ranks follow.
     if dist.get_rank() == 0:
         torch.distributed.barrier()
 
-    # Divide images into batches.
-    num_batches = max((len(dataset_obj) - 1) // (max_batch_size * dist.get_world_size()) + 1, 1) * dist.get_world_size()
-    rank_batches = np.array_split(np.arange(len(dataset_obj)), num_batches)[dist.get_rank() :: dist.get_world_size()]
-    data_loader = torch.utils.data.DataLoader(dataset_obj, batch_sampler=rank_batches,
-        num_workers=num_workers, prefetch_factor=(prefetch_factor if num_workers > 0 else None))
-
-    # Return an interable for calculating the statistics.
-    return calculate_stats_for_iterable(image_iter=data_loader, verbose=verbose, **stats_kwargs)
+    # Return an iterable for calculating the statistics
+    return calculate_stats_for_dataset(dataset_obj, num_images=num_images, max_batch_size=max_batch_size,
+                                       num_workers=num_workers, prefetch_factor=prefetch_factor, 
+                                       verbose=verbose, **stats_kwargs)
 
 #----------------------------------------------------------------------------
 # Calculate metrics based on the given feature statistics.
@@ -346,8 +370,7 @@ def calc(ref_path, metrics, **opts):
     if dist.get_rank() == 0:
         ref = load_stats(path=ref_path) # do this first, just in case it fails
     stats_iter = calculate_stats_for_files(metrics=metrics, **opts)
-    for r in tqdm.tqdm(stats_iter, unit='batch', disable=(dist.get_rank() != 0)):
-        pass
+    r = use_stats_iterator(stats_iter)
     if dist.get_rank() == 0:
         calculate_metrics_from_stats(stats=r.stats, ref=ref, metrics=metrics)
     torch.distributed.barrier()
@@ -371,10 +394,10 @@ def gen(net, ref_path, metrics, num_images, seed, **opts):
     ref_path = os.path.join(dirs.DATA_HOME, "dataset_refs", ref_path)
     if dist.get_rank() == 0:
         ref = load_stats(path=ref_path) # do this first, just in case it fails
-    image_iter = generate_images.generate_images(net=net, seeds=range(seed, seed + num_images), **opts)
+    seeds = range(seed, seed + num_images)
+    image_iter = generate_images.get_image_generator(net=net, seeds=seeds, **opts)
     stats_iter = calculate_stats_for_iterable(image_iter, metrics=metrics)
-    for r in tqdm.tqdm(stats_iter, unit='batch', disable=(dist.get_rank() != 0)):
-        pass
+    r = use_stats_iterator(stats_iter)
     if dist.get_rank() == 0:
         calculate_metrics_from_stats(stats=r.stats, ref=ref, metrics=metrics)
     torch.distributed.barrier()
@@ -397,8 +420,7 @@ def ref(**opts):
     opts = dnnlib.EasyDict(opts)
     opts.dest_path = os.path.join(dirs.DATA_HOME, "dataset_refs", opts.dest_path)
     stats_iter = calculate_stats_for_files(**opts)
-    for _r in tqdm.tqdm(stats_iter, unit='batch', disable=(dist.get_rank() != 0)):
-        pass
+    use_stats_iterator(stats_iter)
 
 #----------------------------------------------------------------------------
 
