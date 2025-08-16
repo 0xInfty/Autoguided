@@ -5,6 +5,7 @@ sys.path.insert(0, dirs.SYSTEM_HOME)
 sys.path.insert(0, os.path.join(dirs.SYSTEM_HOME, "karras"))
 
 import shutil
+import pickle
 import tqdm
 import click
 import time
@@ -32,7 +33,7 @@ from ours.utils import get_wandb_id
 #----------------------------------------------------------------------------
 # Load classifier model
 
-def load_swin_l_model(verbose=False):
+def load_swin_l_model(verbose=False, deterministic=True):
     """Tiny ImageNet pre-trained Swin-L model from Hyun et al, 2022.
     
     See more
@@ -45,7 +46,7 @@ def load_swin_l_model(verbose=False):
     if verbose: print("Loading Swin-L for TinyImageNet")
 
     # Ensure deterministic algortithms
-    torch.use_deterministic_algorithms(True)
+    if deterministic: torch.use_deterministic_algorithms(True)
     # Without it, this Swin-L model can somehow return different values for the same input
 
     # Create Swin-L model
@@ -138,6 +139,16 @@ def load_wavemix_model(verbose=False):
 
     return model
 
+def load_classifier_model(model_name, verbose=True, **kwargs):
+    if model_name == "ResNet":
+        return load_resnet_101_model(verbose=verbose)
+    elif model_name == "Swin":
+        return load_swin_l_model(verbose=verbose, **kwargs)
+    elif model_name == "WaveMix":
+        return load_wavemix_model(verbose=verbose)
+    else:
+        raise ValueError("Unrecognized or unsupported model")
+
 #--------------------------------------------------------------------------------
 # Utilities to calculate classification metrics
 
@@ -205,20 +216,21 @@ def load_labels_translator(from_aux_to_main_filepath=os.path.join(dirs.DATA_HOME
 
     return labels_translator
 
-#--------------------------------------------------------------------------------
-# Calculate classification metrics for a given classifier for the whole dataset
-
-def load_dataset(dataset_name="tiny",
-                 image_path=None,
-                 do_minus11_rescale=False,
-                 do_01_rescale=False,
-                 do_upsample=False,
-                 upsample_dim=128,
-                 do_normalize=True):
+def load_dataset(dataset_name="tiny", image_path=None, random_seed=0, **transform_kwargs):
     
     dataset_kwargs = calc.get_dataset_kwargs(dataset_name, image_path=image_path)
+    dataset = construct_class_by_name(**dataset_kwargs, random_seed=random_seed)
+    dataset = set_up_dataset_transform(dataset, **transform_kwargs)
+
+    return dataset
+
+def set_up_dataset_transform(dataset,
+                             do_minus11_rescale=False, do_01_rescale=False,
+                             do_upsample=False, upsample_dim=128,
+                             do_normalize=True, convert_to_torch=False):
+    
     transformations = []
-    if dataset_name=="generated":
+    if convert_to_torch:
         transformations.append( FromNumpyToTorch() )
     if do_upsample:
         transformations.append( transforms.Resize(upsample_dim, interpolation=InterpolationMode.BICUBIC) )
@@ -232,24 +244,44 @@ def load_dataset(dataset_name="tiny",
     if len(transformations)>0:
         transformations = transforms.Compose( transformations )
     else: transformations = None
-    dataset_obj = construct_class_by_name(**dataset_kwargs, random_seed=0, transform=transformations)
 
-    return dataset_obj
+    dataset.set_up_transform( transformations )
+    return dataset
+
+def get_dataset_transform_kwargs(model_name, dataset_name):
+
+    # According to model...
+    if model_name == "ResNet":
+        transform_kwargs = dict(do_upsample=False, do_normalize=True,
+                                do_01_rescale=True, do_minus11_rescale=False)
+    elif model_name == "Swin":
+        transform_kwargs = dict(do_upsample=True, upsample_dim=384, do_normalize=True,
+                                do_01_rescale=True, do_minus11_rescale=False)
+    elif model_name == "WaveMix":
+        transform_kwargs = dict(do_upsample=True, upsample_dim=128, do_normalize=True,
+                                do_01_rescale=True, do_minus11_rescale=False)
+    else:
+        transform_kwargs = dict(do_upsample=False, upsample_dim=128, do_normalize=False,
+                                do_01_rescale=False, do_minus11_rescale=False)
+    
+    # According to dataset name too...
+    if dataset_name=="generated" and model_name in ["ResNet", "Swin", "WaveMix"]:
+        transform_kwargs.update(dict(convert_to_torch=True))
+    else:
+        transform_kwargs.update(dict(convert_to_torch=True))
+    
+    return transform_kwargs
+
+#--------------------------------------------------------------------------------
+# Calculate classification metrics for a given classifier for the whole dataset
 
 REORDER_FILEPATH = os.path.join(dirs.DATA_HOME, "tiny_swin_to_huggingface.txt") # Swin-L Classifier
 # REORDER_FILEPATH = os.path.join(dirs.DATA_HOME, "tiny_kaggle_to_huggingface.txt") # Kaggle
 
 def get_classification_metrics(
-        model,
-        dataset_name="tiny",
-        image_path=None, # Path to a directory or ZIP file containing the images.
+        model, dataset,
         n_samples=None,
         batch_size=128,
-        do_minus11_rescale=False,
-        do_01_rescale=False,
-        do_upsample=False,
-        upsample_dim=128,
-        do_normalize=True,
         start_idx=0,
         shuffle=False,
         save_period=None,
@@ -257,14 +289,9 @@ def get_classification_metrics(
         verbose=False,
 ):
 
-    # Load dataset
-    if dataset_name not in ["tiny", "generated"]: raise NotImplementedError("Dataset is not supported yet")
-    dataset_obj = load_dataset(dataset_name=dataset_name, image_path=image_path,
-                               do_minus11_rescale=do_minus11_rescale, do_01_rescale=do_01_rescale,
-                               do_upsample=do_upsample, upsample_dim=upsample_dim,
-                               do_normalize=do_normalize)
-    n_classes = dataset_obj.n_classes
-    n_examples = len(dataset_obj)
+    # Extract dataset information
+    n_classes = dataset.n_classes
+    n_examples = len(dataset)
     if n_samples is None: n_samples = n_examples
     n_samples = min(n_samples, n_examples)
 
@@ -272,8 +299,8 @@ def get_classification_metrics(
     batch_size = min(batch_size, n_samples)
     n_batches = int(math.ceil( n_samples / batch_size ))
     last_batch_size = max(n_samples % batch_size, batch_size)
-    data_sampler = InfiniteSampler(dataset_obj, shuffle=False, start_idx=start_idx)
-    data_loader = torch.utils.data.DataLoader(dataset_obj, batch_size, shuffle=shuffle,
+    data_sampler = InfiniteSampler(dataset, shuffle=False, start_idx=start_idx)
+    data_loader = torch.utils.data.DataLoader(dataset, batch_size, shuffle=shuffle,
                                               num_workers=2, pin_memory=True, prefetch_factor=2,
                                               sampler=data_sampler)
     
@@ -304,10 +331,7 @@ def get_classification_metrics(
         predictions = model(images) # Classifier
         predictions = predictions[:, labels_translator.indices_from_aux] # HuggingFace
         predicted_labels = predictions.argmax(axis=1)
-        print("labels", labels)
-        print("fixed predicted_labels", predicted_labels)
-        top_5_labels = predictions.argsort(axis=1)[:,-5:] # Classifier
-        print("fixed top_5_labels", top_5_labels)
+        top_5_labels = predictions.argsort(axis=1)[:,-5:]
         for gt, top_1, top_5 in zip(labels, predicted_labels, top_5_labels):
             confusion_matrix[gt, top_1] += 1
             top_5_correct[gt] += gt in top_5
@@ -334,22 +358,111 @@ def get_classification_metrics(
 def calculate_classification_metrics(model="Swin", dataset_name="tiny", 
                                      image_path=None, batch_size=128, n_samples=None, 
                                      save_period=1, verbose=False):
+    # Choose directory
     save_dir = get_classification_metrics_dir(model, dataset_name, image_path)
-    if model == "ResNet":
-        model = load_resnet_101_model(verbose=verbose)
-        transform_kwargs = dict(do_upsample=False, do_normalize=True,
-                                do_01_rescale=True, do_minus11_rescale=False)
-    elif model == "Swin":
-        model = load_swin_l_model(verbose=verbose)
-        transform_kwargs = dict(do_upsample=True, upsample_dim=384, do_normalize=True,
-                                do_01_rescale=True, do_minus11_rescale=False)
-    elif model == "WaveMix":
-        model = load_wavemix_model(verbose=verbose)
-        transform_kwargs = dict(do_upsample=True, upsample_dim=128, do_normalize=True,
-                                do_01_rescale=True, do_minus11_rescale=False)
-    return get_classification_metrics(model, dataset_name=dataset_name, image_path=image_path, 
-                                      n_samples=n_samples, batch_size=batch_size, **transform_kwargs,
+
+    # Load dataset
+    if dataset_name not in ["tiny", "generated"]: raise NotImplementedError("Dataset is not supported yet")
+    transform_kwargs = get_dataset_transform_kwargs(model, dataset_name)
+    dataset = load_dataset(dataset_name=dataset_name, image_path=image_path, **transform_kwargs)
+
+    # Load model
+    model = load_classifier_model(model)
+    
+    # Get classification metrics
+    return get_classification_metrics(model, dataset, n_samples=n_samples, batch_size=batch_size, 
                                       save_period=save_period, save_dir=save_dir, verbose=verbose)
+
+#----------------------------------------------------------------------------
+# Calculate metrics for generated image datasets stored in the same directory
+
+def calculate_metrics_for_generated_images(super_dir, fd_metrics=True, 
+                                           class_metrics=True, verbose=True,
+                                           metrics_filepath=None):
+
+    dist.init()
+    saving = metrics_filepath is not None
+    if dist.get_rank() == 0:
+        os.makedirs(os.path.dirname(metrics_filepath), exist_ok=True)
+
+    # Get series of generated images: 
+    # each generated images dataset is assumed to be inside a folder inside the main directory
+    series = os.listdir(super_dir)
+    series = filter_by_string_must(series, ["visualize", "class-metrics"], must=False)
+
+    if fd_metrics:
+
+        # Get reference stats
+        ref_path = os.path.join(dirs.DATA_HOME, "dataset_refs", "tiny.pkl")
+        if dist.get_rank() == 0:
+            ref_exists = os.path.isfile(ref_path)
+        if not ref_exists: raise NotImplementedError
+        if dist.get_rank() == 0:
+            ref = calc.load_stats(path=ref_path) # do this first, just in case it fails
+        torch.distributed.barrier()
+
+        # Get FID and FD_DINOv2 models
+        metrics = calc.parse_metric_list("fid,fd_dinov2")
+        detectors = [calc.get_detector(metric, verbose=verbose) for metric in metrics]
+
+    if class_metrics:
+
+        # Get classifier model
+        classifier = load_classifier_model("Swin", deterministic=not fd_metrics)
+
+    results = {}
+    for s in series:
+        if verbose: dist.print0("Series", s)
+        image_path = os.path.join(super_dir, s)
+        results[s] = {}
+
+        # Load dataset
+        dataset = load_dataset(dataset_name="generated", image_path=image_path)
+
+        # Calculate FID and FD-DINOv2 metrics for generated images
+        if fd_metrics:
+            if class_metrics: torch.use_deterministic_algorithms(False)
+            stats_iter = calc.calculate_stats_for_dataset(dataset, metrics=metrics, detectors=detectors)
+            r = calc.use_stats_iterator(stats_iter)
+            if dist.get_rank() == 0:
+                initial_time = time.time()
+                fd_results = calc.calculate_metrics_from_stats(stats=r.stats, ref=ref, metrics=metrics, verbose=verbose)
+                results[s].update({"Validation FID": fd_results["fid"],
+                                   "Validation FD-DINOv2": fd_results["fd_dinov2"]})
+                cumulative_time = time.time() - initial_time
+                dist.print0(f"Time to get FD metrics = {cumulative_time:.2f} sec")
+            torch.distributed.barrier()
+
+        # Calculate classification metrics on the generated images using a pre-trained model 
+        if class_metrics:
+            if fd_metrics: torch.use_deterministic_algorithms(True)
+            initial_time = time.time()
+
+            # Reconfigure the dataset to have the appropriate preprocessing
+            transform_kwargs = get_dataset_transform_kwargs("Swin", "generated")
+            dataset = set_up_dataset_transform(dataset, **transform_kwargs)
+
+            # Get classification scores
+            class_save_dir = get_classification_metrics_dir("Swin", "generated", image_path)
+            class_results = get_classification_metrics(classifier, dataset, 
+                                                            n_samples=None, batch_size=128, 
+                                                            save_period=1, save_dir=class_save_dir, 
+                                                            verbose=verbose)
+            cumulative_time = time.time() - initial_time
+            dist.print0(f"Time to get classification metrics = {cumulative_time:.2f} sec")
+            top_1_accuracy, top_5_accuracy, confusion_matrix, top_5_correct = class_results
+            results[s].update({"Swin-L Top-1 Accuracy": top_1_accuracy,
+                               "Swin-L Top-5 Accuracy": top_5_accuracy,
+                               "Confusion matrix": confusion_matrix,
+                               "Top 5 correct": top_5_correct})
+        
+        if verbose: dist.print0(results[s])
+        if saving and dist.get_rank()==0:
+            with open(metrics_filepath, 'wb') as f:
+                pickle.dump(results, f)
+        torch.distributed.barrier()
+
+    return results
 
 #----------------------------------------------------------------------------
 # Calculate metrics for all stored models as a post-hoc validation curve
@@ -376,21 +489,21 @@ def calculate_metrics_for_checkpoints(
 ):
     
     assert fd_metrics or class_metrics, ValueError("Nothing to calculate")
-
-    # Get reference stats
     assert dataset_name in DATASET_OPTIONS.keys(), "Unrecognized dataset"
     if dataset_name=="folder": raise NotImplementedError
-    # if dataset_name=="folder" and ref_path is None: 
-    #     raise ValueError("Reference path needed for unrecognized dataset")
-    # elif dataset_name=="folder":
-    #     ref_path = os.path.join(dirs.DATA_HOME, "dataset_refs", ref_path)
-    else:
+
+    # Get reference stats
+    if fd_metrics:
+        # if dataset_name=="folder" and ref_path is None: 
+        #     raise ValueError("Reference path needed for unrecognized dataset")
+        # elif dataset_name=="folder":
+        #     ref_path = os.path.join(dirs.DATA_HOME, "dataset_refs", ref_path)
         ref_path = os.path.join(dirs.DATA_HOME, "dataset_refs", dataset_name+".pkl")
-    if dist.get_rank() == 0:
-        ref_exists = os.path.isfile(ref_path)
-    if not ref_exists: raise NotImplementedError
-    if dist.get_rank() == 0:
-        ref = calc.load_stats(path=ref_path) # do this first, just in case it fails
+        if dist.get_rank() == 0:
+            ref_exists = os.path.isfile(ref_path)
+        if not ref_exists: raise NotImplementedError
+        if dist.get_rank() == 0:
+            ref = calc.load_stats(path=ref_path) # do this first, just in case it fails
 
     # Get available checkpoints
     checkpoint_filenames = filter_by_string_must(os.listdir(checkpoints_dir), ".pkl")    
@@ -442,6 +555,8 @@ def calculate_metrics_for_checkpoints(
     if fd_metrics:
         metrics = calc.parse_metric_list("fid,fd_dinov2")
         detectors = [calc.get_detector(metric, verbose=verbose) for metric in metrics]
+    if class_metrics:
+        classifier = load_classifier_model("Swin", deterministic=not fd_metrics)
     for i, checkpoint_filenames in enumerate(checkpoint_filenames_by_ema):
         if guidance_weight!=1 and guide_path is not None:
             tag = f" [EMA={ema:.3f}, Guidance={guidance_weight:.2f}]"
@@ -464,16 +579,18 @@ def calculate_metrics_for_checkpoints(
                 temp_dir = os.path.join(checkpoints_dir, "gen_images", checkpoint_filename.split(".pkl")[0])
             else:
                 temp_dir = os.path.join(checkpoints_dir, "gen_images", checkpoint_filename.split(".pkl")[0]+f"_{guidance_weight:.2f}")
-            image_iter = generate_images(checkpoint_filepath, gnet=guide_path, outdir=temp_dir,
-                                         guidance=guidance_weight, class_idx=class_idx, random_class=random_class, 
-                                         seeds=seeds, verbose=verbose, device=device, **final_sampler_kwargs)
-            for _r in tqdm.tqdm(image_iter, unit='batch', disable=(dist.get_rank() != 0)): pass
+            generate_images(checkpoint_filepath, gnet=guide_path, outdir=temp_dir,
+                            guidance=guidance_weight, class_idx=class_idx, random_class=random_class, 
+                            seeds=seeds, verbose=verbose, device=device, **final_sampler_kwargs)
+            
+            # Load dataset
+            dataset = load_dataset(dataset_name=dataset_name, image_path=temp_dir)
             
             # Calculate FID and FD-DINOv2 metrics for generated images
             if fd_metrics:
-                stats_iter = calc.calculate_stats_for_files(dataset_name="folder", image_path=temp_dir,
-                                                            metrics=metrics, detectors=detectors, device=device)
-                for r in tqdm.tqdm(stats_iter, unit='batch', disable=(dist.get_rank() != 0)): pass
+                if class_metrics: torch.use_deterministic_algorithms(False)
+                stats_iter = calc.calculate_stats_for_dataset(dataset, metrics=metrics, detectors=detectors, device=device)
+                calc.use_stats_iterator(stats_iter)
                 if dist.get_rank() == 0:
                     initial_time = time.time()
                     results = calc.calculate_metrics_from_stats(stats=r.stats, ref=ref, metrics=metrics, verbose=verbose)
@@ -485,12 +602,24 @@ def calculate_metrics_for_checkpoints(
                     dist.print0(f"Time to get metrics = {cumulative_time:.2f} sec")
                 torch.distributed.barrier()
 
+            # Reconfigure the dataset to have the appropriate preprocessing
+            transform_kwargs = get_dataset_transform_kwargs("Swin", dataset_name)
+            dataset = set_up_dataset_transform(dataset, **transform_kwargs)
+
             # Calculate classification metrics on the generated images using a pre-trained model 
             if class_metrics:
-                class_results = calculate_classification_metrics(model="Swin", dataset_name="generated", 
-                                                                 image_path=temp_dir, 
-                                                                 batch_size=128, n_samples=None, 
-                                                                 save_period=1, verbose=verbose)
+                if fd_metrics: torch.use_deterministic_algorithms(True)
+
+                # Reconfigure the dataset to have the appropriate preprocessing
+                transform_kwargs = get_dataset_transform_kwargs("Swin", dataset_name)
+                dataset = set_up_dataset_transform(dataset, **transform_kwargs)
+
+                # Get classification scores
+                class_save_dir = get_classification_metrics_dir("Swin", "generated", temp_dir)
+                class_results = get_classification_metrics(classifier, dataset, 
+                                                           n_samples=None, batch_size=128, 
+                                                           save_period=1, save_dir=class_save_dir, 
+                                                           verbose=verbose)
                 top_1_accuracy, top_5_accuracy, confusion_matrix, top_5_correct = class_results
                 if log_to_wandb:
                     wandb_logs.update({f"Swin-L Top-1 Accuracy"+tag: top_1_accuracy,
@@ -536,6 +665,19 @@ def classification_dataset(model, dataset_name, image_path, batch_size, n_sample
     calculate_classification_metrics(model=model, dataset_name=dataset_name, image_path=image_path, 
                                      batch_size=batch_size, n_samples=n_samples, 
                                      save_period=save_period, verbose=verbose);
+
+@cmdline.command()
+@click.option('--path', 'super_dir', help='Path to directory containing generated images datasets', metavar='PATH|ZIP', type=str)
+@click.option('--out', 'metrics_filepath', help='Filepath to .pkl file in which results will be stored', metavar='PATH|ZIP', type=str)
+@click.option('--fd-metrics/--no-fd-metrics', 'fd_metrics',  help='Calculate FID and FD-DINOv2 metrics?', type=bool, default=True, show_default=True)
+@click.option('--class-metrics/--no-class-metrics', 'class_metrics',  help='Calculate classification metric?', type=bool, default=True, show_default=True)
+@click.option('--verbose/--no-verbose', 'verbose',  help='Show prints?', metavar='BOOL', type=bool, default=True, show_default=True)
+def metrics_generated(super_dir, fd_metrics, class_metrics, verbose, metrics_filepath):
+    super_dir = os.path.join(dirs.RESULTS_HOME, "Images", super_dir)
+    metrics_filepath = os.path.join(dirs.RESULTS_HOME, "Images", metrics_filepath)
+    calculate_metrics_for_generated_images(super_dir, fd_metrics=fd_metrics, 
+                                            class_metrics=class_metrics, verbose=verbose,
+                                            metrics_filepath=metrics_filepath);    
 
 @cmdline.command()
 @click.option("--models-dir", "models_dir", help="Relative path to directory containing the model checkpoints", type=str, metavar='PATH', required=True)
