@@ -194,7 +194,7 @@ class StackedRandomGenerator:
 # Returns an iterable that yields
 # EasyDict(images, labels, noise, batch_idx, num_batches, indices, seeds)
 
-def generate_images(
+def get_image_generator(
     net,                                        # Main network. Path, URL, or torch.nn.Module.
     gnet                = None,                 # Guiding network. None = same as main network.
     encoder             = None,                 # Instance of training.encoders.Encoder. None = load from network pickle.
@@ -329,6 +329,29 @@ def generate_images(
 
     return ImageIterable()
 
+def generate_images(
+    net,                                        # Main network. Path, URL, or torch.nn.Module.
+    gnet                = None,                 # Guiding network. None = same as main network.
+    encoder             = None,                 # Instance of training.encoders.Encoder. None = load from network pickle.
+    outdir              = None,                 # Where to save the output images. None = do not save.
+    subdirs             = False,                # Create subdirectory for every 1000 seeds?
+    seeds               = range(16, 24),        # List of random seeds.
+    class_idx           = None,                 # Class label. None = use automatic selection.
+    random_class        = True,                 # Automatic selection can be uniformly random or forced exact distribution.
+    max_batch_size      = 32,                   # Maximum batch size for the diffusion model.
+    encoder_batch_size  = 4,                    # Maximum batch size for the encoder. None = default.
+    verbose             = True,                 # Enable status prints?
+    device              = torch.device('cuda'), # Which compute device to use.
+    sampler_fn          = edm_sampler,          # Which sampler function to use.
+    **sampler_kwargs,                           # Additional arguments for the sampler function.
+):
+    
+    image_generator = get_image_generator(net=net, gnet=gnet, encoder=encoder, outdir=outdir, subdirs=subdirs, 
+                                          seeds=seeds, class_idx=class_idx, random_class=random_class,
+                                          max_batch_size=max_batch_size, encoder_batch_size=encoder_batch_size,
+                                          verbose=verbose, device=device, sampler_fn=sampler_fn, **sampler_kwargs)
+    for _r in tqdm.tqdm(image_generator, unit='batch', disable=(dist.get_rank() != 0)): pass
+
 def visualize_generated_images(generated_images_path, n_images=200, batch_size=100,
                                plot_labels=False, save_dir=None, tight_layout=False):
 
@@ -447,9 +470,7 @@ def cmdline(preset, **opts):
 
     # Generate.
     dist.init()
-    image_iter = generate_images(**opts)
-    for _r in tqdm.tqdm(image_iter, unit='batch', disable=(dist.get_rank() != 0)):
-        pass
+    generate_images(**opts)
 
 #----------------------------------------------------------------------------
 
