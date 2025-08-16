@@ -65,7 +65,7 @@ class HuggingFaceDataset(Dataset):
         
         self._path = path
         self._set_up_huggingface(n_classes, key_image, key_label, cache_dir)
-        self._set_up_transform(transform)
+        self.set_up_transform(transform)
         name, raw_shape = self._infer_name_and_raw_shape(path, name, resolution)
         super().__init__(name=name, raw_shape=raw_shape, **super_kwargs)
     
@@ -83,9 +83,8 @@ class HuggingFaceDataset(Dataset):
             raise ValueError(f"Hugging Face Dataset has no column {self.key_label}")
         
         self.data.set_format(type="torch", columns=[self.key_image,self.key_label])
-        
-    def _set_up_transform(self, transform=None):
 
+    def set_up_transform(self, transform=None):
         if transform is None:
             transform = Identity()
         self.transform = transform
@@ -336,7 +335,7 @@ class GeneratedFolderDataset(TinyImageNetDataset):
     ):
 
         self._path = path
-        self._set_up_transform(transform)
+        self.set_up_transform(transform)
         self._inspect_and_setup_folder(path)
         self._set_up_class_names(names_filename)
         name, raw_shape = self._infer_name_and_raw_shape(path, name, resolution)

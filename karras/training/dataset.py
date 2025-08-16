@@ -196,7 +196,7 @@ class ImageFolderDataset(Dataset):
         **super_kwargs,         # Additional arguments for the Dataset base class.
     ):
         self._inspect_and_setup_folder(path)
-        self._set_up_transform(transform)
+        self.set_up_transform(transform)
         name, raw_shape = self._infer_name_and_raw_shape(path, name, resolution)
         super().__init__(name=name, raw_shape=raw_shape, **super_kwargs)
 
@@ -219,9 +219,8 @@ class ImageFolderDataset(Dataset):
         self._image_fnames = sorted(fname for fname in self._all_fnames if self._file_ext(fname) in supported_ext)
         if len(self._image_fnames) == 0:
             raise IOError('No image files found in the specified path')
-        
-    def _set_up_transform(self, transform=None):
 
+    def set_up_transform(self, transform=None):
         if transform is None:
             transform = Identity()
         self.transform = transform
