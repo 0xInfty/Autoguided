@@ -6,6 +6,10 @@
 
 """Perform post-hoc EMA reconstruction."""
 
+import pyvdirs.dirs as dirs
+import sys
+sys.path.insert(0, dirs.SYSTEM_HOME)
+
 import os
 import re
 import copy
@@ -15,8 +19,8 @@ import tqdm
 import pickle
 import numpy as np
 import torch
-import dnnlib
-import training.phema
+import karras.dnnlib as dnnlib
+import karras.training.phema as phema
 
 warnings.filterwarnings('ignore', 'You are using `torch.load` with `weights_only=False`')
 
@@ -121,7 +125,7 @@ def reconstruct_phema(
             # Loop over batches.
             r = dnnlib.EasyDict(step_idx=0, num_steps=len(self))
             for out_std_batch in out_std_batches:
-                coefs = training.phema.solve_posthoc_coefficients(in_nimg, in_std, out_nimg, out_std_batch)
+                coefs = phema.solve_posthoc_coefficients(in_nimg, in_std, out_nimg, out_std_batch)
                 out = [dnnlib.EasyDict(net=None, nimg=out_nimg, std=std) for std in out_std_batch]
                 r.out = []
 
@@ -244,6 +248,8 @@ def cmdline(in_dir, in_prefix, in_std, out_kimg, **opts):
     if os.environ.get('WORLD_SIZE', '1') != '1':
         raise click.ClickException('Distributed execution is not supported')
     out_nimg = kimg_to_nimg(out_kimg) if out_kimg is not None else None
+    in_dir = os.path.join(dirs.MODELS_HOME, "Images", in_dir)
+    opts["out_dir"] = os.path.join(dirs.MODELS_HOME, "Images", opts["out_dir"])
     in_pkls = list_input_pickles(in_dir=in_dir, in_prefix=in_prefix, in_std=in_std)
     rec_iter = reconstruct_phema(in_pkls=in_pkls, out_nimg=out_nimg, **opts)
     for _r in tqdm.tqdm(rec_iter, unit='step'):
