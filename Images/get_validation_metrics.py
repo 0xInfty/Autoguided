@@ -602,8 +602,8 @@ def calculate_metrics_for_checkpoints(
                     initial_time = time.time()
                     results = calc.calculate_metrics_from_stats(stats=r.stats, ref=ref, metrics=metrics, verbose=verbose)
                     if log_to_wandb:
-                        wandb_logs.update({f"Validation FID"+tag: results["fid"],
-                                           f"Validation FD-DINOv2"+tag: results["fd_dinov2"]})
+                        wandb_logs.update({"Validation FID"+tag: results["fid"],
+                                           "Validation FD-DINOv2"+tag: results["fd_dinov2"]})
                         # run.log(wandb_logs)
                     cumulative_time = time.time() - initial_time
                     dist.print0(f"Time to get metrics = {cumulative_time:.2f} sec")
@@ -625,8 +625,8 @@ def calculate_metrics_for_checkpoints(
                                                            verbose=verbose)
                 top_1_accuracy, top_5_accuracy, confusion_matrix, top_5_correct = class_results
                 if log_to_wandb:
-                    wandb_logs.update({f"Swin-L Top-1 Accuracy"+tag: top_1_accuracy,
-                                       "Swin-L Top-5 Accuracy"+tag: top_5_accuracy})
+                    wandb_logs.update({"Validation Swin-L Top-1 Accuracy"+tag: top_1_accuracy,
+                                       "Validation Swin-L Top-5 Accuracy"+tag: top_5_accuracy})
             
             # Log to W&B
             if log_to_wandb:
