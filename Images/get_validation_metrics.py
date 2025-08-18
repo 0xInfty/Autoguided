@@ -299,7 +299,8 @@ def get_classification_metrics(
     # Create a data loader
     batch_size = min(batch_size, n_samples)
     n_batches = int(math.ceil( n_samples / batch_size ))
-    last_batch_size = max(n_samples % batch_size, batch_size)
+    last_batch_size = n_samples % batch_size
+    if last_batch_size == 0: last_batch_size = batch_size
     data_sampler = InfiniteSampler(dataset, shuffle=False, start_idx=start_idx)
     data_loader = torch.utils.data.DataLoader(dataset, batch_size, shuffle=shuffle,
                                               num_workers=2, pin_memory=True, prefetch_factor=2,
@@ -483,6 +484,7 @@ def calculate_metrics_for_checkpoints(
         chosen_emas = None,             # List of chosen EMAs. Default: use all.
         min_epoch = None,               # Number of epochs to start processing from.
         max_epoch = None,               # Number of epochs to stop processing at.
+        period_epoch = None,            # Sample every period_epoch epochs
         save_nimg = 0,                  # How many images to keep, the rest will be deleted.
         verbose = True,                 # Enable status prints?
         log_to_wandb = True,            # Log to W&B?
@@ -515,13 +517,17 @@ def calculate_metrics_for_checkpoints(
     if min_epoch is not None or max_epoch is not None:
         checkpoint_filenames = np.array(checkpoint_filenames)
         checkpoint_epochs = np.array([abs(find_numbers(f)[0]) for f in checkpoint_filenames], dtype=np.int32)
+        if period_epoch is not None:
+            keep_epochs = checkpoint_epochs%period_epoch==0
+            checkpoint_epochs = checkpoint_epochs[keep_epochs]
+            checkpoint_filenames = checkpoint_filenames[keep_epochs]
         if min_epoch is not None:
             checkpoint_filenames = checkpoint_filenames[checkpoint_epochs >= min_epoch]
             checkpoint_epochs = np.array([abs(find_numbers(f)[0]) for f in checkpoint_filenames], dtype=np.int32)
         if max_epoch is not None:
             checkpoint_filenames = checkpoint_filenames[checkpoint_epochs <= max_epoch]
         checkpoint_filenames = list(checkpoint_filenames)
-    
+
     # Separate by EMA and filter EMAs, if specified
     available_emas = list(set(checkpoint_emas))
     if chosen_emas is None:
@@ -694,11 +700,12 @@ def metrics_generated(super_dir, fd_metrics, class_metrics, verbose, metrics_fil
 @click.option('--emas', help='Chosen EMA length/s', required=False, multiple=True, default=None, show_default=True)
 @click.option('--min-epoch', help='Number of batches at which to start', type=int, required=False, default=None, show_default=True)
 @click.option('--max-epoch', help='Number of batches at which to stop', type=int, required=False, default=None, show_default=True)
+@click.option('--period', help='Period of the number of batches to use for sampling', type=int, required=False, default=None, show_default=True)
 @click.option('--save-nimg', help='Number of generated images to keep', type=int, required=False, default=0, show_default=True)
 @click.option('--seeds', help='List of random seeds (e.g. 1,2,5-10)', metavar='LIST', type=parse_int_list, default='0-1999', show_default=True)
 @click.option('--wandb/--no-wandb', 'log_to_wandb',  help='Log to W&B?', type=bool, default=True, show_default=True)
 def validation(models_dir, dataset_name, ref_path, guide_path, guidance_weight, fd_metrics, class_metrics,
-               random_class, emas, min_epoch, max_epoch, seeds, save_nimg, log_to_wandb):
+               random_class, emas, min_epoch, max_epoch, period, seeds, save_nimg, log_to_wandb):
     models_dir = os.path.join(dirs.MODELS_HOME, "Images", models_dir)
     if ref_path is not None: ref_path = os.path.join(dirs.DATA_HOME, "dataset_refs", ref_path)
     if guide_path is not None: guide_path = os.path.join(dirs.MODELS_HOME, "Images", guide_path)
@@ -709,7 +716,7 @@ def validation(models_dir, dataset_name, ref_path, guide_path, guidance_weight, 
         guide_path=guide_path, guidance_weight=guidance_weight,
         fd_metrics=fd_metrics, class_metrics=class_metrics,
         random_class=random_class, chosen_emas=emas, 
-        min_epoch=min_epoch, max_epoch=max_epoch, seeds=seeds, 
+        min_epoch=min_epoch, max_epoch=max_epoch, period_epoch=period, seeds=seeds, 
         save_nimg=save_nimg, log_to_wandb=log_to_wandb)
 
 if __name__ == "__main__":
