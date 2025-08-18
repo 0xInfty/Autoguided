@@ -398,7 +398,8 @@ def parse_int_list(s):
 @click.option('--net',                      help='Main network pickle filename', metavar='PATH|URL',                type=str, default=None)
 @click.option('--gnet',                     help='Guiding network pickle filename', metavar='PATH|URL',             type=str, default=None)
 @click.option('--outdir',                   help='Where to save the output images', metavar='DIR',                  type=str, default=None, show_default=True)
-@click.option('--results/--no-results',     help='Whether to send output to Results or to Data', metavar='BOOL',    type=bool, default=False, show_default=True)
+@click.option('--results/--no-results',     help='Whether to send output to Results or not', metavar='BOOL',        type=bool, default=False, show_default=True)
+@click.option('--data/--no-data',           help='Whether to send output to Data or not', metavar='BOOL',           type=bool, default=False, show_default=False)
 @click.option('--subdirs',                  help='Create subdirectory for every 1000 seeds',                        is_flag=True)
 @click.option('--seeds',                    help='List of random seeds (e.g. 1,2,5-10)', metavar='LIST',            type=parse_int_list, default='16-19', show_default=True)
 @click.option('--random/--no-random', 'random_class', 
@@ -446,11 +447,15 @@ def cmdline(preset, **opts):
     # Validate options.
     if opts.net is None:
         raise click.ClickException('Please specify either --preset or --net')
+    if dirs.MODELS_HOME not in opts.net:
+        opts.net = os.path.join(dirs.MODELS_HOME, "Images", opts.net)
     if opts.guidance_weight is None or opts.guidance_weight == 1:
         opts.guidance_weight = 1
         opts.gnet = None
     elif opts.gnet is None:
         raise click.ClickException('Please specify --gnet when using guidance')
+    if opts.gnet is not None and dirs.MODELS_HOME not in opts.gnet:
+        opts.gnet = os.path.join(dirs.MODELS_HOME, "Images", opts.gnet)
     
     # Make changes, if needed
     if opts.guidance_weight != 1 and not opts.guidance:
@@ -464,9 +469,13 @@ def cmdline(preset, **opts):
         opts.outdir = os.path.splitext(opts.net)[0].split( models_dir+os.sep )[-1]
     if opts.results:
         opts.outdir = os.path.join(dirs.RESULTS_HOME, "Images", opts.outdir)
-    else: 
+    elif opts.data: 
         opts.outdir = os.path.join(dirs.DATA_HOME, "generated", opts.outdir)
-    del opts.results
+    else:
+        model_name = os.path.splitext( os.path.split(opts.net)[-1] )[0]
+        model_dir = os.path.dirname( opts.net )
+        opts.outdir = os.path.join(model_dir, "gen_images", model_name)
+    del opts.results, opts.data
 
     # Generate.
     dist.init()
