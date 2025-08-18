@@ -592,7 +592,7 @@ def calculate_metrics_for_checkpoints(
                             seeds=seeds, verbose=verbose, device=device, **final_sampler_kwargs)
             
             # Load dataset
-            dataset = load_dataset(dataset_name=dataset_name, image_path=temp_dir)
+            dataset = load_dataset(dataset_name="generated", image_path=temp_dir)
             
             # Calculate FID and FD-DINOv2 metrics for generated images
             if fd_metrics:
@@ -609,16 +609,12 @@ def calculate_metrics_for_checkpoints(
                     dist.print0(f"Time to get metrics = {cumulative_time:.2f} sec")
                 torch.distributed.barrier()
 
-            # Reconfigure the dataset to have the appropriate preprocessing
-            transform_kwargs = get_dataset_transform_kwargs("Swin", dataset_name)
-            dataset = set_up_dataset_transform(dataset, **transform_kwargs)
-
             # Calculate classification metrics on the generated images using a pre-trained model 
             if class_metrics:
                 torch.use_deterministic_algorithms(True)
 
                 # Reconfigure the dataset to have the appropriate preprocessing
-                transform_kwargs = get_dataset_transform_kwargs("Swin", dataset_name)
+                transform_kwargs = get_dataset_transform_kwargs("Swin", "generated")
                 dataset = set_up_dataset_transform(dataset, **transform_kwargs)
 
                 # Get classification scores
