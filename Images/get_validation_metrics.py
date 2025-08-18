@@ -9,6 +9,7 @@ import pickle
 import tqdm
 import click
 import time
+from datetime import datetime
 import math
 import numpy as np
 import torch
@@ -499,7 +500,8 @@ def calculate_metrics_for_checkpoints(
         #     raise ValueError("Reference path needed for unrecognized dataset")
         # elif dataset_name=="folder":
         #     ref_path = os.path.join(dirs.DATA_HOME, "dataset_refs", ref_path)
-        ref_path = os.path.join(dirs.DATA_HOME, "dataset_refs", dataset_name+".pkl")
+        if ref_path is None:
+            ref_path = os.path.join(dirs.DATA_HOME, "dataset_refs", dataset_name+".pkl")
         if dist.get_rank() == 0:
             ref_exists = os.path.isfile(ref_path)
         if not ref_exists: raise NotImplementedError
@@ -545,11 +547,15 @@ def calculate_metrics_for_checkpoints(
     dist.init()
     if log_to_wandb:
         wandb_id = get_wandb_id(checkpoints_dir)
+        if ref_path is not None: 
+            masked_ref = os.path.split(ref_path)[-1]
+        else: masked_ref = None
         run = wandb.init(entity="ajest", project="Images", id=wandb_id, resume="allow",
-            config=dict(validation_kwargs=dict(dataset_name=dataset_name, ref_path=os.path.split(ref_path)[-1], 
-                                            guide_path=guide_path, guidance_weight=guidance_weight,
-                                            class_idx=class_idx, random_class=random_class, 
-                                            seeds=seeds, chosen_emas=chosen_emas)),
+            config=dict(validation_kwargs={datetime.today().strftime('%Y-%m-%d %H:%M:%S'):dict(
+                dataset_name=dataset_name, ref_path=masked_ref, 
+                guide_path=guide_path, guidance_weight=guidance_weight,
+                class_idx=class_idx, random_class=random_class, 
+                seeds=seeds, chosen_emas=chosen_emas, **sampler_kwargs)}),
             settings=wandb.Settings(x_disable_stats=True))
 
     # For each EMA in chosen EMAs, and for each checkpoint inside the directory
@@ -557,7 +563,7 @@ def calculate_metrics_for_checkpoints(
         metrics = calc.parse_metric_list("fid,fd_dinov2")
         detectors = [calc.get_detector(metric, verbose=verbose) for metric in metrics]
     if class_metrics:
-        classifier = load_classifier_model("Swin", deterministic=not fd_metrics)
+        classifier = load_classifier_model("Swin", deterministic=False)
     for i, checkpoint_filenames in enumerate(checkpoint_filenames_by_ema):
         if guidance_weight!=1 and guide_path is not None:
             tag = f" [EMA={ema:.3f}, Guidance={guidance_weight:.2f}]"
@@ -576,6 +582,7 @@ def calculate_metrics_for_checkpoints(
             if verbose: dist.print0(f">>>>> Working on EMA {ema:.3f} and Epoch {checkpoint_epochs}")
 
             # Generate images
+            if class_metrics: torch.use_deterministic_algorithms(False)
             if guidance_weight==1:
                 temp_dir = os.path.join(checkpoints_dir, "gen_images", checkpoint_filename.split(".pkl")[0])
             else:
@@ -589,7 +596,6 @@ def calculate_metrics_for_checkpoints(
             
             # Calculate FID and FD-DINOv2 metrics for generated images
             if fd_metrics:
-                if class_metrics: torch.use_deterministic_algorithms(False)
                 stats_iter = calc.calculate_stats_for_dataset(dataset, metrics=metrics, detectors=detectors, device=device)
                 calc.use_stats_iterator(stats_iter)
                 if dist.get_rank() == 0:
@@ -609,7 +615,7 @@ def calculate_metrics_for_checkpoints(
 
             # Calculate classification metrics on the generated images using a pre-trained model 
             if class_metrics:
-                if fd_metrics: torch.use_deterministic_algorithms(True)
+                torch.use_deterministic_algorithms(True)
 
                 # Reconfigure the dataset to have the appropriate preprocessing
                 transform_kwargs = get_dataset_transform_kwargs("Swin", dataset_name)
