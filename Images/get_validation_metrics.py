@@ -593,9 +593,9 @@ def calculate_metrics_for_checkpoints(
                 temp_dir = os.path.join(checkpoints_dir, "gen_images", checkpoint_filename.split(".pkl")[0])
             else:
                 temp_dir = os.path.join(checkpoints_dir, "gen_images", checkpoint_filename.split(".pkl")[0]+f"_{guidance_weight:.2f}")
-            generate_images(checkpoint_filepath, gnet=guide_path, outdir=temp_dir,
-                            guidance=guidance_weight, class_idx=class_idx, random_class=random_class, 
-                            seeds=seeds, verbose=verbose, device=device, **final_sampler_kwargs)
+            r = generate_images(checkpoint_filepath, gnet=guide_path, outdir=temp_dir,
+                                guidance=guidance_weight, class_idx=class_idx, random_class=random_class, 
+                                seeds=seeds, verbose=verbose, device=device, **final_sampler_kwargs)
             
             # Load dataset
             dataset = load_dataset(dataset_name="generated", image_path=temp_dir)
