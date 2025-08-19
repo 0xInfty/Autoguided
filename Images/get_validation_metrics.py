@@ -593,9 +593,9 @@ def calculate_metrics_for_checkpoints(
                 temp_dir = os.path.join(checkpoints_dir, "gen_images", checkpoint_filename.split(".pkl")[0])
             else:
                 temp_dir = os.path.join(checkpoints_dir, "gen_images", checkpoint_filename.split(".pkl")[0]+f"_{guidance_weight:.2f}")
-            r = generate_images(checkpoint_filepath, gnet=guide_path, outdir=temp_dir,
-                                guidance=guidance_weight, class_idx=class_idx, random_class=random_class, 
-                                seeds=seeds, verbose=verbose, device=device, **final_sampler_kwargs)
+            generate_images(checkpoint_filepath, gnet=guide_path, outdir=temp_dir,
+                            guidance=guidance_weight, class_idx=class_idx, random_class=random_class, 
+                            seeds=seeds, verbose=verbose, device=device, **final_sampler_kwargs)
             
             # Load dataset
             dataset = load_dataset(dataset_name="generated", image_path=temp_dir)
@@ -603,7 +603,7 @@ def calculate_metrics_for_checkpoints(
             # Calculate FID and FD-DINOv2 metrics for generated images
             if fd_metrics:
                 stats_iter = calc.calculate_stats_for_dataset(dataset, metrics=metrics, detectors=detectors, device=device)
-                calc.use_stats_iterator(stats_iter)
+                r = calc.use_stats_iterator(stats_iter)
                 if dist.get_rank() == 0:
                     initial_time = time.time()
                     results = calc.calculate_metrics_from_stats(stats=r.stats, ref=ref, metrics=metrics, verbose=verbose)
