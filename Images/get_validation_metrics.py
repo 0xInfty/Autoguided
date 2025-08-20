@@ -574,7 +574,7 @@ def calculate_metrics_for_checkpoints(
             if class_metrics:
                 wandb_logs.update({f"Swin-L Top-1 Accuracy"+tag: 0., f"Swin-L Top-5 Accuracy"+tag: 0.})
         for checkpoint_filepath in filepaths:
-            checkpoint_dir = os.path.dirname(checkpoint_filepath)
+            checkpoint_dir, checkpoint_filename = os.path.split(checkpoint_filepath)
             if log_to_wandb and checkpoint_dir != open_directory:
                 close_wandb_validation_run(run)
                 open_directory = os.path.dirname(checkpoint_filepaths_by_ema[0][0])
@@ -587,9 +587,9 @@ def calculate_metrics_for_checkpoints(
             # Generate images
             if class_metrics: torch.use_deterministic_algorithms(False)
             if guidance_weight==1:
-                temp_dir = os.path.join(checkpoints_dir, "gen_images", checkpoint_filename.split(".pkl")[0])
+                temp_dir = os.path.join(checkpoint_dir, "gen_images", checkpoint_filename.split(".pkl")[0])
             else:
-                temp_dir = os.path.join(checkpoints_dir, "gen_images", checkpoint_filename.split(".pkl")[0]+f"_{guidance_weight:.2f}")
+                temp_dir = os.path.join(checkpoint_dir, "gen_images", checkpoint_filename.split(".pkl")[0]+f"_{guidance_weight:.2f}")
             generate_images(checkpoint_filepath, gnet=guide_path, outdir=temp_dir,
                             guidance=guidance_weight, class_idx=class_idx, random_class=random_class, 
                             seeds=seeds, verbose=verbose, device=device, **final_sampler_kwargs)
@@ -722,7 +722,7 @@ def metrics_generated(super_dir, fd_metrics, class_metrics, verbose, metrics_fil
 @click.option('--fd-metrics/--no-fd-metrics', 'fd_metrics',  help='Calculate FID and FD-DINOv2 metrics?', type=bool, default=True, show_default=True)
 @click.option('--class-metrics/--no-class-metrics', 'class_metrics',  help='Calculate classification metric?', type=bool, default=True, show_default=True)
 @click.option('--random/--no-random', 'random_class',  help='Use random classes?', type=bool, default=False, show_default=True)
-@click.option('--emas', help='Chosen EMA length/s', metavar='LIST', type=str, required=True, default=None, show_default=True)
+@click.option('--emas', help='Chosen EMA length/s', metavar='LIST', type=str, required=False, default=None, show_default=True)
 @click.option('--min-epoch', help='Number of batches at which to start', type=int, required=False, default=None, show_default=True)
 @click.option('--max-epoch', help='Number of batches at which to stop', type=int, required=False, default=None, show_default=True)
 @click.option('--period', help='Period of the number of batches to use for sampling', type=int, required=False, default=None, show_default=True)

@@ -125,7 +125,7 @@ def calculate_metrics_for_grid_search(
             these_results = {}
             guidance_weight_str = f"guidance={guidance_weight:.3f}"
             checkpoint_filepath = os.path.join(super_dir, filepath)
-            if verbose: dist.print0(f">>>>> Working on EMA {ema_str} and Guidance Weight {guidance_weight_str}")
+            if verbose: dist.print0(f">>>>> Working on {ema_str} and {guidance_weight_str}")
 
             # Generate images
             if class_metrics: torch.use_deterministic_algorithms(False)
