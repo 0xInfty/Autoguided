@@ -4,6 +4,7 @@ import os
 sys.path.insert(0, dirs.SYSTEM_HOME)
 sys.path.insert(0, os.path.join(dirs.SYSTEM_HOME, "ToyExample"))
 
+import json
 import shutil
 import numpy as np
 import torch
@@ -88,6 +89,42 @@ def is_sample_in_fractal(samples, ground_truth_distribution, sigma=0):
     logp = ground_truth_distribution.logp(samples, sigma=sigma)
 
     return logp >= GT_LOGP_LEVEL
+
+### Directories ##################################################################################
+
+def get_training_params(checkpoints_dir):
+
+    filepath = os.path.join(checkpoints_dir, "training_options.json")
+    with open(filepath, "rb") as f:
+        params = json.load(f)
+    return params
+
+def get_final_state(checkpoints_dir):
+
+    contents = os.listdir(checkpoints_dir)
+    contents = filter_by_string_must(contents, "training-state")
+    contents.sort()
+    filepath = os.path.join(checkpoints_dir, contents[-1])
+
+    data = torch.load(filepath, map_location=torch.device('cpu'), weights_only=False)
+
+    return data["state"]
+
+def get_nimg(n_epochs, batch_size, mini_batch_size=None, selection=False,
+             early=False, late=False, change_epoch=None, change_nimg=None):
+    
+    if selection and mini_batch_size is None: 
+        raise ValueError("Mini batch size required if data selection was used")
+
+    if selection:
+        if early:
+            return int((n_epochs - change_epoch) * batch_size + change_nimg)
+        elif late:
+            return int((n_epochs - change_epoch) * mini_batch_size + change_nimg)
+        else:
+            return n_epochs * mini_batch_size
+    else:
+        return n_epochs * batch_size
 
 ### Tools for Weights & Biases ###################################################################
 
@@ -194,7 +231,7 @@ def find_all_indices(value, list_of_values):
     is_here = [v == value for v in list_of_values]
     return [int(i) for i in np.where(is_here)[0]]
 
-#%% IMAGE PROCESSING
+### Image processing ##############################################################################
 
 def upsample(image_size, image):
 

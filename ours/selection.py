@@ -106,16 +106,29 @@ def get_selection_size(full_size, **selection_kwargs):
         selection_kwargs = EasyDict(selection_kwargs)
 
     if "jointly_sample_batch" in selection_kwargs.func_name:
-
         # Each mini-batch of size b will be split in n chunks
         b_over_N = int(full_size * (1 - selection_kwargs.filter_ratio) / selection_kwargs.N) # Size b/N of each mini-batch chunk
         b = b_over_N * selection_kwargs.N # Size of the full mini-batch
         return b
-
     elif "random_baseline" in selection_kwargs.func_name:
-
         b = int(full_size * (1 - selection_kwargs.filter_ratio))
-        return b
-    
+        return b    
     else:
         raise NotImplementedError
+
+def infer_selection_params(params):
+
+    batch_size = params["batch_size"]
+    batch_gpu = params["batch_gpu"]
+    selection_kwargs = params["selection_kwargs"]
+
+    mini_batch_gpu = get_selection_size(batch_gpu, **selection_kwargs)
+    mini_batch_size = int( mini_batch_gpu * batch_size / batch_gpu )
+
+    selection = params["selection"] or False
+    
+    early = params["selection_early"] or False
+    late = params["selection_late"] or False
+
+    return {"selection":selection, "early":early, "late":late,
+            "mini_batch_size":mini_batch_size, "batch_size":batch_size}

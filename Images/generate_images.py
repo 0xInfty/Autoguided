@@ -351,6 +351,7 @@ def generate_images(
                                           max_batch_size=max_batch_size, encoder_batch_size=encoder_batch_size,
                                           verbose=verbose, device=device, sampler_fn=sampler_fn, **sampler_kwargs)
     for _r in tqdm.tqdm(image_generator, unit='batch', disable=(dist.get_rank() != 0)): pass
+    return _r
 
 def visualize_generated_images(generated_images_path, n_images=200, batch_size=100,
                                plot_labels=False, save_dir=None, tight_layout=False):
