@@ -25,7 +25,39 @@ api = wandb.Api()
 
 sns.set_theme(style="darkgrid")
 
-def download_metrics(run_ids, output_filepath, max_epochs=None, page_size=100, n_ranks=2):
+def download_training_metrics(run_ids, output_filepath, max_epochs=None, page_size=100, n_ranks=2, 
+                              selection=False):
+    wait_for_trigger = max_epochs is not None
+
+    # Configuration
+    metrics = ["Epoch", "Loss", "Seen images [kimg]", "Training time [sec]"]
+    if selection:
+        metrics += ["Epoch Super-Batch Learner Loss",
+                    "Epoch Super-Batch Reference Loss",
+                    "Selection time [sec]"]
+
+    # Download data
+    history = []
+    for run_id in run_ids:
+        run = api.run(f"ajest/Images/{run_id}")
+        hist = run.scan_history(keys=metrics, page_size=page_size)
+        history.append(hist)
+
+    # Save data to CSV file
+    with open(output_filepath, mode='w', newline='') as file:
+        writer = csv.writer(file)
+
+        # Write header
+        writer.writerow(["Rank"] + metrics)
+        
+        # Write one image index on each row
+        for epoch_i, rank_rows in enumerate(tqdm.tqdm(zip(*history))):
+            if wait_for_trigger and epoch_i >= max_epochs: break
+            print(rank_rows[0])
+            for rank_i in range(n_ranks):
+                writer.writerow([rank_i]+[rank_rows[rank_i][k] for k in metrics])
+
+def download_selection_indices(run_ids, output_filepath, max_epochs=None, page_size=100, n_ranks=2):
     wait_for_trigger = max_epochs is not None
 
     # Download data
@@ -193,10 +225,20 @@ def cmdline():
 @click.option('--runs',       help='W&B run IDs, as many as GPUs used', metavar='STR',  type=str, multiple=True, required=True)
 @click.option('--dest',       help='Relative path to output CSV file', metavar='PATH',   type=str, required=True)
 @click.option('--maxn',       help='Maximum number of epochs to store', metavar='INT', type=int, required=False, default=None, show_default=True)
+@click.option('--selection/--no-selection',   help='Search for data selection loss?', metavar='BOOL', type=bool, default=False, show_default=True)
 
-def download(runs, dest, maxn):
+def download_loss(runs, dest, maxn, selection):
     dest = os.path.join(dirs.MODELS_HOME, dest)
-    download_metrics(runs, dest, max_epochs=maxn)
+    download_training_metrics(runs, dest, max_epochs=maxn, selection=selection)
+
+@cmdline.command()
+@click.option('--runs',       help='W&B run IDs, as many as GPUs used', metavar='STR',  type=str, multiple=True, required=True)
+@click.option('--dest',       help='Relative path to output CSV file', metavar='PATH',   type=str, required=True)
+@click.option('--maxn',       help='Maximum number of epochs to store', metavar='INT', type=int, required=False, default=None, show_default=True)
+
+def download_indices(runs, dest, maxn):
+    dest = os.path.join(dirs.MODELS_HOME, dest)
+    download_selection_indices(runs, dest, max_epochs=maxn)
 
 @cmdline.command()
 @click.option('--source',     help='Relative path to input CSV file', metavar='STR', type=str, required=True)
@@ -214,7 +256,7 @@ def download(runs, dest, maxn):
 @click.option('--per-round/--no-per-round',   help='Show selected images per round', metavar='BOOL', type=bool, default=False)
 @click.option('--per-iter/--no-per-iter',     help='Show selected images per iteration', metavar='BOOL', type=bool, default=False)
 
-def visualize(source, dataset, seln, maxn, period, inc, images, labels, histograms, per_round, per_iter):
+def visualize_indices(source, dataset, seln, maxn, period, inc, images, labels, histograms, per_round, per_iter):
     source = os.path.join(dirs.MODELS_HOME, source)
     visualize_selection(dataset, source, ajest_N=seln, 
                         show_images=images, show_labels=labels, show_histograms=histograms,
