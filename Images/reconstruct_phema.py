@@ -22,13 +22,16 @@ import torch
 import karras.dnnlib as dnnlib
 import karras.training.phema as phema
 
+from ours.utils import get_final_state, get_nimg, get_training_params
+from ours.selection import infer_selection_params
+
 warnings.filterwarnings('ignore', 'You are using `torch.load` with `weights_only=False`')
 
 #----------------------------------------------------------------------------
 # Construct the full path of a network pickle.
 
-def pkl_path(dir, prefix, nimg, std):
-    name = prefix + f'-{nimg//1000:07d}-{std:.3f}.pkl'
+def pkl_path(dir, prefix, epoch, std):
+    name = prefix + f'-{epoch:07d}-{std:.3f}.pkl'
     if dir is None:
         return None
     if dnnlib.util.is_url(dir):
@@ -56,6 +59,14 @@ def list_input_pickles(
         raise click.ClickException('Input directory does not exist')
     in_std = set(in_std) if in_std is not None else None
 
+    state = get_final_state(in_dir)
+    state_selection_keys = ["change_epoch", "change_nimg"]
+    selection_kwargs = {k:state[k] for k in state_selection_keys}
+
+    params = get_training_params(in_dir)
+    selection_params = infer_selection_params(params)
+    selection_kwargs.update( selection_params )
+
     pkls = []
     with os.scandir(in_dir) as it:
         for e in it:
@@ -63,13 +74,14 @@ def list_input_pickles(
             if not m or not e.is_file():
                 continue
             prefix = m.group(1)
-            nimg = kimg_to_nimg(int(m.group(2)))
+            n_epochs = int(m.group(2))
+            nimg = get_nimg(n_epochs, **selection_kwargs)
             std = float(m.group(3))
             if in_prefix is not None and prefix != in_prefix:
                 continue
             if in_std is not None and std not in in_std:
                 continue
-            pkls.append(dnnlib.EasyDict(path=e.path, nimg=nimg, std=std))
+            pkls.append(dnnlib.EasyDict(path=e.path, epoch=n_epochs, nimg=nimg, std=std))
     pkls = sorted(pkls, key=lambda pkl: (pkl.nimg, pkl.std))
     return pkls
 
@@ -81,32 +93,36 @@ def list_input_pickles(
 def reconstruct_phema(
     in_pkls,                    # List of input pickles, expressed as dnnlib.EasyDict(path, nimg, std).
     out_std,                    # List of relative standard deviations to reconstruct.
-    out_nimg        = None,     # Training time of the snapshot to reconstruct. None = highest input time.
+    out_epoch       = None,     # Epoch of the snapshot to reconstruct. None = highest input time.
+    out_n_epochs    = None,     # Number of epochs to reconstruct. None = highest input time.
     out_dir         = None,     # Where to save the reconstructed network pickles. None = do not save.
+    in_prefix       = 'network-snapshot', # Input filename prefix.
     out_prefix      = 'phema',  # Output filename prefix.
     skip_existing   = False,    # Skip output files that already exist?
     max_batch_size  = 8,        # Maximum simultaneous reconstructions
     verbose         = True,     # Enable status prints?
 ):
     # Validate input pickles.
-    if out_nimg is None:
-        out_nimg = max((pkl.nimg for pkl in in_pkls), default=0)
-    elif not any(out_nimg == pkl.nimg for pkl in in_pkls):
+    if out_epoch is None:
+        out_epoch = max((pkl.epoch for pkl in in_pkls), default=0)
+    elif not any(out_epoch == pkl.epoch for pkl in in_pkls):
         raise click.ClickException('Reconstruction time must match one of the input pickles')
-    in_pkls = [pkl for pkl in in_pkls if 0 < pkl.nimg <= out_nimg]
+    out_nimg = [pkl.nimg for pkl in in_pkls][ [pkl.epoch for pkl in in_pkls].index(out_epoch) ]
+    in_pkls = [pkl for pkl in in_pkls if 0 < pkl.epoch <= out_epoch]
     if len(in_pkls) == 0:
         raise click.ClickException('No valid input pickles found')
     in_nimg = [pkl.nimg for pkl in in_pkls]
     in_std = [pkl.std for pkl in in_pkls]
     if verbose:
         print(f'Loading {len(in_pkls)} input pickles...')
-        for pkl in in_pkls:
-            print('    ' + pkl.path)
+        # for pkl in in_pkls: print('    ' + pkl.path)
 
     # Determine output pickles.
     out_std = [out_std] if isinstance(out_std, float) else sorted(set(out_std))
     if skip_existing and out_dir is not None:
-        out_std = [std for std in out_std if not os.path.isfile(pkl_path(out_dir, out_prefix, out_nimg, std))]
+        out_std = [std for std in out_std if not os.path.isfile(pkl_path(out_dir, out_prefix, out_epoch, std))]
+        out_std = [std for std in out_std if not os.path.isfile(pkl_path(out_dir, in_prefix, out_epoch, std))]
+    if len(out_std)==0: return None
     num_batches = (len(out_std) - 1) // max_batch_size + 1
     out_std_batches = np.array_split(out_std, num_batches)
     if verbose:
@@ -114,7 +130,7 @@ def reconstruct_phema(
         for i, batch in enumerate(out_std_batches):
             for std in batch:
                 print(f'    batch {i}: ', end='')
-                print(pkl_path(out_dir, out_prefix, out_nimg, std) if out_dir is not None else pkl_path('', '<yield>', out_nimg, std))
+                print(pkl_path(out_dir, out_prefix, out_epoch, std) if out_dir is not None else pkl_path('', '<yield>', out_epoch, std))
 
     # Return an iterable over the reconstruction steps.
     class ReconstructionIterable:
@@ -125,8 +141,8 @@ def reconstruct_phema(
             # Loop over batches.
             r = dnnlib.EasyDict(step_idx=0, num_steps=len(self))
             for out_std_batch in out_std_batches:
-                coefs = phema.solve_posthoc_coefficients(in_nimg, in_std, out_nimg, out_std_batch)
-                out = [dnnlib.EasyDict(net=None, nimg=out_nimg, std=std) for std in out_std_batch]
+                coefs = phema.solve_posthoc_coefficients(in_nimg, in_std, out_nimg, out_std_batch) # Ugh, this uses nimg, but I've been saving my files using epochs instead of nimg
+                out = [dnnlib.EasyDict(net=None, nimg=out_nimg, epoch=out_epoch, std=std) for std in out_std_batch]
                 r.out = []
 
                 # Loop over input pickles.
@@ -151,7 +167,7 @@ def reconstruct_phema(
                     if i == len(in_pkls) - 1:
                         for j in range(len(out)):
                             out[j].net.to(torch.float16)
-                            out[j].pkl_path = pkl_path(out_dir, out_prefix, out_nimg, out[j].std)
+                            out[j].pkl_path = pkl_path(out_dir, out_prefix, out_epoch, out[j].std)
                             if out[j].pkl_path is not None:
                                 os.makedirs(out_dir, exist_ok=True)
                                 with open(out[j].pkl_path, 'wb') as f:
@@ -212,15 +228,15 @@ def parse_std_list(s):
 @click.option('--inprefix', 'in_prefix',    help='Filter inputs based on filename prefix', metavar='STR',           type=str, default=None)
 @click.option('--instd', 'in_std',          help='Filter inputs based on standard deviations', metavar='LIST',      type=parse_std_list, default=None)
 
-@click.option('--outdir', 'out_dir',        help='Where to save the reconstructed network pickles', metavar='DIR',  type=str, required=True)
+@click.option('--outdir', 'out_dir',        help='Where to save the reconstructed network pickles', metavar='DIR',  type=str, default=None, show_default=None)
 @click.option('--outprefix', 'out_prefix',  help='Output filename prefix', metavar='STR',                           type=str, default='phema', show_default=True)
 @click.option('--outstd', 'out_std',        help='List of desired relative standard deviations', metavar='LIST',    type=parse_std_list, required=True)
-@click.option('--outkimg', 'out_kimg',      help='Training time of the snapshot to reconstruct', metavar='KIMG',    type=click.IntRange(min=1), default=None)
+@click.option('--out-epoch', 'out_epoch',    help='Epoch of the snapshot to reconstruct', metavar='INT',            type=click.IntRange(min=1), default=None)
 
 @click.option('--skip', 'skip_existing',    help='Skip output files that already exist',                            is_flag=True)
 @click.option('--batch', 'max_batch_size',  help='Maximum simultaneous reconstructions', metavar='INT',             type=click.IntRange(min=1), default=8, show_default=True)
 
-def cmdline(in_dir, in_prefix, in_std, out_kimg, **opts):
+def cmdline(in_dir, in_prefix, in_std, out_epoch, **opts):
     """Perform post-hoc EMA reconstruction.
 
     Examples:
@@ -247,13 +263,14 @@ def cmdline(in_dir, in_prefix, in_std, out_kimg, **opts):
     """
     if os.environ.get('WORLD_SIZE', '1') != '1':
         raise click.ClickException('Distributed execution is not supported')
-    out_nimg = kimg_to_nimg(out_kimg) if out_kimg is not None else None
     in_dir = os.path.join(dirs.MODELS_HOME, "Images", in_dir)
-    opts["out_dir"] = os.path.join(dirs.MODELS_HOME, "Images", opts["out_dir"])
+    if opts["out_dir"] is not None:
+        opts["out_dir"] = os.path.join(dirs.MODELS_HOME, "Images", opts["out_dir"])
+    else: opts["out_dir"] = in_dir
     in_pkls = list_input_pickles(in_dir=in_dir, in_prefix=in_prefix, in_std=in_std)
-    rec_iter = reconstruct_phema(in_pkls=in_pkls, out_nimg=out_nimg, **opts)
-    for _r in tqdm.tqdm(rec_iter, unit='step'):
-        pass
+    rec_iter = reconstruct_phema(in_pkls=in_pkls, out_epoch=out_epoch, **opts)
+    if rec_iter is not None:
+        for _r in tqdm.tqdm(rec_iter, unit='step'): pass
 
 #----------------------------------------------------------------------------
 
