@@ -391,7 +391,7 @@ def calculate_metrics_for_generated_images(super_dir, fd_metrics=True,
     # each generated images dataset is assumed to be inside a folder inside the main directory
     series = os.listdir(super_dir)
     series = [s for s in series if os.path.isdir(os.path.join(super_dir, s))]
-    series = filter_by_string_must(series, ["visualize", "class_metrics"], must=False)
+    series = filter_by_string_must(series, ["visualize", "class_metrics", "grid_search"], must=False)
 
     if fd_metrics:
 

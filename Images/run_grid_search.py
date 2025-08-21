@@ -183,11 +183,10 @@ def calculate_metrics_for_grid_search(
         
             # Save these results
             results[ema_str][guidance_weight_str] = dict(**these_results)
+            results[ema_str][guidance_weight_str] = dict(test="testingtesting")
             if dist.get_rank()==0:
-                with open(os.path.join(super_dir, metrics_filepath), 'wt') as f:
+                with open(os.path.join(metrics_filepath), 'wt') as f:
                     json.dump(results, f, indent=2)
-            
-            return results
 
     return results
 
