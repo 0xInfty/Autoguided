@@ -128,6 +128,7 @@ def calculate_metrics_for_grid_search(
             if verbose: dist.print0(f">>>>> Working on {ema_str} and {guidance_weight_str}")
 
             # Generate images
+            generated = False
             if class_metrics: torch.use_deterministic_algorithms(False)
             if guidance_weight==1:
                 temp_dir = os.path.join(super_dir, "gen_images", filepath.split(".pkl")[0])
@@ -137,13 +138,26 @@ def calculate_metrics_for_grid_search(
                 generate_images(checkpoint_filepath, gnet=guide_path, outdir=temp_dir,
                                 guidance=guidance_weight, class_idx=class_idx, random_class=random_class, 
                                 seeds=seeds, verbose=verbose, device=device, **final_sampler_kwargs)
+                generated = True
             
             # Load dataset
-            dataset = valm.load_dataset(dataset_name="generated", image_path=temp_dir)
+            # dataset = valm.load_dataset(dataset_name="generated", image_path=temp_dir)
+            #TODO: Fix this too, when I fix calculate_metrics_for_checkpoints
             
             # Calculate FID and FD-DINOv2 metrics for generated images
             if fd_metrics:
-                stats_iter = calc.calculate_stats_for_dataset(dataset, metrics=metrics, detectors=detectors, device=device)
+                if class_metrics and not generated: torch.use_deterministic_algorithms(False)
+
+                # Load dataset
+                # dataset_kwargs = get_dataset_kwargs("folder", image_path=temp_dir)
+                # dataset = construct_class_by_name(**dataset_kwargs, max_size=len(seeds), random_seed=0)
+                # transform_kwargs = get_dataset_transform_kwargs("Karras", "folder")
+                # dataset = load_dataset(dataset_name="folder", image_path=temp_dir, **transform_kwargs)
+
+                # Calculate metrics
+                # stats_iter = calc.calculate_stats_for_dataset(dataset, metrics=metrics, detectors=detectors, device=device)
+                stats_iter = calc.calculate_stats_for_files(dataset_name="folder", image_path=temp_dir,
+                                                            metrics=metrics, detectors=detectors, device=device)
                 r = calc.use_stats_iterator(stats_iter)
                 if dist.get_rank() == 0:
                     initial_time = time.time()
@@ -159,7 +173,9 @@ def calculate_metrics_for_grid_search(
 
                 # Reconfigure the dataset to have the appropriate preprocessing
                 transform_kwargs = valm.get_dataset_transform_kwargs("Swin", "generated")
-                dataset = valm.set_up_dataset_transform(dataset, **transform_kwargs)
+                dataset = valm.load_dataset(dataset_name="generated", image_path=temp_dir, **transform_kwargs)
+                # transform_kwargs = get_dataset_transform_kwargs("Swin", "generated")
+                # dataset = set_up_dataset_transform(dataset, **transform_kwargs)
 
                 # Get classification scores
                 class_save_dir = valm.get_classification_metrics_dir("Swin", "generated", temp_dir)
