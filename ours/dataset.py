@@ -343,7 +343,7 @@ class GeneratedFolderDataset(TinyImageNetDataset):
         words_filepath = os.path.join(dirs.DATA_HOME, "zh-plus___tiny-imagenet", words_filename)
         self._set_up_class_words(words_filepath)
 
-    def _inspect_and_setup_folder(self, path): # From karras.training.ImageFolderDataset
+    def _inspect_and_setup_folder(self, path): # From karras.training.ImageFolderDataset # Checked
 
         self._path = path
         self._zipfile = None
@@ -363,7 +363,7 @@ class GeneratedFolderDataset(TinyImageNetDataset):
         if len(self._image_fnames) == 0:
             raise IOError('No image files found in the specified path')
 
-    def _set_up_raw_labels(self): # From karras.training.Dataset
+    def _set_up_raw_labels(self): # From karras.training.Dataset # Checked
         self._raw_labels = self._load_raw_labels() if self._use_labels else None
         if self._raw_labels is None:
             self._raw_labels = np.zeros([self._raw_shape[0], 0], dtype=np.float32)
@@ -385,7 +385,7 @@ class GeneratedFolderDataset(TinyImageNetDataset):
     def class_names(self):
         return self._class_names
 
-    def _infer_name_and_raw_shape(self, path, name=None, resolution=None): # Original from this class
+    def _infer_name_and_raw_shape(self, path, name=None, resolution=None): # From karras.training.ImageFolderDataset # Checked
 
         name = name or os.path.splitext(os.path.basename(path))[-1]
         raw_shape = [len(self._image_fnames)] + list(self._load_raw_image(0).shape)
@@ -395,39 +395,39 @@ class GeneratedFolderDataset(TinyImageNetDataset):
         return name, raw_shape
 
     @staticmethod
-    def _file_ext(fname): # From karras.training.ImageFolderDataset
+    def _file_ext(fname): # From karras.training.ImageFolderDataset # Checked
         return os.path.splitext(fname)[1].lower()
 
-    def _get_zipfile(self): # From karras.training.ImageFolderDataset
+    def _get_zipfile(self): # From karras.training.ImageFolderDataset # Checked
         assert self._type == 'zip'
         if self._zipfile is None:
             self._zipfile = zipfile.ZipFile(self._path)
         return self._zipfile
 
-    def _open_file(self, fname): # From karras.training.ImageFolderDataset
+    def _open_file(self, fname): # From karras.training.ImageFolderDataset # Checked
         if self._type == 'dir':
             return open(os.path.join(self._path, fname), 'rb')
         if self._type == 'zip':
             return self._get_zipfile().open(fname, 'r')
         return None
 
-    def close(self): # From karras.training.ImageFolderDataset
+    def close(self): # From karras.training.ImageFolderDataset # Checked
         try:
             if self._zipfile is not None:
                 self._zipfile.close()
         finally:
             self._zipfile = None
 
-    def __del__(self): # From karras.training.ImageFolderDataset
+    def __del__(self): # From karras.training.ImageFolderDataset # Checked
         try:
             self.close()
         except:
             pass
 
-    def __getstate__(self): # From karras.training.ImageFolderDataset
+    def __getstate__(self): # From karras.training.ImageFolderDataset # Checked
         return dict(super().__getstate__(), _zipfile=None)
 
-    def _load_raw_image(self, raw_idx): # From karras.training.ImageFolderDataset
+    def _load_raw_image(self, raw_idx): # From karras.training.ImageFolderDataset # Checked
         fname = self._image_fnames[raw_idx]
         ext = self._file_ext(fname)
         with self._open_file(fname) as f:
@@ -437,7 +437,6 @@ class GeneratedFolderDataset(TinyImageNetDataset):
             else:
                 image = np.array(PIL.Image.open(f))
                 image = image.reshape(*image.shape[:2], -1).transpose(2, 0, 1)
-        image = torch.Tensor(image).float() # Addition to the original method
         return image
 
     def _load_raw_labels(self): # Original from this class
