@@ -632,7 +632,9 @@ def calculate_metrics_for_checkpoints(
 
                 # Reconfigure the dataset to have the appropriate preprocessing
                 transform_kwargs = get_dataset_transform_kwargs("Swin", "generated")
-                dataset = set_up_dataset_transform(dataset, **transform_kwargs)
+                dataset = load_dataset(dataset_name="generated", image_path=temp_dir, **transform_kwargs)
+                # transform_kwargs = get_dataset_transform_kwargs("Swin", "generated")
+                # dataset = set_up_dataset_transform(dataset, **transform_kwargs)
 
                 # Get classification scores
                 class_save_dir = get_classification_metrics_dir("Swin", "generated", temp_dir)
