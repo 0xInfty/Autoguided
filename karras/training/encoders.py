@@ -57,7 +57,7 @@ class FromNumpyToTorch(torch.nn.Module):
             img = torch.Tensor( img.swapaxes(2,1).swapaxes(1,0) )
         else: img = torch.Tensor( img )
         if device is not None:
-            return img.to(device)
+            return img.to(device).to(torch.float32)
         else: return img
 
 class Identity(torch.nn.Module):
