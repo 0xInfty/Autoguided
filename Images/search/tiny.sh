@@ -9,5 +9,5 @@ ema=0.150
 # device=1 --> emas in [0.05, 0.07, 0.09, 0.11, 0.13, 0.15]
 # --> output="grid_search_0_0.json"
 
-output_filepath="06_CorrectEMA/Random/00/grid_search_"$device"_"$ema".json"
+output_filepath=$maindir"/grid_search/grid_search_"$device"_"$ema".json"
 CUDA_VISIBLE_DEVICES=$device python Images/run_grid_search.py --emas=$ema --guidance-weights=$guidance_weights --super-dir=$maindir --guide-path=$refdir --out-epoch=$epoch --out-filepath=$output_filepath
