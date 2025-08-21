@@ -590,9 +590,10 @@ def calculate_metrics_for_checkpoints(
                 temp_dir = os.path.join(checkpoint_dir, "gen_images", checkpoint_filename.split(".pkl")[0])
             else:
                 temp_dir = os.path.join(checkpoint_dir, "gen_images", checkpoint_filename.split(".pkl")[0]+f"_{guidance_weight:.2f}")
-            generate_images(checkpoint_filepath, gnet=guide_path, outdir=temp_dir,
-                            guidance=guidance_weight, class_idx=class_idx, random_class=random_class, 
-                            seeds=seeds, verbose=verbose, device=device, **final_sampler_kwargs)
+            if not os.path.isdir(temp_dir) or len(os.listdir(temp_dir)) != len(seeds):
+                generate_images(checkpoint_filepath, gnet=guide_path, outdir=temp_dir,
+                                guidance=guidance_weight, class_idx=class_idx, random_class=random_class, 
+                                seeds=seeds, verbose=verbose, device=device, **final_sampler_kwargs)
             
             # Load dataset
             dataset = load_dataset(dataset_name="generated", image_path=temp_dir)
@@ -666,7 +667,6 @@ def calculate_metrics_for_all_checkpoints(
     # Get available checkpoints
     checkpoint_filenames = filter_by_string_must(os.listdir(checkpoints_dir), ".pkl")    
     checkpoint_filenames = filter_by_string_must(checkpoint_filenames, "0000000", must=False) # Skip randomly initialized networks
-    checkpoint_emas = [abs(find_numbers(f)[-1]) for f in checkpoint_filenames]
     if min_epoch is not None or max_epoch is not None:
         checkpoint_filenames = np.array(checkpoint_filenames)
         checkpoint_epochs = np.array([abs(find_numbers(f)[0]) for f in checkpoint_filenames], dtype=np.int32)
