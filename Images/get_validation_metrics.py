@@ -28,7 +28,7 @@ from karras.torch_utils.misc import InfiniteSampler
 from jeevan.wavemix.classification import WaveMix
 from generate_images import DEFAULT_SAMPLER, generate_images, parse_int_list
 import calculate_metrics as calc
-from ours.dataset import DATASET_OPTIONS
+from ours.dataset import DATASET_OPTIONS, get_dataset_kwargs
 from ours.utils import get_wandb_id
 
 #----------------------------------------------------------------------------
@@ -585,22 +585,36 @@ def calculate_metrics_for_checkpoints(
             if verbose: dist.print0(f">>>>> Working on EMA {ema:.3f} and Epoch {checkpoint_epochs}")
 
             # Generate images
-            if class_metrics: torch.use_deterministic_algorithms(False)
+            generated = False
             if guidance_weight==1:
                 temp_dir = os.path.join(checkpoint_dir, "gen_images", checkpoint_filename.split(".pkl")[0])
             else:
                 temp_dir = os.path.join(checkpoint_dir, "gen_images", checkpoint_filename.split(".pkl")[0]+f"_{guidance_weight:.2f}")
             if not os.path.isdir(temp_dir) or len(os.listdir(temp_dir)) != len(seeds):
+                if class_metrics: torch.use_deterministic_algorithms(False)
                 generate_images(checkpoint_filepath, gnet=guide_path, outdir=temp_dir,
                                 guidance=guidance_weight, class_idx=class_idx, random_class=random_class, 
                                 seeds=seeds, verbose=verbose, device=device, **final_sampler_kwargs)
+                generated = True
             
             # Load dataset
-            dataset = load_dataset(dataset_name="generated", image_path=temp_dir)
+            # dataset = load_dataset(dataset_name="generated", image_path=temp_dir)
             
             # Calculate FID and FD-DINOv2 metrics for generated images
             if fd_metrics:
-                stats_iter = calc.calculate_stats_for_dataset(dataset, metrics=metrics, detectors=detectors, device=device)
+                if class_metrics and not generated: torch.use_deterministic_algorithms(False)
+
+                # Load dataset
+                # dataset_kwargs = get_dataset_kwargs("folder", image_path=temp_dir)
+                # dataset = construct_class_by_name(**dataset_kwargs, max_size=len(seeds), random_seed=0)
+                # transform_kwargs = get_dataset_transform_kwargs("Karras", "folder")
+                # dataset = load_dataset(dataset_name="folder", image_path=temp_dir, **transform_kwargs)
+                #TODO: Figure out why I can't replace this guy with "generated" dataset
+
+                # Calculate metrics
+                # stats_iter = calc.calculate_stats_for_dataset(dataset, metrics=metrics, detectors=detectors, device=device)
+                stats_iter = calc.calculate_stats_for_files(dataset_name="folder", image_path=temp_dir,
+                                                            metrics=metrics, detectors=detectors, device=device)
                 r = calc.use_stats_iterator(stats_iter)
                 if dist.get_rank() == 0:
                     initial_time = time.time()
@@ -608,7 +622,6 @@ def calculate_metrics_for_checkpoints(
                     if log_to_wandb:
                         wandb_logs.update({"Validation FID"+tag: results["fid"],
                                            "Validation FD-DINOv2"+tag: results["fd_dinov2"]})
-                        # run.log(wandb_logs)
                     cumulative_time = time.time() - initial_time
                     dist.print0(f"Time to get metrics = {cumulative_time:.2f} sec")
                 torch.distributed.barrier()
