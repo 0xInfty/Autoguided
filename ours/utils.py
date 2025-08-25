@@ -126,23 +126,31 @@ def get_nimg(n_epochs, batch_size, mini_batch_size=None, selection=False,
     else:
         return n_epochs * batch_size
     
-def get_time(n_epochs, sec_per_batch, selection_sec_per_batch=None, selection=False,
+def get_time(n_epochs, sec_per_epoch, selection_sec_per_epoch=None, selection=False,
              early=False, late=False, change_epoch=None, **kwargs):
     
-    if selection and selection_sec_per_batch is None: 
+    if selection and selection_sec_per_epoch is None: 
         raise ValueError("Mini batch size required if data selection was used")
+    if selection and selection_sec_per_epoch < sec_per_epoch:
+        raise ValueError("Speed seems to be inverted")
 
     if selection:
         if early:
-            change_time = change_epoch / selection_sec_per_batch
-            return (n_epochs - change_epoch) / sec_per_batch + change_time
+            if n_epochs < change_epoch:
+                return n_epochs * selection_sec_per_epoch
+            else:
+                change_time = change_epoch * selection_sec_per_epoch
+                return (n_epochs - change_epoch) * sec_per_epoch + change_time
         elif late:
-            change_time = change_epoch / sec_per_batch
-            return (n_epochs - change_epoch) / selection_sec_per_batch + change_time
+            if n_epochs < change_epoch:
+                return n_epochs * sec_per_epoch
+            else:
+                change_time = change_epoch * sec_per_epoch
+                return (n_epochs - change_epoch) * selection_sec_per_epoch + change_time
         else:
-            return n_epochs / selection_sec_per_batch
+            return n_epochs * selection_sec_per_epoch
     else:
-        return n_epochs / sec_per_batch
+        return n_epochs * sec_per_epoch
 
 ### Tools for Weights & Biases ###################################################################
 
