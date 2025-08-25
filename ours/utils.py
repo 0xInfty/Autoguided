@@ -125,6 +125,23 @@ def get_nimg(n_epochs, batch_size, mini_batch_size=None, selection=False,
             return n_epochs * mini_batch_size
     else:
         return n_epochs * batch_size
+    
+def get_time(n_epochs, sec_per_batch, selection_sec_per_batch=None, selection=False,
+             early=False, late=False, change_epoch=None, change_nimg=None):
+    
+    if selection and selection_sec_per_batch is None: 
+        raise ValueError("Mini batch size required if data selection was used")
+
+    if selection:
+        change_time = change_epoch / 
+        if early:
+            return (n_epochs - change_epoch) / batch_size + change_nimg
+        elif late:
+            return int((n_epochs - change_epoch) * mini_batch_size + change_nimg)
+        else:
+            return n_epochs * mini_batch_size
+    else:
+        return n_epochs * batch_size
 
 ### Tools for Weights & Biases ###################################################################
 
