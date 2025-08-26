@@ -14,11 +14,11 @@ device=2
 #### AJEST ###########################################
 
 # With early data selection, large learner model
-CUDA_VISIBLE_DEVICES=$devices torchrun --standalone --nproc_per_node=$ndevices Images/train_edm2.py --outdir=$subdir"/Early_AJEST/"$series --dataset $dataset --preset="edm2-"$dataset"-"$learner --batch-gpu=$bslearner --early --acid --guide-path $refdir
+# CUDA_VISIBLE_DEVICES=$devices torchrun --standalone --nproc_per_node=$ndevices Images/train_edm2.py --outdir=$subdir"/Early_AJEST/"$series --dataset $dataset --preset="edm2-"$dataset"-"$learner --batch-gpu=$bslearner --early --acid --guide-path $refdir
 # CUDA_VISIBLE_DEVICES=$device python Images/train_edm2.py --outdir=$subdir"/Early_AJEST/"$series --dataset $dataset --preset="edm2-"$dataset"-"$learner --batch-gpu=$bslearner --early --acid --guide-path $refdir
 
 # With data selection all the way, large learner model
-CUDA_VISIBLE_DEVICES=$devices torchrun --standalone --nproc_per_node=$ndevices Images/train_edm2.py --outdir=$subdir"/AJEST/"$series --dataset $dataset --preset="edm2-"$dataset"-"$learner --batch-gpu=$bslearner --acid --guide-path $refdir
+# CUDA_VISIBLE_DEVICES=$devices torchrun --standalone --nproc_per_node=$ndevices Images/train_edm2.py --outdir=$subdir"/AJEST/"$series --dataset $dataset --preset="edm2-"$dataset"-"$learner --batch-gpu=$bslearner --acid --guide-path $refdir
 # CUDA_VISIBLE_DEVICES=$device python Images/train_edm2.py --outdir=$subdir"/AJEST/"$series --dataset $dataset --preset="edm2-"$dataset"-"$learner --batch-gpu=$bslearner --acid --guide-path $refdir
 
 #### RANDOM ##########################################
