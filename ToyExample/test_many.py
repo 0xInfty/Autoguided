@@ -1,13 +1,12 @@
-import os
-main_dir = os.path.dirname(os.path.dirname(os.getcwd()))
-os.chdir(main_dir)
-
 import pyvdirs.dirs as dirs
 import sys
+import os
 sys.path.insert(0, dirs.SYSTEM_HOME)
+sys.path.insert(0, os.path.join(dirs.SYSTEM_HOME, "karras"))
 sys.path.insert(0, os.path.join(dirs.SYSTEM_HOME, "ToyExample"))
-from socket import gethostname
 
+from socket import gethostname
+import click
 import torch
 import numpy as np
 import json
@@ -17,16 +16,9 @@ from ToyExample.toy_example import do_test
 import pyvtools.text as vtext
 import ours.utils as utils
 
-# series = ["18_Statistics", "19_ACIDParams", "21_Repetitions", "23_NormalizedLogits"]
-# series = ["25_ACIDParams_00"]
-# series = ["23_NormalizedLogits"]
-# series = ["28_Test_Size"]
-series = ["29_Statistics"]
+# series = ["29_Statistics"]
 
-# results_filename = "TestResults_25_ACIDParams_00.json"
-# results_filename = "TestResults_23.json"
-# results_filename = "TestResults_28.json"
-results_filename = "TestResults_29.json"
+# results_filename = "TestResults_29.json"
 
 def test_many(series, results_filename="TestResults.json", test_batch_size=10*2**14, test_n_samples=10*2**14, test_seed=7):
 
@@ -36,6 +28,7 @@ def test_many(series, results_filename="TestResults.json", test_batch_size=10*2*
     other_hosts = vtext.filter_by_string_must(list(dirs.check_directories_file().keys()), [host_id,"else"], must=False)
 
     results_filepath = os.path.join(dirs.RESULTS_HOME, "ToyExample", results_filename)
+    mid_filepath = "_temp".join(os.path.splitext(results_filepath))
 
     series_folders = {}
     for s in series:
@@ -52,6 +45,7 @@ def test_many(series, results_filename="TestResults.json", test_batch_size=10*2*
         log_files = ["log_"+f+".txt" for f in series_folders[s]]
         assert all([os.path.isfile(os.path.join(series_path, f)) for f in log_files]), "Some logs have not been found"
 
+        print("> Starting with ", s)
         test_results[s] = {}
         for folder, log_file in zip(series_folders[s], log_files):
 
@@ -65,8 +59,11 @@ def test_many(series, results_filename="TestResults.json", test_batch_size=10*2*
             EMA_filepath = os.path.join(series_path, folder, EMA_file)
 
             with open(log_filepath, "r") as f:
+                selection = False
                 acid = False
                 for i, line in enumerate(f):
+                    if "Selection = True" in line:
+                        selection = True
                     if "ACID = True" in line:
                         acid = True
                     if "Guide model loaded from" in line or i>70: 
@@ -79,8 +76,9 @@ def test_many(series, results_filename="TestResults.json", test_batch_size=10*2*
             else:
                 guide_filepath = None
 
+            print(">>> Working on ", folder)
             folder_results = do_test(
-                net_filepath, ema_path=EMA_filepath, guide_path=guide_filepath, acid=acid, 
+                net_filepath, ema_path=EMA_filepath, guide_path=guide_filepath, acid=selection, 
                 classes='A', P_mean=-2.3, P_std=1.5, sigma_max=5, depth_sep=5,
                 n_samples=test_n_samples, batch_size=test_batch_size, 
                 test_outer=True, test_mandala=True,
@@ -91,9 +89,24 @@ def test_many(series, results_filename="TestResults.json", test_batch_size=10*2*
             
             test_results[s][folder] = folder_results
 
-            with open(results_filepath, "w") as file:
-                json.dump({"test_n_samples":test_n_samples,
-                        "test_batch_size":test_batch_size,
-                        "test_seed":test_seed,
-                        **test_results}, 
-                        file)
+            if s==series[-1] and folder==series_folders[s][-1]:
+                save_filepath = results_filepath
+            else:
+                save_filepath = mid_filepath
+            with open(save_filepath, "w") as file:
+                json.dump({"test_n_samples":test_n_samples, "test_batch_size":test_batch_size, 
+                           "test_seed":test_seed, **test_results}, file)
+
+
+#----------------------------------------------------------------------------
+# Command line interface.
+
+@click.command()
+@click.option('--series',                   help='Series of folders to run for', metavar='STR',                     type=str, multiple=True)
+@click.option('--output', 'filename',       help='Output json filename', metavar='PATH|URL',                        type=str, default=None)
+
+def cmdline(series, filename):
+    test_many(series, results_filename=filename);
+
+if __name__ == "__main__":
+    cmdline()
