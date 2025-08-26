@@ -431,9 +431,8 @@ def do_train(
                     log.info("Average Super-Batch Reference Loss = %s", float(ref_loss.mean()))
                 if guide_interpolation: 
                     log.info("Average Super-Batch Guided Learner Loss = %s", float(selection_loss.mean()))
-                indices = selection_function(mini_batch_size, selection_loss, ref_loss, 
-                    N=acid_N, filter_ratio=acid_f,
-                    learnability=acid_diff, inverted=acid_inverted,
+                indices = selection_function(selection_loss, ref_loss, selection_size=mini_batch_size,
+                    N=acid_N, filter_ratio=acid_f, learnability=acid_diff, inverted=acid_inverted,
                     numeric_stability_trick=acid_stability_trick, log=log)
                 loss = selection_loss[indices] # Use indices of the ACID mini-batch
             except ValueError:
