@@ -747,8 +747,9 @@ def plot_loss(loss_dict, fig_path=None):
     if fig_path is not None:
         fig_path_base, fig_extension = os.path.splitext(fig_path)
     loss_dict["epoch"] = np.arange(len(loss_dict["examples_seen"]))
+    loss_dict["examples_seen"] = np.array(loss_dict["examples_seen"]) / 1e6
     keys = ["epoch", "examples_seen", "training_time"]
-    names = ["Epoch", "Examples Seen", "Time"]
+    names = ["Epoch", "Examples Seen [millions]", "Time [hs]"]
 
     # Basic plot
     def plot_training_loss():
