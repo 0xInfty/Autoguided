@@ -577,9 +577,9 @@ def calculate_metrics_for_checkpoints(
             run = open_wandb_validation_run(open_directory)
     for i, (filepaths, ema) in enumerate(zip(checkpoint_filepaths_by_ema, chosen_emas)):
         if guidance_weight!=1 and guide_path is not None:
-            tag = f" <EMA={ema:.3f}, Guidance={guidance_weight:.2f}>"
+            tag = f" [EMA={ema:.3f}, Guidance={guidance_weight:.2f}]"
         else:
-            tag = f" <EMA={ema:.3f}>"
+            tag = f" [EMA={ema:.3f}]"
         if log_to_wandb: 
             wandb_logs = {"Validation Epoch": 0}
             if fd_metrics:
