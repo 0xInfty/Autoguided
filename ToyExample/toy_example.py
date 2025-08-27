@@ -748,6 +748,8 @@ def plot_loss(loss_dict, fig_path=None):
         fig_path_base, fig_extension = os.path.splitext(fig_path)
     loss_dict["epoch"] = np.arange(len(loss_dict["examples_seen"]))
     loss_dict["examples_seen"] = np.array(loss_dict["examples_seen"]) / 1e6
+    if len(loss_dict["examples_seen"]) != len(loss_dict["training_time"]):
+        loss_dict["training_time"] = loss_dict["training_time"][::2] #TODO: Remove this patch when problem is fixed
     keys = ["epoch", "examples_seen", "training_time"]
     names = ["Epoch", "Examples Seen [millions]", "Time [hs]"]
 
@@ -1260,7 +1262,7 @@ def do_test(net_path, ema_path=None, guide_path=None, acid=False,
 
     # Log test loss
     log.info("Average Test Learner Loss = %s", results["learner_loss"])
-    log.info("Average Test EMA Loss = %s", results["ema_loss"])
+    if test_ema: log.info("Average Test EMA Loss = %s", results["ema_loss"])
     try: log.info("Average Test Guide Loss = %s", results["guide_loss"])
     except UnboundLocalError or KeyError: pass
     if acid:
@@ -1269,7 +1271,7 @@ def do_test(net_path, ema_path=None, guide_path=None, acid=False,
 
     # Log test loss on outer branches of the distribution
     log.info("Average Outer Test Learner Loss = %s", results["learner_out_loss"])
-    log.info("Average Outer Test EMA Loss = %s", results["ema_out_loss"])
+    if test_ema: log.info("Average Outer Test EMA Loss = %s", results["ema_out_loss"])
     try: log.info("Average Outer Test Guide Loss = %s", results["guide_out_loss"])
     except UnboundLocalError: pass
     if acid:
