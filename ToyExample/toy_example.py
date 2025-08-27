@@ -855,9 +855,10 @@ def mandala_score(model, ground_truth_dist, guide=None, guidance_weight=3,
                   grid_resolution=101, 
                   x_centre=GT_ORIGIN[0], y_centre=GT_ORIGIN[1], 
                   x_side=2*1.5, y_side=2*1.5,
-                  logging=False, plotting=False, 
+                  logging=False, plotting=False,
                   full_scale=True, log_scale=False, 
-                  device=torch.device("cuda"), generator=None):
+                  device=torch.device("cuda"), generator=None, 
+                  save_fig=None, **plot_kwargs):
 
     # If no samples provided, generate samples
     if samples is None:
@@ -929,7 +930,8 @@ def mandala_score(model, ground_truth_dist, guide=None, guidance_weight=3,
             x_centre, y_centre, x_side, y_side, 
             n_hits_unique, n_miss_unique, 
             ground_truth_dist,
-            full_scale=full_scale, log_scale=log_scale)
+            full_scale=full_scale, log_scale=log_scale, 
+            save_fig=save_fig, **plot_kwargs)
 
     return unique_score, non_unique_score
 
@@ -941,7 +943,9 @@ def plot_mandala_score(samples, grid,
                        x_centre, y_centre, x_side, y_side, 
                        n_hits_unique, n_miss_unique, 
                        ground_truth_dist,
-                       full_scale=True, log_scale=False):
+                       full_scale=True, log_scale=False,
+                       save_fig=None, show_stats=True,
+                       vmax=None):
        
     # Create figure with square aspect ratio
     fig, [ax1, ax2, ax3] = plt.subplots(ncols=3, figsize=(10.2, 5), dpi=300, 
@@ -965,9 +969,9 @@ def plot_mandala_score(samples, grid,
     if not full_scale:
         grid[grid>1]=2 # Set every n>=2 to 2
     if log_scale:
-        kwargs = dict(norm=LogNorm(vmin=1))
+        kwargs = dict(norm=LogNorm(vmin=1, vmax=vmax))
     else: 
-        kwargs = dict(vmin=0)
+        kwargs = dict(vmin=0, vmax=vmax)
     cmap = LinearSegmentedColormap.from_list('', ['white', *plt.cm.Reds(np.arange(255))])
     map = ax2.pcolormesh(*grid_coords.swapaxes(0,2).detach().cpu().numpy(), 
                           grid.T, cmap=cmap, **kwargs)
@@ -990,13 +994,17 @@ def plot_mandala_score(samples, grid,
     plt.tight_layout()
 
     # Add stats only to the last plot
-    stats_text = f"Unique Total: {n_hits_unique+n_miss_unique}\nHits: {n_hits_unique}\nMisses: {n_miss_unique}"\
-        f"\nMandala Score: {n_hits_unique/(n_hits_unique+n_miss_unique):.3f}"
-    ax2.text(0.02, 0.98, stats_text,
-                transform=ax2.transAxes,
-                verticalalignment='top',
-                fontsize=8,
-                bbox=dict(facecolor='white', alpha=0.8, edgecolor='none'))
+    if show_stats:
+        stats_text = f"Unique Total: {n_hits_unique+n_miss_unique}\nHits: {n_hits_unique}\nMisses: {n_miss_unique}"\
+            f"\nMandala Score: {n_hits_unique/(n_hits_unique+n_miss_unique):.3f}"
+        ax2.text(0.02, 0.98, stats_text,
+                    transform=ax2.transAxes,
+                    verticalalignment='top',
+                    fontsize=8,
+                    bbox=dict(facecolor='white', alpha=0.8, edgecolor='none'))
+
+    if save_fig is not None:
+        fig.savefig(save_fig)
 
 #----------------------------------------------------------------------------
 # Run test
