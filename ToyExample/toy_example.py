@@ -1127,6 +1127,8 @@ def run_test(net, ema=None, guide=None, ref=None, acid=False,
 
         # Create full EMA samples using net for guidance
         gt_test_outputs = do_sample(net=gtd, x_init=test_samples, sigma_max=sigma_max)[-1]
+        if test_outer:
+            gt_out_test_outputs = do_sample(net=outd, x_init=out_test_samples, sigma_max=sigma_max)[-1]
         if test_ema:
             ema_test_outputs = do_sample(net=ema, x_init=test_samples, sigma_max=sigma_max)[-1]
             results["ema_L2_metric"] += float(torch.sqrt(((ema_test_outputs - gt_test_outputs) ** 2).sum(-1)).mean())/n_epochs
@@ -1134,8 +1136,6 @@ def run_test(net, ema=None, guide=None, ref=None, acid=False,
                 guided_test_outputs = do_sample(net=ema, x_init=test_samples, 
                                                 guidance=guidance_weight, gnet=guide, sigma_max=sigma_max)[-1]
                 results["ema_guided_L2_metric"] += float(torch.sqrt(((guided_test_outputs - gt_test_outputs) ** 2).sum(-1)).mean())/n_epochs
-            if test_outer:
-                gt_out_test_outputs = do_sample(net=outd, x_init=out_test_samples, sigma_max=sigma_max)[-1]
                 ema_out_test_outputs = do_sample(net=ema, x_init=out_test_samples, sigma_max=sigma_max)[-1]
                 results["ema_out_L2_metric"] += float(torch.sqrt(((ema_out_test_outputs - gt_out_test_outputs) ** 2).sum(-1)).mean())/n_epochs
                 if test_guide:
