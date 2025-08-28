@@ -384,12 +384,12 @@ def summarize_generated_images(generated_images_path, plot_labels=False,
     if tight_layout: kwargs = dict(bbox_inches="tight")
     else: kwargs = dict()
 
-    selected_indices = [162, 86, 23, 40, 66, 153, 118, 114, 159, 57]
-    if horizontal: kwargs = dict(n_cols=10)
-    else: kwargs = dict(n_rows=10)
-    fig, _ = vis.visualize_images(dataset_obj, selected_indices, space=0.2, **kwargs)
+    selected_indices = [162, 86, 23, 40, 0, 153, 101, 114, 159, 57]
+    if horizontal: vis_kwargs = dict(n_cols=10)
+    else: vis_kwargs = dict(n_cols=1)
+    fig, _ = vis.visualize_images(dataset_obj, selected_indices, space=0.2, **vis_kwargs)
     if plot_labels:
-        fig_2, _ = vis.visualize_classes(dataset_obj, selected_indices, space=0.2, **kwargs)
+        fig_2, _ = vis.visualize_classes(dataset_obj, selected_indices, space=0.2, **vis_kwargs)
     if saving:
         fig.savefig(os.path.join(save_dir, f"imgs-summary.png"), **kwargs)
         plt.close(fig)
