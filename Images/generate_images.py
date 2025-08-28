@@ -374,6 +374,29 @@ def visualize_generated_images(generated_images_path, n_images=200, batch_size=1
                 fig_2.savefig(os.path.join(save_dir, f"labs-{start:07.0f}-{end:07.0f}.png"), **kwargs)
                 plt.close(fig_2)
 
+def summarize_generated_images(generated_images_path, plot_labels=False, 
+                               save_dir=None, tight_layout=False, horizontal=True):
+
+    dataset_kwargs = calc.get_dataset_kwargs("generated", image_path=generated_images_path)
+    dataset_obj = construct_class_by_name(**dataset_kwargs, random_seed=0)
+
+    saving = save_dir is not None
+    if tight_layout: kwargs = dict(bbox_inches="tight")
+    else: kwargs = dict()
+
+    selected_indices = [162, 86, 23, 40, 66, 153, 118, 114, 159, 57]
+    if horizontal: kwargs = dict(n_cols=10)
+    else: kwargs = dict(n_rows=10)
+    fig, _ = vis.visualize_images(dataset_obj, selected_indices, space=0.2, **kwargs)
+    if plot_labels:
+        fig_2, _ = vis.visualize_classes(dataset_obj, selected_indices, space=0.2, **kwargs)
+    if saving:
+        fig.savefig(os.path.join(save_dir, f"imgs-summary.png"), **kwargs)
+        plt.close(fig)
+        if plot_labels:
+            fig_2.savefig(os.path.join(save_dir, f"labs-summary.png"), **kwargs)
+            plt.close(fig_2)
+
 #----------------------------------------------------------------------------
 # Parse a comma separated list of numbers or ranges and return a list of ints.
 # Example: '1,2,5-10' returns [1, 2, 5, 6, 7, 8, 9, 10]
