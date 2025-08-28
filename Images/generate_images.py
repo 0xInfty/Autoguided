@@ -384,7 +384,7 @@ def summarize_generated_images(generated_images_path, plot_labels=False,
     if tight_layout: kwargs = dict(bbox_inches="tight")
     else: kwargs = dict()
 
-    selected_indices = [162, 86, 23, 40, 0, 153, 101, 114, 159, 57]
+    selected_indices = [162, 86, 23, 40, 0, 153, 101, 114, 159, 199]
     if horizontal: vis_kwargs = dict(n_cols=10)
     else: vis_kwargs = dict(n_cols=1)
     fig, _ = vis.visualize_images(dataset_obj, selected_indices, space=0.2, **vis_kwargs)
