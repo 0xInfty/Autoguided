@@ -1,11 +1,11 @@
 ref="/00_PreTrained"; subdir="/99_Once"; device=1
 
 # No ACID, for comparison
-python ToyExample/toy_example.py train --guidance --guide-path "ToyExample"$ref"/Ref/iter0512.pkl"  --outdir "ToyExample"$subdir"/Baseline" --seed 0 --val --test --verbose --logging "ToyExample"$subdir"/Baseline/log.txt" --device $device
+python ToyExample/toy_example.py train --guidance --guide-path "ToyExample"$ref"/Ref/iter0512.pkl"  --outdir "ToyExample"$subdir"/Baseline" --seed 0 --val --test --verbose --logging "ToyExample"$subdir"/log_Baseline.txt" --device $device
 python ToyExample/toy_example.py train --guidance --guide-path "ToyExample"$ref"/Ref/iter0512.pkl"  --invert --acid --interpol --outdir "ToyExample"$subdir"/ACIDInterpol" --seed 0 --val --test --verbose --logging "ToyExample"$subdir"/log_ACIDInterpol.txt" --device $device
 
 # Random baseline
-python ToyExample/toy_example.py train --guidance --guide-path "ToyExample"$ref"/Ref/iter0512.pkl" --selection --outdir "ToyExample"$subdir"/Random" --seed 0 --val --test --verbose --logging "ToyExample"$subdir"/Random/log.txt" --device $device
+python ToyExample/toy_example.py train --guidance --guide-path "ToyExample"$ref"/Ref/iter0512.pkl" --selection --outdir "ToyExample"$subdir"/Random" --seed 0 --val --test --verbose --logging "ToyExample"$subdir"/log_Random.txt" --device $device
 
 # ACID --> From the beginning, for as long as it runs
 python ToyExample/toy_example.py train --guidance --guide-path "ToyExample"$ref"/Ref/iter0512.pkl" --invert --acid --outdir "ToyExample"$subdir"/ACID" --seed 0 --val --test --verbose --logging "ToyExample"$subdir"/log_ACID.txt" --device $device
