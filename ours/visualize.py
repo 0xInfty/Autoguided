@@ -5,14 +5,15 @@ import seaborn as sns
 
 A4_DIMS = [11.7, 8.3] # H,W in inches; 2480x3508 pixels at 300 dpi
 
-def set_up_figure(n_rows=1, n_cols=1, portrait=True, facecolor="w", padding=0.2, dpi=100, aspect="auto"):
+def set_up_figure(n_rows=1, n_cols=1, portrait=True, facecolor="w", 
+                  space=0, padding=0.2, dpi=100, aspect="auto"):
 
     assert aspect in ["equal", "auto"], "Aspect should be either 'equal' or 'auto'"
 
     if n_cols==1 and n_rows > 1:
-        kwargs = dict( gridspec_kw=dict(hspace=0), sharey=True )
+        kwargs = dict( gridspec_kw=dict(hspace=space), sharey=True )
     elif n_rows == 1 and n_cols > 1:
-        kwargs = dict( gridspec_kw=dict(wspace=0), sharex=True )
+        kwargs = dict( gridspec_kw=dict(wspace=space), sharex=True )
     else: kwargs = dict()
 
     if n_rows>4 or n_cols>4:
@@ -24,13 +25,15 @@ def set_up_figure(n_rows=1, n_cols=1, portrait=True, facecolor="w", padding=0.2,
             fig_size = 2*padding+min(cell_size)*np.array((n_rows, n_cols))
         else:
             fig_size = 2*padding+cell_size*np.array((n_rows, n_cols))
-        fig, axes = plt.subplots(n_rows, n_cols, facecolor=facecolor, figsize=fig_size[::-1], dpi=dpi, **kwargs)
+        fig, axes = plt.subplots(n_rows, n_cols, facecolor=facecolor, figsize=fig_size[::-1], 
+                                 squeeze=False, dpi=dpi, **kwargs)
     else:
-        fig, axes = plt.subplots(n_rows, n_cols, facecolor=facecolor, dpi=dpi, **kwargs)
+        fig, axes = plt.subplots(n_rows, n_cols, facecolor=facecolor, 
+                                 squeeze=False, dpi=dpi, **kwargs)
 
     return fig, axes
 
-def visualize_images(dataset, img_ids, are_ids_selected=None, n_cols=32):
+def visualize_images(dataset, img_ids, are_ids_selected=None, n_cols=32, **kwargs):
 
     # Get parameters for figure
     n_rows = int(len(img_ids)/n_cols)
@@ -38,7 +41,8 @@ def visualize_images(dataset, img_ids, are_ids_selected=None, n_cols=32):
     if plot_all: are_ids_selected = [True]*len(img_ids)
 
     # Create landscape figure
-    fig, axes = set_up_figure(n_rows, n_cols, portrait=False, facecolor="k", padding=0.5, aspect="equal")
+    fig, axes = set_up_figure(n_rows, n_cols, portrait=False, facecolor="k", 
+                              padding=0.5, aspect="equal", **kwargs)
 
     # Check image type
     _, img, _ = dataset[img_ids[0]]
@@ -95,7 +99,7 @@ def visualize_images_per_iteration(dataset, img_ids, are_ids_selected, N_iterati
 
     return fig, axes
 
-def visualize_classes(dataset, img_ids, are_ids_selected=None, n_cols=32):
+def visualize_classes(dataset, img_ids, are_ids_selected=None, n_cols=32, **kwargs):
 
     # Get parameters for figure
     n_rows = int(len(img_ids)/n_cols)
@@ -103,7 +107,8 @@ def visualize_classes(dataset, img_ids, are_ids_selected=None, n_cols=32):
     if plot_all: are_ids_selected = [True]*len(img_ids)
 
     # Create landscape figure
-    fig, axes = set_up_figure(n_rows, n_cols, portrait=False, facecolor="k", padding=0.5, aspect="equal")
+    fig, axes = set_up_figure(n_rows, n_cols, portrait=False, facecolor="k", 
+                              padding=0.5, aspect="equal", **kwargs)
 
     # Plot images
     for idx, (img_id, is_selected) in enumerate(zip(img_ids, are_ids_selected)):
