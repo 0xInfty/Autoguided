@@ -944,26 +944,43 @@ def plot_mandala_score(samples, grid,
                        n_hits_unique, n_miss_unique, 
                        ground_truth_dist,
                        full_scale=True, log_scale=False,
-                       save_fig=None, show_stats=True,
-                       vmax=None):
+                       save_fig=None, show_stats=True, show_titles=True,
+                       vmax=None, full_tree=True, show_points=True):
        
+    # Set up
+    if full_tree:
+        map_coords = grid_coords.swapaxes(0,2).detach().cpu().numpy()
+        map_vals = grid.T
+        kwargs_plot = dict(elems={'gt_uncond_thin', 'gt_outline_thin'},
+                           view_x=x_centre, view_y=y_centre, view_size=x_side/2)
+    else:
+        map_coords = grid_coords.swapaxes(0,2).detach().cpu().numpy()[:,30:,30:]
+        map_vals = grid.T[30:,30:]
+        kwargs_plot = dict(elems={'gt_outline_thin'}, 
+                           view_x=0.4, view_y=0.4, view_size=0.37*x_side)
+    
     # Create figure with square aspect ratio
-    fig, [ax1, ax2, ax3] = plt.subplots(ncols=3, figsize=(10.2, 5), dpi=300, 
-                                        gridspec_kw={'width_ratios': [5, 5, .2]})
+    if show_points:
+        fig, [ax1, ax2, ax3] = plt.subplots(ncols=3, figsize=(10.2, 5), dpi=300, 
+                                            gridspec_kw={'width_ratios': [5, 5, .2]})
+    else:
+        fig, [ax2, ax3] = plt.subplots(ncols=2, figsize=(6.1, 5), dpi=300, 
+                                       gridspec_kw={'width_ratios': [5, .2]})
 
     # 1. Draw fractal with scatter
-    ax1.set_title("Fractal Tree with Scatter")
-    ax1.set_aspect("equal")
+    if show_points:
+        if show_titles: ax1.set_title("Fractal Tree with Scatter")
+        ax1.set_aspect("equal")
 
-    # Draw fractal
-    do_plot(ground_truth_dist, elems={'gt_uncond', 'gt_outline'},
-                view_x=x_centre, view_y=y_centre, view_size=x_side/2, ax=ax1)
+        # Draw fractal
+        do_plot(ground_truth_dist, ax=ax1, **kwargs_plot)
 
-    # Plot scatter points
-    ax1.scatter(*samples.swapaxes(0,1).detach().cpu().numpy(), color='k', alpha=0.1, s=10, zorder=10)
+        # Plot scatter points
+        ax1.scatter(*samples.swapaxes(0,1).detach().cpu().numpy(), 
+                    color='k', alpha=0.1, s=10, zorder=10)
 
     # 2. Hit/Miss Visualization
-    ax2.set_title("Hit/Miss Analysis")
+    if show_titles: ax2.set_title("Hit/Miss Analysis")
     ax2.set_aspect("equal")
 
     if not full_scale:
@@ -973,10 +990,8 @@ def plot_mandala_score(samples, grid,
     else: 
         kwargs = dict(vmin=0, vmax=vmax)
     cmap = LinearSegmentedColormap.from_list('', ['white', *plt.cm.Reds(np.arange(255))])
-    map = ax2.pcolormesh(*grid_coords.swapaxes(0,2).detach().cpu().numpy(), 
-                          grid.T, cmap=cmap, **kwargs)
-    do_plot(ground_truth_dist, elems={'gt_uncond_thin', 'gt_outline_thin'},
-                view_x=x_centre, view_y=y_centre, view_size=x_side/2, ax=ax2)
+    map = ax2.pcolormesh(*map_coords, map_vals, cmap=cmap, **kwargs)
+    do_plot(ground_truth_dist, ax=ax2, **kwargs_plot)
     plt.colorbar(map, ax=ax2, cax=ax3)
 
     # Add thin grid lines
@@ -986,9 +1001,14 @@ def plot_mandala_score(samples, grid,
         ax2.axhline(y=y, color='gray', alpha=0.2, linewidth=0.1)
 
     # Set bounds and remove axis numbers for all plots
-    for ax in [ax1, ax2]:
-        ax.set_xlim(*bounds[0])
-        ax.set_ylim(*bounds[1])
+    if show_points:
+        change_axes = [ax1, ax2]
+    else:
+        change_axes = [ax2]
+    for ax in change_axes:
+        if full_tree:
+            ax.set_xlim(*bounds[0])
+            ax.set_ylim(*bounds[1])
         ax.set_xticklabels([])
         ax.set_yticklabels([])
     plt.tight_layout()
