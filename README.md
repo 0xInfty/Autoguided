@@ -1,30 +1,24 @@
-# SCID
-Synthetic Curation as Implicit Distillation
+# Autoguided Online Data Curation
+for Diffusion Model Training
 
 ## Getting Started
 
 ### Installation
 
-1. Create and activate an Anaconda environment
+1. Create and activate an Anaconda environment with Python 3.12
 
     ```bash
-    conda create -n SCID
+    conda create -n SCID python=3.12
     conda activate SCID
     ```
 
-2. Install Python 3.12
-
-    ```bash
-    conda install -c conda-forge python==3.12 --force-reinstall
-    ```
-
-3. Install all required packages using the installation script
+2. Install all required packages using the installation script
     
     ```bash
     yes | . install.sh
     ```
 
-4. Verify you have GPU support, by running...
+3. Verify you have GPU support, by running...
 
     ```bash
     python -c "import torch; print([torch.cuda.get_device_name(i) for i in range(torch.cuda.device_count())])"
@@ -62,7 +56,7 @@ You can manually open the file and change the `system_name` attribute to create 
 
 ### Running autoguidance on the toy example
 
-This repository contains a working adaptation of the toy model from Karras et al's ["Guiding a diffusion model with a bad version of itself"](https://arxiv.org/abs/2406.02507).
+This repository contains a working adaptation of the 2D tree toy example from Karras et al's ["Guiding a diffusion model with a bad version of itself"](https://arxiv.org/abs/2406.02507).
 
 Pre-trained toy models can be automatically downloaded and tested running...
 
@@ -76,11 +70,11 @@ New toy models can be trained and visualized running...
 python ToyExample/toy_example.py train
 ```
 
-### Training the toy model with ACID
+### Training the toy model with AJEST
 
-This repository now contains an implementation of ACID as described by Udandarao, Parthasarathy et al in ["Active Data Curation Effectively Distills Large-Scale Multimodal Models"](https://arxiv.org/pdf/2411.18674). The joint batch selection function has been adapted from Evans, Parthasarathy et al's ["Guiding a diffusion model with a bad version of itself"](https://arxiv.org/abs/2406.17711).
+This repository now contains an implementation of JEST as described by Evans, Parthasarathy et al. on ["Guiding a diffusion model with a bad version of itself"](https://arxiv.org/abs/2406.17711).
 
-A toy model can be trained using ACID batch selection running...
+A toy model can be trained using autoguided JEST (AJEST) running...
 
 ```
 python ToyExample/toy_example.py train --acid
@@ -106,9 +100,9 @@ The preset configuration will determine which models and guidance weight to use 
 
 [Valeria Pais Malacalza](v.pais-malacalza.1@research.gla.ac.uk) from University of Glasgow, Glasgow, United Kingdom.
 
-[Marco Aversa](marco.aversa@dotphoton.com) from Dotphoton, Zug, Switzerland.
+[Marco Aversa](marco.aversa@outlook.com) associated at the time to Dotphoton, Zug, Switzerland.
 
-[Luis Oala](luis.oala@dotphoton.com) from Dotphoton, Zug, Switzerland.
+[Luis Oala](luis.oala@dotphoton.com) associated at the time to Dotphoton, Zug, Switzerland.
 
 ### License
 
