@@ -1,4 +1,4 @@
-# Autoguided Online Data Curation
+# Autoguided Online Data Curation 
 for Diffusion Model Training
 
 ## Getting Started
@@ -46,13 +46,13 @@ The new entry should look like...
 ```
 
 Following this index...
-- Any datasets and pre-trained models will be stored inside `data_home`
-- Any training model checkpoints will be stored inside `models_home`
-- Any results will be stored inside `results_home`
+- Any datasets and pre-trained models will be stored inside `data_home`, accessible as `dirs.DATA_HOME`
+- Any training model checkpoints will be stored inside `models_home`, accessible as `dirs.MODELS_HOME`
+- Any results will be stored inside `results_home`, , accessible as `dirs.MODELS_HOME`
 
 You can manually open the file and change the `system_name` attribute to create your own nickname, to know which one is your entry. You can also manually modify each of the other path variables.
 
-## Toy example implementation
+## 2D tree toy example implementation
 
 ### Running autoguidance on the toy example
 
@@ -70,15 +70,37 @@ New toy models can be trained and visualized running...
 python ToyExample/toy_example.py train
 ```
 
-### Training the toy model with AJEST
+### Training the toy model with AJEST or random data selection
 
 This repository now contains an implementation of JEST as described by Evans, Parthasarathy et al. on ["Guiding a diffusion model with a bad version of itself"](https://arxiv.org/abs/2406.17711).
 
 A toy model can be trained using autoguided JEST (AJEST) running...
 
 ```
-python ToyExample/toy_example.py train --acid
+python ToyExample/toy_example.py train --acid --guidance --guide-path "relative/path/iter0512.pkl"
 ```
+
+Any toy model can be used as AJEST's guide: you just need to indicate the relative path to it from `dirs.MODELS_HOME`.
+
+Alternatively, a toy model can be trained with random data selection running...
+
+```
+python ToyExample/toy_example.py train --selection
+```
+
+Validation metrics can be calculated during training, stored in a .txt log file. Both training loss and validation metrics can be recovered from this file with the `extract_results_from_log` and `plot_loss` auxiliary functions from `toy_example.py`.
+
+### Testing toy models with our suite of metrics
+
+Regardless of the training method, all toy models trained on the 2D tree task can be tested by running...
+
+```
+python ToyExample/toy_example.py test --net-path "relative/path/iter4096learner.pkl" --guide-path "relative/path/iter0512.pkl"
+```
+
+Metrics without guidance are always calculated. Metrics using `guidance_weight=3` as in Karras et al. will also be calculated whenever a guide is specified. If you want to test both the learner and EMA models, you can also include the path to the EMA checkpoint using the `--ema-path` flag.
+
+Basic metrics include average loss over different noise levels and L2 distance between fully denoised samples and the ground truth. Metrics on external branches can be obtained using the `external` flag. Mandala and classification metrics can be calculated using the `mandala` flag.
 
 ## Images implementation
 
@@ -100,9 +122,11 @@ The preset configuration will determine which models and guidance weight to use 
 
 [Valeria Pais Malacalza](v.pais-malacalza.1@research.gla.ac.uk) from University of Glasgow, Glasgow, United Kingdom.
 
-[Marco Aversa](marco.aversa@outlook.com) associated at the time to Dotphoton, Zug, Switzerland.
-
 [Luis Oala](luis.oala@dotphoton.com) associated at the time to Dotphoton, Zug, Switzerland.
+
+[Daniele Faccio](daniele.faccio@glasgow.ac.uk) from University of Glasgow, Glasgow, United Kingdom.
+
+[Marco Aversa](marco.aversa@outlook.com) associated at the time to Dotphoton, Zug, Switzerland.
 
 ### License
 
