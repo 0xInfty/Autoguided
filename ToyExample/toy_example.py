@@ -24,18 +24,21 @@ from matplotlib.colors import LinearSegmentedColormap, LogNorm
 import click
 import tqdm
 import pyvtools.text as vtext
+import time
 
 import karras.dnnlib.util as util
 import karras.torch_utils.persistence as persistence
 import karras.training.phema as phema
 
-from utils import FIG1_KWARGS, FIG2_KWARGS, GT_ORIGIN, GT_LOGP_LEVEL
-from utils import is_sample_in_fractal, get_grid_params, create_grid_samples
-import mandala_exploration.fractal_step_by_step as mand
+from ours.utils import FIG1_KWARGS, FIG2_KWARGS, GT_ORIGIN, GT_LOGP_LEVEL
+from ours.utils import is_sample_in_fractal, get_grid_params, create_grid_samples
+import ours.mandala_exploration.fractal_step_by_step as mand
+import ours.selection as sel
+
 import logs
 
-PRETRAINED_HOME = os.path.join(dirs.DATA_HOME, "ToyExample")
-if not os.path.isdir(PRETRAINED_HOME): os.mkdir(PRETRAINED_HOME)
+PRETRAINED_HOME = os.path.join(dirs.MODELS_HOME, "ToyExample", "00_PreTrained")
+if not os.path.isdir(PRETRAINED_HOME): os.makedirs(PRETRAINED_HOME)
 
 log = logs.create_logger("errors")
 
@@ -224,101 +227,6 @@ class ToyModel(torch.nn.Module):
         return score
 
 #----------------------------------------------------------------------------
-# JEST & ACID's joint sampling batch selection method
-
-def jointly_sample_batch(learner_loss, ref_loss, N=16, filter_ratio=0.8, 
-                         learnability=True, inverted=False, numeric_stability_trick=False, 
-                         plotting=False):
-    """Joint sampling batch selection method used in JEST and ACID
-
-    Adapted from Evans & Parthasarathy et al's publication titled 
-    "Data curation via joint example selection further accelerates multimodal learning"
-    (Google DeepMind, London, UK, 2024)
-    Available at https://arxiv.org/abs/2406.17711 under CC BY licence
-    """
-	
-    # Define size of super-batch
-    B = int(learner_loss.numel()) # Size B of a super-batch
-
-    # Each mini-batch of size b will be split in n chunks
-    b_over_N = int(B * (1 - filter_ratio) / N) # Size b/N of each mini-batch chunk
-
-    # Construct the scores matrix
-    learner_loss = learner_loss.reshape((B,1))
-    ref_loss = ref_loss.reshape((1,B))
-    scores = learner_loss - ref_loss if learnability else - ref_loss  # Shape (B,B)
-    log.debug(*logs.get_stats_log("Scores", scores))
-    if inverted: scores = - scores
-    device = scores.get_device()
-    # Rows use different learner loss ==> i is the learner/student's index
-    # Columns use different reference loss ==> j is the reference/teacher's index
-    
-    log.debug("> JEST Round 0")
-
-    # Extract basic score for each element of the super-batch
-    logits_ii = torch.diag(scores) # Elements from the diagonal of the scores matrix
-    #Q: Is this associated to the probability of picking learner i and ref j?
-    log.debug(*logs.get_stats_log("Logits ii", logits_ii))
-    
-    # Draw the first mini-batch chunk using a uniform probability distribution
-    indices = np.random.choice(B, b_over_N, replace=False)
-    log.debug("Indices (%s)", len(indices))
-    log.debug("Number of unique new indices? %s", len(set(indices)))
-
-    # Sample all the rest of the mini-batch chunks
-    all_sum_of_probs = []
-    for n in range(1, N):
-
-        log.debug("> JEST Round %s", n)
-        sampled_so_far = n*b_over_N
-
-        # Get a binary mask that indicates which samples have been selected so far
-        is_sampled = torch.eye(B).to(device)[indices].sum(axis=0) # (B,)
-        
-        # Mask scores to only keep learner rows k that have already been sampled
-        logits_kj = (scores * is_sampled.view(B, 1)).sum(axis=0) # Sum over columns (B,)
-        log.debug(*logs.get_stats_log("Logits kj", logits_kj))
-        #Q: Associated to prob of picking learner i and an ref k that was already selected?
-
-        # Mask scores to only keep ref columns k that have already been sampled
-        logits_ik = (scores * is_sampled.view(1, B)).sum(axis=1) # Sum over rows (B,)
-        log.debug(*logs.get_stats_log("Logits ik", logits_ik))
-        #Q: Associated to prob of picking learner i and an ref k that was already selected?
-        
-        # Get conditional scores given past samples
-        logits = logits_ii + logits_kj + logits_ik
-        logits = logits / (2*sampled_so_far+1) # Normalize the logits by the number of terms added up
-        logits = logits - is_sampled * 1e8 # Avoid sampling with replacement
-        #Q: Why subtract that value, instead of setting all these to 0?
-
-        # Sample new mini-batch chunk using the conditional probability distribution
-        log.debug(*logs.get_stats_log("Logits", logits))
-        if numeric_stability_trick: logits = logits - max(logits)
-        probabilities = np.exp(logits.detach().cpu().numpy())
-        sum_of_probs = sum(probabilities)
-        log.debug(*logs.get_stats_log("Probabilities", probabilities))
-        log.debug("Sum of Probabilities = %s", sum_of_probs)
-        probabilities = probabilities / sum_of_probs
-        new_indices = np.random.choice(np.arange(B), b_over_N, replace=False, p=probabilities)
-        log.debug("Any repeated indices? %s", any([i in indices for i in new_indices]))
-        log.debug("Number of unique new indices? %s", len(set(new_indices)))
-        all_sum_of_probs.append(sum_of_probs)
-
-        # Expand the array of sampled indices
-        indices = np.concatenate((indices, new_indices))
-        log.debug("Indices (%s)", len(indices))
-
-    log.debug("All sums %s", all_sum_of_probs)
-    if plotting:
-        fig, ax = plt.subplots()
-        ax.plot(range(n-1), all_sum_of_probs)
-        ax.set_xlabel("Joint batch selection iteration")
-        plt.show()
-        plt.close(fig)
-
-    return indices # Gather the n chunks of size b/n and return mini-batch of size b
-
-#----------------------------------------------------------------------------
 # Train a 2D toy model with the given parameters.
 
 @logs.errors
@@ -327,9 +235,11 @@ def do_train(
     P_mean=-2.3, P_std=1.5, sigma_data=0.5, lr_ref=1e-2, lr_iter=512, ema_std=0.010,
     guidance=False, guidance_weight=3, guide_path=None, guide_interpolation=False,
     validation=False, val_batch_size=4<<7, sigma_max=5,
-    testing=False, n_test_samples=4<<8, test_batch_size=4<<8, test_outer=False, test_mandala=False,
+    testing=False, n_test_samples=4<<8, test_batch_size=4<<8, 
+    test_outer=False, test_mandala=False,
     test_kl=True, kl_n_samples=1<<18, kl_div_iter=16,
-    acid=False, acid_N=16, acid_f=0.8, acid_diff=True, acid_inverted=False, 
+    selection=False, acid=False,
+    acid_N=16, acid_f=0.8, acid_diff=True, acid_inverted=False, 
     acid_stability_trick=False, acid_late=False, acid_early=False,
     device=torch.device('cuda'),
     pkl_pattern=None, pkl_iter=256, 
@@ -360,36 +270,53 @@ def do_train(
     log.info("Number of training epochs = %s", total_iter)
     log.info("Training batch size = %s", batch_size)
     log.info("Number of training samples = %s", total_iter*batch_size)
-    log.info("Number of validation samples = %s", val_batch_size)
+    log.info("Number of validation samples = %s", total_iter*val_batch_size)
     log.info("Number of test samples = %s", n_test_samples)
     log.info("Test batch size = %s", test_batch_size)
 
     # Log ACID parameters
+    log.info("Selection = %s", selection)
     log.info("ACID = %s", acid)
-    if acid:
+    if selection:
+        if acid: 
+            selection_func_name = 'ours.selection.jointly_sample_batch'
+            selection_function = sel.jointly_sample_batch
+        else: 
+            selection_func_name = 'ours.selection.random_baseline'
+            selection_function = sel.random_baseline
+        mini_batch_size = sel.get_selection_size(batch_size, func_name=selection_func_name,
+                                                 N=acid_N, filter_ratio=acid_f)
+        requires_ref_loss = selection_func_name.split("ours.selection.")[-1] in sel.REQUIRES_REF_LOSS
         if acid_late:
-            run_acid = False
-            is_acid_waiting = True
-            log.info("ACID with delayed execution strategy")
+            run_selection = False
+            is_selection_waiting = True
+            log.info("Data selection with delayed execution strategy")
         elif acid_early:
-            run_acid = True
-            is_acid_waiting = True
-            log.info("ACID programmed stop strategy")
+            run_selection = True
+            is_selection_waiting = True
+            log.info("Data selection programmed stop strategy")
         else:
-            run_acid = True
-            is_acid_waiting = False
-            log.info("ACID with early-start execution strategy")
+            run_selection = True
+            is_selection_waiting = False
+            log.info("Data selection with early-start execution strategy")
+        log.info("Mini-Batch Size = %s", mini_batch_size)
         log.info("ACID's Number of Chunks = %s", acid_N)
         log.info("ACID's Filter Ratio = %s", acid_f)
         acid_b_over_N = int(batch_size * (1 - acid_f) / acid_N) # Size of a mini-batch chunk
         acid_batch_size = acid_N * acid_b_over_N # Size of a mini-batch
-        log.info("ACID's Mini-Batch Size = %s", acid_batch_size)
+        log.info("ACID's Mini-Batch Chunck Size = %s", int(mini_batch_size/acid_N))
         log.info("ACID's Learnability = %s", acid_diff)
         log.info("ACID's Scores Inverted = %s", acid_inverted)
         log.info("ACID's Numeric Stability Trick = %s", acid_stability_trick)
     else: 
-        run_acid = False
-        is_acid_waiting = False
+        mini_batch_size = batch_size
+        run_selection = False
+        is_selection_waiting = False
+        requires_ref_loss = False
+    log.info("Requires reference loss = %s", requires_ref_loss)
+    log.info("Selection waiting = %s", is_selection_waiting)
+    change_epoch, change_nimg = 0, 0
+    net_beats_ref = False # Assume reference is always better than the model at first
 
     # Log other parameters
     if guidance and guide_interpolation:
@@ -425,6 +352,7 @@ def do_train(
         if guide_path is not None:
             with builtins.open(guide_path, "rb") as f:
                 guide = pickle.load(f).to(device)
+                guide.eval().requires_grad_(False)
             set_up_logger(verbosity, log_filename) # No idea why, but builtins.open or pickle.load break the logger's setup
             log.warning("Guide model loaded from %s", guide_path)
         else:
@@ -436,9 +364,10 @@ def do_train(
     elif acid: 
         ref = ema
         log.warning("EMA assigned as ACID reference")
-    else: ref = None
-    if ref is not None: 
-        net_beats_ref = False # Assume reference is always better than the model at first
+    else: 
+        if requires_ref_loss: raise ValueError("No reference was given, but a reference is needed")
+        log.warning("No reference model")
+        ref = None
 
     # Initialize plot.
     if viz_iter is not None:
@@ -454,9 +383,13 @@ def do_train(
             plt.savefig(plt_path)
 
     # Training loop.
+    cumulative_training_time = 0
+    cumulative_selection_time = 0
+    examples_seen = 0
     progress_bar = tqdm.tqdm(range(total_iter))
     for iter_idx in progress_bar:
         if logging_to_file: log.info("Iteration = %i", iter_idx)
+        training_time_start = time.time()
 
         # Run forward-pass
         opt.param_groups[0]['lr'] = lr_ref / np.sqrt(max(iter_idx / lr_iter, 1))
@@ -465,49 +398,58 @@ def do_train(
         samples = gtd.sample(batch_size, sigma)
         gt_scores = gtd.score(samples, sigma)
         net_scores = net.score(samples, sigma, graph=True)
-        if run_acid or is_acid_waiting: ref_scores = ref.score(samples, sigma)
+        if (run_selection and requires_ref_loss) or is_selection_waiting: 
+            ref_scores = ref.score(samples, sigma)
         if guide_interpolation: 
             interpol_scores = guide.score(samples, sigma).lerp(net_scores, guidance_weight)
 
         # Calculate teacher and student loss
         net_loss = (sigma ** 2) * ((gt_scores - net_scores) ** 2).mean(-1)
-        if run_acid or is_acid_waiting:
-            ref_loss = (sigma ** 2) * ((gt_scores - ref_scores) ** 2).mean(-1)
+        if run_selection or is_selection_waiting:
+            selection_time_start = time.time()
             if guide_interpolation: 
-                acid_loss = (sigma ** 2) * ((gt_scores - interpol_scores) ** 2).mean(-1)
-            else: acid_loss = net_loss
-            if not net_beats_ref and net_loss.mean() < ref_loss.mean():
-                net_beats_ref = True
-                log.warning("Network has beaten the reference")
-                if guide_interpolation: log.warning("Calculation took the interpolation into account")
-                if is_acid_waiting:
-                    run_acid = not(run_acid)
-                    if run_acid: log.warning("ACID will now be run")
-                    else: log.warning("ACID will now be stopped")
-                    is_acid_waiting = False
+                selection_loss = (sigma ** 2) * ((gt_scores - interpol_scores) ** 2).mean(-1)
+            else: selection_loss = net_loss
+            if requires_ref_loss or is_selection_waiting:
+                ref_loss = (sigma ** 2) * ((gt_scores - ref_scores) ** 2).mean(-1)
+                if not net_beats_ref and net_loss.mean() < ref_loss.mean():
+                    net_beats_ref = True
+                    log.warning("Network has beaten the reference")
+                    if guide_interpolation: log.warning("Calculation took the interpolation into account")
+                    if is_selection_waiting:
+                        run_selection = not(run_selection)
+                        if run_selection: log.warning("Selection will now be run")
+                        else: log.warning("Selection will now be stopped")
+                        is_selection_waiting = False
+            else: ref_loss = None
+            cumulative_selection_time += time.time() - selection_time_start
 
         # Calculate overall loss
-        if run_acid:
+        if run_selection:
+            selection_time_start = time.time()
             try:
-                log.warning("Using ACID")
+                log.warning("Using data selection")
                 log.info("Average Super-Batch Learner Loss = %s", float(net_loss.mean()))
+                if requires_ref_loss:
+                    log.info("Average Super-Batch Reference Loss = %s", float(ref_loss.mean()))
                 if guide_interpolation: 
-                    log.info("Average Super-Batch Guided Learner Loss = %s", float(acid_loss.mean()))
-                log.info("Average Super-Batch Reference Loss = %s", float(ref_loss.mean()))
-                indices = jointly_sample_batch(acid_loss, ref_loss, 
-                    N=acid_N, filter_ratio=acid_f,
-                    learnability=acid_diff, inverted=acid_inverted,
-                    numeric_stability_trick=acid_stability_trick)
-                loss = acid_loss[indices] # Use indices of the ACID mini-batch
+                    log.info("Average Super-Batch Guided Learner Loss = %s", float(selection_loss.mean()))
+                indices = selection_function(selection_loss, ref_loss, selection_size=mini_batch_size,
+                    N=acid_N, filter_ratio=acid_f, learnability=acid_diff, inverted=acid_inverted,
+                    numeric_stability_trick=acid_stability_trick, log=log)
+                loss = selection_loss[indices] # Use indices of the ACID mini-batch
             except ValueError:
-                log.warning("ACID has crashed, so it has been deactivated")
+                log.warning("Selection has crashed, so it has been deactivated")
                 loss = net_loss
-                run_acid = False
-                is_acid_waiting = False
+                run_selection = False
+                is_selection_waiting = False
+            cumulative_selection_time += time.time() - selection_time_start
         else:
             loss = net_loss
+        examples_seen += len(loss)
 
         # Backpropagate either on the full batch or only on ACID mini-batch
+        log.info("Examples Seen = %s", examples_seen)
         log.info("Average Learner Loss = %s", float(loss.mean()))
         loss.mean().backward()
 
@@ -526,11 +468,14 @@ def do_train(
         beta = phema.power_function_beta(std=ema_std, t_next=iter_idx+1, t_delta=1)
         for p_net, p_ema in zip(net.parameters(), ema.parameters()):
             p_ema.lerp_(p_net.detach(), 1 - beta)
+        cumulative_training_time += time.time() - training_time_start
+        log.info("Training Time [min] = %s", cumulative_training_time/60)
+        log.info("Selection Time [min] = %s", cumulative_selection_time/60)
 
         # Evaluate average loss and L2 metric on validation batch
         if validation:
             run_kl_val = iter_idx % kl_div_iter == 0
-            val_results = run_test(net, ema, guide, ref, acid=run_acid,
+            val_results = run_test(net, ema, guide, ref, acid=run_selection,
                 classes=classes, P_mean=P_mean, P_std=P_std, sigma_max=sigma_max,
                 n_samples=val_batch_size, batch_size=val_batch_size, 
                 test_outer=test_outer, test_mandala=test_mandala,
@@ -541,27 +486,28 @@ def do_train(
             # Log validation loss
             log.info("Average Validation Learner Loss = %s", val_results["learner_loss"])
             log.info("Average Validation EMA Loss = %s", val_results["ema_loss"])
-            if guidance: log.info("Average Validation Guide Loss = %s", val_results["guide_loss"])
-            if run_acid: log.info("Average Validation ACID Reference Loss = %s", val_results["ref_loss"])
-
-            # Log validation L2 metric
             log.info("Average Validation Learner L2 Distance = %s", val_results["learner_L2_metric"])
             log.info("Average Validation EMA L2 Distance = %s", val_results["ema_L2_metric"])
-            if guidance:
+            if guidance: 
+                log.info("Average Validation Guide Loss = %s", val_results["guide_loss"])
                 log.info("Average Validation Guided Learner L2 Distance = %s", val_results["learner_guided_L2_metric"])
                 log.info("Average Validation Guided EMA L2 Distance = %s", val_results["ema_guided_L2_metric"])
+            if run_selection and requires_ref_loss: 
+                log.info("Average Validation ACID Reference Loss = %s", val_results["ref_loss"])
+
 
             # Log validation metrics in outer branches of the distribution
             if test_outer:
                 log.info("Average Outer Validation Learner Loss = %s", val_results["learner_out_loss"])
                 log.info("Average Outer Validation EMA Loss = %s", val_results["ema_out_loss"])
-                if guidance: log.info("Average Outer Validation Guide Loss = %s", val_results["guide_out_loss"])
-                if run_acid: log.info("Average Outer Validation ACID Reference Loss = %s", val_results["ref_out_loss"])
                 log.info("Average Outer Validation Learner L2 Distance = %s", val_results["learner_out_L2_metric"])
                 log.info("Average Outer Validation EMA L2 Distance = %s", val_results["ema_out_L2_metric"])
-                if guidance:
+                if guidance: 
+                    log.info("Average Outer Validation Guide Loss = %s", val_results["guide_out_loss"])
                     log.info("Average Outer Validation Guided Learner L2 Distance = %s", val_results["learner_guided_out_L2_metric"])
                     log.info("Average Outer Validation Guided EMA L2 Distance = %s", val_results["ema_guided_out_L2_metric"])
+                if run_selection and requires_ref_loss: 
+                    log.info("Average Outer Validation ACID Reference Loss = %s", val_results["ref_out_loss"])
             
             # Log validation mandala score
             if test_mandala:
@@ -599,7 +545,7 @@ def do_train(
     
     # Evaluate average loss and L2 metric on test data
     if testing:
-        test_results = run_test(net, ema, guide, ref, acid=acid,
+        test_results = run_test(net, ema, guide, ref, acid=selection,
             classes=classes, P_mean=P_mean, P_std=P_std, sigma_max=sigma_max,
             n_samples=n_test_samples, batch_size=test_batch_size, test_outer=test_outer,
             test_kl=test_kl, kl_n_samples=kl_n_samples,
@@ -607,30 +553,31 @@ def do_train(
             generator=generator, device=device)
 
         # Log test loss
-        log.warning("Average Test Learner Loss = %s", test_results["learner_loss"])
-        log.warning("Average Test EMA Loss = %s", test_results["ema_loss"])
-        if guidance: log.warning("Average Test Guide Loss = %s", test_results["guide_loss"])
-        if acid: log.warning("Average Test ACID Reference Loss = %s", test_results["ref_loss"])
+        log.info("Average Test Learner Loss = %s", test_results["learner_loss"])
+        log.info("Average Test EMA Loss = %s", test_results["ema_loss"])
+        log.info("Average Test Learner L2 Distance = %s", test_results["learner_L2_metric"])
+        log.info("Average Test EMA L2 Distance = %s", test_results["ema_L2_metric"])
+        if guidance: 
+            log.info("Average Test Guide Loss = %s", test_results["guide_loss"])
+            log.info("Average Test Guided Learner L2 Distance = %s", test_results["learner_guided_L2_metric"])
+            log.info("Average Test Guided EMA L2 Distance = %s", test_results["ema_guided_L2_metric"])
+        if run_selection and requires_ref_loss: 
+            log.info("Average Test ACID Reference Loss = %s", test_results["ref_loss"])
 
-        # Log test L2 metric
-        log.warning("Average Test Learner L2 Distance = %s", test_results["learner_L2_metric"])
-        log.warning("Average Test EMA L2 Distance = %s", test_results["ema_L2_metric"])
-        if guidance:
-            log.warning("Average Test Guided Learner L2 Distance = %s", test_results["learner_guided_L2_metric"])
-            log.warning("Average Test Guided EMA L2 Distance = %s", test_results["ema_guided_L2_metric"])
 
-        # Log metrics on outer branches of the distribution
+        # Log test metrics in outer branches of the distribution
         if test_outer:
-            log.warning("Average Outer Test Learner Loss = %s", test_results["learner_out_loss"])
-            log.warning("Average Outer Test EMA Loss = %s", test_results["ema_out_loss"])
-            if guidance: log.warning("Average Outer Test Guide Loss = %s", test_results["guide_out_loss"])
-            if acid: log.warning("Average Outer Test ACID Reference Loss = %s", test_results["ref_out_loss"])
-            log.warning("Average Outer Test Learner L2 Distance = %s", test_results["learner_out_L2_metric"])
-            log.warning("Average Outer Test EMA L2 Distance = %s", test_results["ema_out_L2_metric"])
-            if guidance:
-                log.warning("Average Outer Test Guided Learner L2 Distance = %s", test_results["learner_guided_out_L2_metric"])
-                log.warning("Average Outer Test Guided EMA L2 Distance = %s", test_results["ema_guided_out_L2_metric"])
-
+            log.info("Average Outer Test Learner Loss = %s", test_results["learner_out_loss"])
+            log.info("Average Outer Test EMA Loss = %s", test_results["ema_out_loss"])
+            log.info("Average Outer Test Learner L2 Distance = %s", test_results["learner_out_L2_metric"])
+            log.info("Average Outer Test EMA L2 Distance = %s", test_results["ema_out_L2_metric"])
+            if guidance: 
+                log.info("Average Outer Test Guide Loss = %s", test_results["guide_out_loss"])
+                log.info("Average Outer Test Guided Learner L2 Distance = %s", test_results["learner_guided_out_L2_metric"])
+                log.info("Average Outer Test Guided EMA L2 Distance = %s", test_results["ema_guided_out_L2_metric"])
+            if run_selection and requires_ref_loss: 
+                log.info("Average Outer Test ACID Reference Loss = %s", test_results["ref_out_loss"])
+        
         # Log test mandala score
         if test_mandala:
             log.info("Test Learner Mandala Score = %s", test_results["learner_mandala_score"])
@@ -675,6 +622,9 @@ def do_train(
 def extract_results_from_log(log_path):
 
     results = {}
+    examples_seen = []
+    training_time = []
+    selection_time = []
     super_learner_loss = []
     super_ref_loss = []
     learner_loss = []
@@ -706,7 +656,10 @@ def extract_results_from_log(log_path):
     ema_val_kl_div = []
     with builtins.open(log_path, "r") as f:
         for line in f:
-            if "Average" in line:
+            if "Training Time" in line: training_time.append(vtext.find_numbers(line)[-1]); continue
+            elif "Selection Time" in line: selection_time.append(vtext.find_numbers(line)[-1]); continue
+            elif "Examples Seen" in line: examples_seen.append(vtext.find_numbers(line)[-1]); continue
+            elif "Average" in line:
                 if "Average Learner Loss" in line: learner_loss.append(vtext.find_numbers(line)[-1]); continue
                 elif "Super-Batch" in line:
                     if "Average Super-Batch Learner Loss" in line: super_learner_loss.append(vtext.find_numbers(line)[-1]); continue
@@ -774,6 +727,10 @@ def extract_results_from_log(log_path):
                     elif "Test Guided EMA Classification Score" in line: results["ema_guided_test_classification_score"] = vtext.find_numbers(line)[-1]; continue
             else: pass
     
+    results["examples_seen"] = examples_seen
+    results["training_time"] = training_time
+    results["selection_time"] = selection_time
+
     results["super_learner_loss"] = super_learner_loss
     results["super_ref_loss"] = super_ref_loss
     results["learner_loss"] = learner_loss
@@ -816,31 +773,41 @@ def plot_loss(loss_dict, fig_path=None):
     figs = []
     if fig_path is not None:
         fig_path_base, fig_extension = os.path.splitext(fig_path)
+    loss_dict["epoch"] = np.arange(len(loss_dict["examples_seen"]))
+    loss_dict["examples_seen"] = np.array(loss_dict["examples_seen"]) / 1e6
+    if len(loss_dict["examples_seen"]) != len(loss_dict["training_time"]):
+        loss_dict["training_time"] = loss_dict["training_time"][::2] #TODO: Remove this patch when problem is fixed
+    keys = ["epoch", "examples_seen", "training_time"]
+    names = ["Epoch", "Examples Seen [millions]", "Time [hs]"]
 
     # Basic plot
     def plot_training_loss():
-        fig, axes = plt.subplots(nrows=2, gridspec_kw=dict(hspace=0))
-        axes[0].plot(loss_dict["learner_loss"], "C0", label="Training Loss", alpha=0.8, linewidth=2)
-        if len(loss_dict["super_ref_loss"])>0: 
-            axes[0].plot(loss_dict["super_ref_loss"], "C3", label="ACID Ref Loss", alpha=1, linewidth=1)
-            axes[0].plot(loss_dict["super_learner_loss"], "k", label="ACID Learner Loss", alpha=1, linewidth=0.5)
-        axes[1].set_xlabel("Epoch")
-        axes[0].set_ylabel("Average Training Loss")
-        axes[0].legend()
-        for ax in axes: ax.grid()
+        fig, axes = plt.subplots(nrows=2, ncols=3, sharex="col", sharey="row", gridspec_kw=dict(hspace=0, wspace=0))
+        fig.set_size_inches([3.2*3, 4.8])
+        for axs, key, name in zip(axes.T, keys, names):
+            axs[0].plot(loss_dict[key], loss_dict["learner_loss"], "C0", label="Training Loss", alpha=0.8, linewidth=2)
+            if len(loss_dict["super_ref_loss"])>0: 
+                axs[0].plot(loss_dict[key], loss_dict["super_ref_loss"], "C3", label="ACID Ref Loss", alpha=1, linewidth=1)
+                axs[0].plot(loss_dict[key], loss_dict["super_learner_loss"], "k", label="ACID Learner Loss", alpha=1, linewidth=0.5)
+            axs[1].set_xlabel(name)
+        axes[0][0].set_ylabel("Average Training Loss")
+        for axs in axes: axs[0].legend()
+        for axs in axes: 
+            for ax in axs: ax.grid()
         return fig, axes
     
     # First, plot validation loss values
     fig_1, axes_1 = plot_training_loss()
     if len(loss_dict["learner_val_loss"])>0:
-        if len(loss_dict["ref_val_loss"])>0:
-            axes_1[1].plot(loss_dict["ref_val_loss"], "C3", label="Ref Val Loss", alpha=1, linewidth=0.5)
-        axes_1[1].plot(loss_dict["learner_val_loss"], "k", label="Learner Val Loss", alpha=1.0, linewidth=0.5)
-        axes_1[1].plot(loss_dict["ema_val_loss"], color="m", label="EMA Val Loss", alpha=0.35, linewidth=3)
-        if len(loss_dict["guide_val_loss"])>0:
-            axes_1[1].plot(loss_dict["guide_val_loss"], color="r", label="Guide Val Loss", alpha=0.25, linewidth=2)
-    axes_1[1].set_ylabel("Average Validation Loss")
-    axes_1[1].legend()
+        for axs, key in zip(axes_1.T, keys):
+            if len(loss_dict["ref_val_loss"])>0:
+                axs[1].plot(loss_dict[key], loss_dict["ref_val_loss"], "C3", label="Ref Val Loss", alpha=1, linewidth=0.5)
+            axs[1].plot(loss_dict[key], loss_dict["learner_val_loss"], "k", label="Learner Val Loss", alpha=1.0, linewidth=0.5)
+            axs[1].plot(loss_dict[key], loss_dict["ema_val_loss"], color="m", label="EMA Val Loss", alpha=0.35, linewidth=3)
+            if len(loss_dict["guide_val_loss"])>0:
+                axs[1].plot(loss_dict[key], loss_dict["guide_val_loss"], color="r", label="Guide Val Loss", alpha=0.25, linewidth=2)
+        axes_1[1][0].set_ylabel("Average Validation Loss")
+        for axs in axes_1: axs[0].legend()
     plt.tight_layout()
     plt.savefig(fig_path_base+"_1"+fig_extension)
     figs.append(fig_1)
@@ -848,16 +815,17 @@ def plot_loss(loss_dict, fig_path=None):
     # Then, plot validation L2 distance values
     fig_2, axes_2 = plot_training_loss()
     if len(loss_dict["learner_val_loss"])>0:
-        axes_2[1].plot(loss_dict["ema_L2_val_metric"], "-.", color="navy", label="EMA L2 Val Metric", alpha=1, linewidth=1)
-        if len(loss_dict["L2_val_metric"])>0:
-            axes_2[1].plot(loss_dict["L2_val_metric"], "-", color="blue", label="Learner L2 Val Metric", alpha=0.35, linewidth=3)
-        if len(loss_dict["ema_guided_L2_val_metric"])>0:
-            axes_2[1].plot(loss_dict["ema_guided_L2_val_metric"], "--", color="deeppink", label="Guided EMA L2 Val Metric", alpha=1, linewidth=1)
-        if len(loss_dict["guided_L2_val_metric"])>0:
-            axes_2[1].plot(loss_dict["guided_L2_val_metric"], "-", color="mediumvioletred", label="Guided Learner L2 Val Metric", 
-                           alpha=0.35, linewidth=3)
-    axes_2[1].set_ylabel("Average Validation L2 Distance")
-    axes_2[1].legend()
+        for axs, key in zip(axes_2.T, keys):
+            axs[1].plot(loss_dict[key], loss_dict["ema_L2_val_metric"], "-.", color="navy", label="EMA L2 Val Metric", alpha=1, linewidth=1)
+            if len(loss_dict["L2_val_metric"])>0:
+                axs[1].plot(loss_dict[key], loss_dict["L2_val_metric"], "-", color="blue", label="Learner L2 Val Metric", alpha=0.35, linewidth=3)
+            if len(loss_dict["ema_guided_L2_val_metric"])>0:
+                axs[1].plot(loss_dict[key], loss_dict["ema_guided_L2_val_metric"], "--", color="deeppink", label="Guided EMA L2 Val Metric", alpha=1, linewidth=1)
+            if len(loss_dict["guided_L2_val_metric"])>0:
+                axs[1].plot(loss_dict[key], loss_dict["guided_L2_val_metric"], "-", color="mediumvioletred", label="Guided Learner L2 Val Metric", 
+                            alpha=0.35, linewidth=3)
+        axes_2[1][0].set_ylabel("Average Validation L2 Distance")
+        for axs in axes_2: axs[0].legend()
     plt.tight_layout()
     plt.savefig(fig_path_base+"_2"+fig_extension)
     figs.append(fig_2)
@@ -865,12 +833,13 @@ def plot_loss(loss_dict, fig_path=None):
     # Also compare validation loss on the outer branches vs the whole distribution
     if len(loss_dict["learner_out_val_loss"])>0:
         fig_3, axes_3 = plot_training_loss()
-        axes_3[1].plot(loss_dict["learner_val_loss"], "k", label="Learner Val Loss", alpha=1.0, linewidth=0.5)
-        axes_3[1].plot(loss_dict["ema_val_loss"], color="m", label="EMA Val Loss", alpha=0.35, linewidth=3)
-        axes_3[1].plot(loss_dict["learner_out_val_loss"], "k", label="Learner Out Val Loss", alpha=1.0, linewidth=0.5, linestyle="dashed")
-        axes_3[1].plot(loss_dict["ema_out_val_loss"], color="orange", label="EMA Out Val Loss", alpha=0.35, linewidth=3)
-        axes_3[1].set_ylabel("Average Validation Loss")
-        axes_3[1].legend(loc="upper right", ncols=2)
+        for axs, key in zip(axes_3.T, keys):
+            axs[1].plot(loss_dict[key], loss_dict["learner_val_loss"], "k", label="Learner Val Loss", alpha=1.0, linewidth=0.5)
+            axs[1].plot(loss_dict[key], loss_dict["ema_val_loss"], color="m", label="EMA Val Loss", alpha=0.35, linewidth=3)
+            axs[1].plot(loss_dict[key], loss_dict["learner_out_val_loss"], "k", label="Learner Out Val Loss", alpha=1.0, linewidth=0.5, linestyle="dashed")
+            axs[1].plot(loss_dict[key], loss_dict["ema_out_val_loss"], color="orange", label="EMA Out Val Loss", alpha=0.35, linewidth=3)
+        axes_3[1][0].set_ylabel("Average Validation Loss")
+        for axs in axes_3: axs[0].legend(loc="upper right", ncols=2)
         plt.tight_layout()
         plt.savefig(fig_path_base+"_3"+fig_extension)
         figs.append(fig_3)
@@ -878,25 +847,27 @@ def plot_loss(loss_dict, fig_path=None):
     # Finally, compare validation L2 metrics on the outer branches vs the whole distribution
     if len(loss_dict["ema_out_L2_val_metric"])>0:
         fig_4, axes_4 = plot_training_loss()
-        axes_4[1].plot(loss_dict["ema_L2_val_metric"], "-", color="navy", label="EMA L2 Val Metric", alpha=1, linewidth=1)
-        axes_4[1].plot(loss_dict["L2_val_metric"], "-", color="blue", label="Learner L2 Val Metric", alpha=0.35, linewidth=3)
-        axes_4[1].plot(loss_dict["ema_out_L2_val_metric"], "-.", color="firebrick", label="EMA Out L2 Val Metric", alpha=1, linewidth=1)
-        axes_4[1].plot(loss_dict["out_L2_val_metric"], "-", color="salmon", label="Learner Out L2 Val Metric", alpha=0.45, linewidth=3)
-        axes_4[1].set_ylabel("Average Validation L2 Distance")
-        axes_4[1].legend(loc="upper right", ncols=2)
+        for axs, key in zip(axes_4.T, keys):
+            axs[1].plot(loss_dict[key], loss_dict["ema_L2_val_metric"], "-", color="navy", label="EMA L2 Val Metric", alpha=1, linewidth=1)
+            axs[1].plot(loss_dict[key], loss_dict["L2_val_metric"], "-", color="blue", label="Learner L2 Val Metric", alpha=0.35, linewidth=3)
+            axs[1].plot(loss_dict[key], loss_dict["ema_out_L2_val_metric"], "-.", color="firebrick", label="EMA Out L2 Val Metric", alpha=1, linewidth=1)
+            axs[1].plot(loss_dict[key], loss_dict["out_L2_val_metric"], "-", color="salmon", label="Learner Out L2 Val Metric", alpha=0.45, linewidth=3)
+        axes_4[1][0].set_ylabel("Average Validation L2 Distance")
+        for axs in axes_4: axs[0].legend(loc="upper right", ncols=2)
         plt.tight_layout()
         plt.savefig(fig_path_base+"_4"+fig_extension)
         figs.append(fig_4)
 
         fig_5, axes_5 = plot_training_loss()
-        axes_5[1].plot(loss_dict["ema_guided_L2_val_metric"], "--", color="deeppink", label="Guided EMA L2 Val Metric", alpha=1, linewidth=1)
-        axes_5[1].plot(loss_dict["guided_L2_val_metric"], "-", color="mediumvioletred", label="Guided Learner L2 Val Metric", 
-                        alpha=0.35, linewidth=3)
-        axes_5[1].plot(loss_dict["ema_guided_out_L2_val_metric"], "--", color="teal", label="Guided EMA Out L2 Val Metric", alpha=1, linewidth=1)
-        axes_5[1].plot(loss_dict["guided_out_L2_val_metric"], "-", color="lightseagreen", label="Guided Learner Out L2 Val Metric", 
-                        alpha=0.45, linewidth=3)
-        axes_5[1].set_ylabel("Average Validation L2 Distance")
-        axes_5[1].legend(loc="upper right")
+        for axs, key in zip(axes_5.T, keys):
+            axs[1].plot(loss_dict[key], loss_dict["ema_guided_L2_val_metric"], "--", color="deeppink", label="Guided EMA L2 Val Metric", alpha=1, linewidth=1)
+            axs[1].plot(loss_dict[key], loss_dict["guided_L2_val_metric"], "-", color="mediumvioletred", label="Guided Learner L2 Val Metric", 
+                            alpha=0.35, linewidth=3)
+            axs[1].plot(loss_dict[key], loss_dict["ema_guided_out_L2_val_metric"], "--", color="teal", label="Guided EMA Out L2 Val Metric", alpha=1, linewidth=1)
+            axs[1].plot(loss_dict[key], loss_dict["guided_out_L2_val_metric"], "-", color="lightseagreen", label="Guided Learner Out L2 Val Metric", 
+                            alpha=0.45, linewidth=3)
+        axes_5[1][0].set_ylabel("Average Validation L2 Distance")
+        for axs in axes_5: axs[0].legend(loc="upper right")
         plt.tight_layout()
         plt.savefig(fig_path_base+"_5"+fig_extension)
         figs.append(fig_5)
@@ -911,9 +882,10 @@ def mandala_score(model, ground_truth_dist, guide=None, guidance_weight=3,
                   grid_resolution=101, 
                   x_centre=GT_ORIGIN[0], y_centre=GT_ORIGIN[1], 
                   x_side=2*1.5, y_side=2*1.5,
-                  logging=False, plotting=False, 
+                  logging=False, plotting=False,
                   full_scale=True, log_scale=False, 
-                  device=torch.device("cuda"), generator=None):
+                  device=torch.device("cuda"), generator=None, 
+                  save_fig=None, **plot_kwargs):
 
     # If no samples provided, generate samples
     if samples is None:
@@ -985,7 +957,8 @@ def mandala_score(model, ground_truth_dist, guide=None, guidance_weight=3,
             x_centre, y_centre, x_side, y_side, 
             n_hits_unique, n_miss_unique, 
             ground_truth_dist,
-            full_scale=full_scale, log_scale=log_scale)
+            full_scale=full_scale, log_scale=log_scale, 
+            save_fig=save_fig, **plot_kwargs)
 
     return unique_score, non_unique_score
 
@@ -997,38 +970,55 @@ def plot_mandala_score(samples, grid,
                        x_centre, y_centre, x_side, y_side, 
                        n_hits_unique, n_miss_unique, 
                        ground_truth_dist,
-                       full_scale=True, log_scale=False):
+                       full_scale=True, log_scale=False,
+                       save_fig=None, show_stats=True, show_titles=True,
+                       vmax=None, full_tree=True, show_points=True):
        
+    # Set up
+    if full_tree:
+        map_coords = grid_coords.swapaxes(0,2).detach().cpu().numpy()
+        map_vals = grid.T
+        kwargs_plot = dict(elems={'gt_uncond_thin', 'gt_outline_thin'},
+                           view_x=x_centre, view_y=y_centre, view_size=x_side/2)
+    else:
+        map_coords = grid_coords.swapaxes(0,2).detach().cpu().numpy()[:,30:,30:]
+        map_vals = grid.T[30:,30:]
+        kwargs_plot = dict(elems={'gt_outline_thin'}, 
+                           view_x=0.4, view_y=0.4, view_size=0.37*x_side)
+    
     # Create figure with square aspect ratio
-    fig, [ax1, ax2, ax3] = plt.subplots(ncols=3, figsize=(10.2, 5), dpi=300, 
-                                        gridspec_kw={'width_ratios': [5, 5, .2]})
+    if show_points:
+        fig, [ax1, ax2, ax3] = plt.subplots(ncols=3, figsize=(10.2, 5), dpi=300, 
+                                            gridspec_kw={'width_ratios': [5, 5, .2]})
+    else:
+        fig, [ax2, ax3] = plt.subplots(ncols=2, figsize=(6.1, 5), dpi=300, 
+                                       gridspec_kw={'width_ratios': [5, .2]})
 
     # 1. Draw fractal with scatter
-    ax1.set_title("Fractal Tree with Scatter")
-    ax1.set_aspect("equal")
+    if show_points:
+        if show_titles: ax1.set_title("Fractal Tree with Scatter")
+        ax1.set_aspect("equal")
 
-    # Draw fractal
-    do_plot(ground_truth_dist, elems={'gt_uncond', 'gt_outline'},
-                view_x=x_centre, view_y=y_centre, view_size=x_side/2, ax=ax1)
+        # Draw fractal
+        do_plot(ground_truth_dist, ax=ax1, **kwargs_plot)
 
-    # Plot scatter points
-    ax1.scatter(*samples.swapaxes(0,1).detach().cpu().numpy(), color='k', alpha=0.1, s=10, zorder=10)
+        # Plot scatter points
+        ax1.scatter(*samples.swapaxes(0,1).detach().cpu().numpy(), 
+                    color='k', alpha=0.1, s=10, zorder=10)
 
     # 2. Hit/Miss Visualization
-    ax2.set_title("Hit/Miss Analysis")
+    if show_titles: ax2.set_title("Hit/Miss Analysis")
     ax2.set_aspect("equal")
 
     if not full_scale:
         grid[grid>1]=2 # Set every n>=2 to 2
     if log_scale:
-        kwargs = dict(norm=LogNorm(vmin=1))
+        kwargs = dict(norm=LogNorm(vmin=1, vmax=vmax))
     else: 
-        kwargs = dict(vmin=0)
+        kwargs = dict(vmin=0, vmax=vmax)
     cmap = LinearSegmentedColormap.from_list('', ['white', *plt.cm.Reds(np.arange(255))])
-    map = ax2.pcolormesh(*grid_coords.swapaxes(0,2).detach().cpu().numpy(), 
-                          grid.T, cmap=cmap, **kwargs)
-    do_plot(ground_truth_dist, elems={'gt_uncond_thin', 'gt_outline_thin'},
-                view_x=x_centre, view_y=y_centre, view_size=x_side/2, ax=ax2)
+    map = ax2.pcolormesh(*map_coords, map_vals, cmap=cmap, **kwargs)
+    do_plot(ground_truth_dist, ax=ax2, **kwargs_plot)
     plt.colorbar(map, ax=ax2, cax=ax3)
 
     # Add thin grid lines
@@ -1038,21 +1028,30 @@ def plot_mandala_score(samples, grid,
         ax2.axhline(y=y, color='gray', alpha=0.2, linewidth=0.1)
 
     # Set bounds and remove axis numbers for all plots
-    for ax in [ax1, ax2]:
-        ax.set_xlim(*bounds[0])
-        ax.set_ylim(*bounds[1])
+    if show_points:
+        change_axes = [ax1, ax2]
+    else:
+        change_axes = [ax2]
+    for ax in change_axes:
+        if full_tree:
+            ax.set_xlim(*bounds[0])
+            ax.set_ylim(*bounds[1])
         ax.set_xticklabels([])
         ax.set_yticklabels([])
     plt.tight_layout()
 
     # Add stats only to the last plot
-    stats_text = f"Unique Total: {n_hits_unique+n_miss_unique}\nHits: {n_hits_unique}\nMisses: {n_miss_unique}"\
-        f"\nMandala Score: {n_hits_unique/(n_hits_unique+n_miss_unique):.3f}"
-    ax2.text(0.02, 0.98, stats_text,
-                transform=ax2.transAxes,
-                verticalalignment='top',
-                fontsize=8,
-                bbox=dict(facecolor='white', alpha=0.8, edgecolor='none'))
+    if show_stats:
+        stats_text = f"Unique Total: {n_hits_unique+n_miss_unique}\nHits: {n_hits_unique}\nMisses: {n_miss_unique}"\
+            f"\nMandala Score: {n_hits_unique/(n_hits_unique+n_miss_unique):.3f}"
+        ax2.text(0.02, 0.98, stats_text,
+                    transform=ax2.transAxes,
+                    verticalalignment='top',
+                    fontsize=8,
+                    bbox=dict(facecolor='white', alpha=0.8, edgecolor='none'))
+
+    if save_fig is not None:
+        fig.savefig(save_fig)
 
 #----------------------------------------------------------------------------
 # Run test
@@ -1189,6 +1188,8 @@ def run_test(net, ema=None, guide=None, ref=None, acid=False,
 
         # Create full EMA samples using net for guidance
         gt_test_outputs = do_sample(net=gtd, x_init=test_samples, sigma_max=sigma_max)[-1]
+        if test_outer:
+            gt_out_test_outputs = do_sample(net=outd, x_init=out_test_samples, sigma_max=sigma_max)[-1]
         if test_ema:
             ema_test_outputs = do_sample(net=ema, x_init=test_samples, sigma_max=sigma_max)[-1]
             results["ema_L2_metric"] += float(torch.sqrt(((ema_test_outputs - gt_test_outputs) ** 2).sum(-1)).mean())/n_epochs
@@ -1196,8 +1197,6 @@ def run_test(net, ema=None, guide=None, ref=None, acid=False,
                 guided_test_outputs = do_sample(net=ema, x_init=test_samples, 
                                                 guidance=guidance_weight, gnet=guide, sigma_max=sigma_max)[-1]
                 results["ema_guided_L2_metric"] += float(torch.sqrt(((guided_test_outputs - gt_test_outputs) ** 2).sum(-1)).mean())/n_epochs
-            if test_outer:
-                gt_out_test_outputs = do_sample(net=outd, x_init=out_test_samples, sigma_max=sigma_max)[-1]
                 ema_out_test_outputs = do_sample(net=ema, x_init=out_test_samples, sigma_max=sigma_max)[-1]
                 results["ema_out_L2_metric"] += float(torch.sqrt(((ema_out_test_outputs - gt_out_test_outputs) ** 2).sum(-1)).mean())/n_epochs
                 if test_guide:
@@ -1506,7 +1505,7 @@ def do_plot(
     if 'samples_before_small' in elems: points(samples, alpha=0.5, size=15, color="m")
     if 'trajectories_small' in elems: lines(trajectories.transpose(0, 1), alpha=0.3, color="lightgrey")
     if 'out_gt_uncond' in elems:    contours(alloutd.logp(gridxy), levels=[GT_LOGP_LEVEL, 0], colors=[[0.9,0.9,0.9]], linecolors=[[0.7,0.7,0.7]], linewidth=1.5)
-    if 'out_gt_outline' in elems:   contours(outd.logp(gridxy), levels=[GT_LOGP_LEVEL, 0], colors=[[1.0,0.8,0.6]], linecolors=[[0.8,0.6,0.5]], linewidth=1.5)
+    if 'out_gt_outline' in elems:   contours(outd.logp(gridxy), levels=[GT_LOGP_LEVEL, 0], colors=[[252/255, 146/255, 33/255]], linecolors=[[145/255, 78/255, 7/255]], linewidth=1, alpha=0.5)
     if 'out_gt_after' in elems:     points(out_gt_trajectories[-1], alpha=0.35, size=15, color="b")
     if 'out_gt_trajectories_small' in elems: lines(out_gt_trajectories.transpose(0, 1), alpha=0.4, color="lightsteelblue")
     if 'out_samples' in elems:      points(out_trajectories[-1], size=15, alpha=0.35)
@@ -1585,6 +1584,8 @@ def cmdline():
                                                                       type=str, default=None, show_default=True)
 @click.option('--interpol/--no-interpol', help='Use guide interpolation on training scores?', metavar='BOOL', 
                                                                       type=bool, default=False, show_default=True)
+@click.option('--selection/--no-selection',   
+                          help='Use data selection?', metavar='BOOL', type=bool, default=False, show_default=True)
 @click.option('--acid/--no-acid',   
                           help='Use ACID batch selection?', metavar='BOOL', 
                                                                       type=bool, default=False, show_default=True)
@@ -1611,12 +1612,16 @@ def cmdline():
                                                                       type=bool, default=True, show_default=True)
 @click.option('--device', help='CUDA GPU id?', metavar='INT',         type=int, default=0, show_default=True)
 def train(outdir, cls, layers, dim, total_iter, batch_size, val, test, viz, 
-          guidance, guide_path, interpol, acid, n, filt, diff, invert, late, early, trick,
+          guidance, guide_path, interpol, selection, acid, n, filt, diff, invert, late, early, trick,
           seed, verbose, debug, logging, device):
     """Train a 2D toy model with the given parameters."""
+    
     if debug: verbosity = 2
     elif verbose: verbosity = 1
     else: verbosity = 0
+
+    selection = selection or acid
+
     if outdir is not None:
         outdir = os.path.join(dirs.MODELS_HOME, outdir)
         if not os.path.isdir(outdir): os.makedirs(outdir)
@@ -1627,13 +1632,15 @@ def train(outdir, cls, layers, dim, total_iter, batch_size, val, test, viz,
     else: log_filepath = None
     pkl_pattern = f'{outdir}/iter%04d.pkl' if outdir is not None else None
     viz_iter = 32 if viz else None
+
     device = torch.device("cuda:"+str(device))
     log.info('Training...')
     do_train(classes=cls, num_layers=layers, hidden_dim=dim, 
              total_iter=total_iter, batch_size=batch_size, seed=seed, 
              validation=val, testing=test, 
              guidance=guidance, guide_path=guide_path, guide_interpolation=interpol,
-             acid=acid, acid_N=n, acid_f=filt, acid_diff=diff, acid_inverted=invert, 
+             selection=selection, acid=acid,
+             acid_N=n, acid_f=filt, acid_diff=diff, acid_inverted=invert, 
              acid_late=late, acid_stability_trick=trick, acid_early=early,
              pkl_pattern=pkl_pattern, 
              viz_iter=viz_iter,
@@ -1654,10 +1661,13 @@ def train(outdir, cls, layers, dim, total_iter, batch_size, val, test, viz,
     help='Was this trained using ACID batch selection?', metavar='BOOL', type=bool, default=False, show_default=True)
 @click.option('--n-samples', help='Number of samples', metavar='INT', type=int, default=4<<8, show_default=True)
 @click.option('--batch-size', help='Batch size', metavar='INT', type=int, default=4<<8, show_default=True)
+@click.option('--external/--no-external', help='Whether to calculate metrics on external branches or not', 
+               metavar='BOOL', type=bool, default=False, show_default=True)
+@click.option('--mandala/--no-mandala', help='Whether to calculate the mandala and classification scores or not', 
+               metavar='BOOL', type=bool, default=False, show_default=True)
 @click.option('--seed', help='Random seed', metavar='FLOAT', type=int, default=None, show_default=True)
-@click.option('--logging', 
-    help='Local path to logging file', metavar='DIR', type=str, default=None)
-def test(net_path, ema_path, guide_path, acid, n_samples, batch_size, seed, logging):
+@click.option('--logging', help='Local path to logging file', metavar='DIR', type=str, default=None)
+def test(net_path, ema_path, guide_path, acid, n_samples, batch_size, external, mandala, seed, logging):
     """Test a given model on a fresh batch of test data"""
 
     net_path = os.path.join(dirs.MODELS_HOME, net_path)
@@ -1669,7 +1679,8 @@ def test(net_path, ema_path, guide_path, acid, n_samples, batch_size, seed, logg
         log_filepath = os.path.join(dirs.MODELS_HOME, logging)
 
     do_test(net_path, ema_path=ema_path, guide_path=guide_path, acid=acid, 
-            batch_size=batch_size, n_samples=n_samples, seed=seed, log_filename=log_filepath)
+            batch_size=batch_size, n_samples=n_samples, test_outer=external, test_mandala=mandala, 
+            seed=seed, log_filename=log_filepath)
 
 #----------------------------------------------------------------------------
 # 'plot' subcommand.
