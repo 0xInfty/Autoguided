@@ -72,7 +72,7 @@ python ToyExample/toy_example.py train
 
 ### Training the toy model with AJEST or random data selection
 
-This repository now contains an implementation of JEST as described by Evans, Parthasarathy et al. on ["Guiding a diffusion model with a bad version of itself"](https://arxiv.org/abs/2406.17711).
+This repository now contains an implementation of JEST as described by Evans et al. on ["Data curation via joint example selection further accelerates multimodal learning"](https://dl.acm.org/doi/10.5555/3737916.3742401).
 
 A toy model can be trained using autoguided JEST (AJEST) running...
 
@@ -141,3 +141,5 @@ A history of changes for all code can be extracted using Git's version control t
 ### Acknowledgments
 
 We thank T. Karras et al for sharing their ["Guiding a diffusion model with a bad version of itself"](https://arxiv.org/abs/2406.02507) research and ["EDM2 and Autoguidance"](https://github.com/NVlabs/edm2) code, licensed under CC BY-NC-SA 4.0.
+
+We also thank T. Evans, N. Parthasarathy et al for sharing their ["Data curation via joint example selection further accelerates multimodal learning"](https://dl.acm.org/doi/10.5555/3737916.3742401) research and a detailed description of their JEST method.
