@@ -56,7 +56,7 @@ You can manually open the file and change the `system_name` attribute to create 
 
 ### Running autoguidance on the toy example
 
-This repository contains a working adaptation of the 2D tree toy example from Karras et al's ["Guiding a diffusion model with a bad version of itself"](https://arxiv.org/abs/2406.02507).
+This repository contains a working adaptation of the 2D tree toy example from Karras et al's ["Guiding a diffusion model with a bad version of itself"](https://dl.acm.org/doi/10.5555/3737916.3739595).
 
 Pre-trained toy models can be automatically downloaded and tested running...
 
@@ -140,6 +140,6 @@ A history of changes for all code can be extracted using Git's version control t
 
 ### Acknowledgments
 
-We thank T. Karras et al for sharing their ["Guiding a diffusion model with a bad version of itself"](https://arxiv.org/abs/2406.02507) research and ["EDM2 and Autoguidance"](https://github.com/NVlabs/edm2) code, licensed under CC BY-NC-SA 4.0.
+We thank T. Karras et al for sharing their ["Guiding a diffusion model with a bad version of itself"](https://dl.acm.org/doi/10.5555/3737916.3739595) research and ["EDM2 and Autoguidance"](https://github.com/NVlabs/edm2) code, licensed under CC BY-NC-SA 4.0.
 
 We also thank T. Evans, N. Parthasarathy et al for sharing their ["Data curation via joint example selection further accelerates multimodal learning"](https://dl.acm.org/doi/10.5555/3737916.3742401) research and a detailed description of their JEST method.
