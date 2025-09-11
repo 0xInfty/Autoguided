@@ -1,15 +1,22 @@
-ref="/00_PreTrained"; subdir="/99_Statistics"; device=0
+ref="/00_PreTrained"; subdir="/29_Statistics"; device=0
 
 #######################################################
 
 # No ACID, for comparison
-# python ToyExample/toy_example.py train --guidance --guide-path "ToyExample"$ref"/Ref/iter0512.pkl" --no-acid --outdir "ToyExample"$subdir"/NoACID_000" --seed 0 --val --test --verbose --logging "ToyExample"$subdir"/log_NoACID_000.txt" --device $device
-# python ToyExample/toy_example.py train --guidance --guide-path "ToyExample"$ref"/Ref/iter0512.pkl" --no-acid --outdir "ToyExample"$subdir"/NoACID_073" --seed 73 --val --test --verbose --logging "ToyExample"$subdir"/log_NoACID_073.txt" --device $device
-# python ToyExample/toy_example.py train --guidance --guide-path "ToyExample"$ref"/Ref/iter0512.pkl" --no-acid --outdir "ToyExample"$subdir"/NoACID_172" --seed 172 --val --test --verbose --logging "ToyExample"$subdir"/log_NoACID_172.txt" --device $device
-# python ToyExample/toy_example.py train --guidance --guide-path "ToyExample"$ref"/Ref/iter0512.pkl" --no-acid --outdir "ToyExample"$subdir"/NoACID_231" --seed 231 --val --test --verbose --logging "ToyExample"$subdir"/log_NoACID_231.txt" --device $device
-# python ToyExample/toy_example.py train --guidance --guide-path "ToyExample"$ref"/Ref/iter0512.pkl" --no-acid --outdir "ToyExample"$subdir"/NoACID_357" --seed 357 --val --test --verbose --logging "ToyExample"$subdir"/log_NoACID_357.txt" --device $device
+python ToyExample/toy_example.py train --guidance --guide-path "ToyExample"$ref"/Ref/iter0512.pkl" --no-acid --outdir "ToyExample"$subdir"/NoACID_000" --seed 0 --val --test --verbose --logging "ToyExample"$subdir"/log_NoACID_000.txt" --device $device
+python ToyExample/toy_example.py train --guidance --guide-path "ToyExample"$ref"/Ref/iter0512.pkl" --no-acid --outdir "ToyExample"$subdir"/NoACID_073" --seed 73 --val --test --verbose --logging "ToyExample"$subdir"/log_NoACID_073.txt" --device $device
+python ToyExample/toy_example.py train --guidance --guide-path "ToyExample"$ref"/Ref/iter0512.pkl" --no-acid --outdir "ToyExample"$subdir"/NoACID_172" --seed 172 --val --test --verbose --logging "ToyExample"$subdir"/log_NoACID_172.txt" --device $device
+python ToyExample/toy_example.py train --guidance --guide-path "ToyExample"$ref"/Ref/iter0512.pkl" --no-acid --outdir "ToyExample"$subdir"/NoACID_231" --seed 231 --val --test --verbose --logging "ToyExample"$subdir"/log_NoACID_231.txt" --device $device
+python ToyExample/toy_example.py train --guidance --guide-path "ToyExample"$ref"/Ref/iter0512.pkl" --no-acid --outdir "ToyExample"$subdir"/NoACID_357" --seed 357 --val --test --verbose --logging "ToyExample"$subdir"/log_NoACID_357.txt" --device $device
 
 #######################################################
+
+# Random 
+python ToyExample/toy_example.py train --guidance --guide-path "ToyExample"$ref"/Ref/iter0512.pkl" --selection --outdir "ToyExample"$subdir"/Random_000" --seed 0 --val --test --verbose --logging "ToyExample"$subdir"/log_Random_000.txt" --device $device
+python ToyExample/toy_example.py train --guidance --guide-path "ToyExample"$ref"/Ref/iter0512.pkl" --selection --outdir "ToyExample"$subdir"/Random_073" --seed 73 --val --test --verbose --logging "ToyExample"$subdir"/log_Random_073.txt" --device $device
+python ToyExample/toy_example.py train --guidance --guide-path "ToyExample"$ref"/Ref/iter0512.pkl" --selection --outdir "ToyExample"$subdir"/Random_172" --seed 172 --val --test --verbose --logging "ToyExample"$subdir"/log_Random_172.txt" --device $device
+python ToyExample/toy_example.py train --guidance --guide-path "ToyExample"$ref"/Ref/iter0512.pkl" --selection --outdir "ToyExample"$subdir"/Random_231" --seed 231 --val --test --verbose --logging "ToyExample"$subdir"/log_Random_231.txt" --device $device
+python ToyExample/toy_example.py train --guidance --guide-path "ToyExample"$ref"/Ref/iter0512.pkl" --selection --outdir "ToyExample"$subdir"/Random_357" --seed 357 --val --test --verbose --logging "ToyExample"$subdir"/log_Random_357.txt" --device $device
 
 # ACID --> From the beginning, for as long as it runs
 python ToyExample/toy_example.py train --guidance --guide-path "ToyExample"$ref"/Ref/iter0512.pkl" --invert --acid --outdir "ToyExample"$subdir"/ACID_000" --seed 0 --val --test --verbose --logging "ToyExample"$subdir"/log_ACID_000.txt" --device $device

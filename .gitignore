@@ -1,8 +1,11 @@
 # Custom
 train.sh
 Backup*
+Draft*
 .vscode/
 *.txt
+*.yml
+wandb/
 
 # Custom, needed for pyvdirs
 dirs*.json
