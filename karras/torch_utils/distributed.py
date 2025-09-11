@@ -112,10 +112,10 @@ class CheckpointIO:
         if verbose:
             print0('done')
 
-    def load(self, pt_path, verbose=True):
+    def load(self, pt_path, verbose=True, weights_only=False):
         if verbose:
             print0(f'Loading {pt_path} ... ', end='', flush=True)
-        data = torch.load(pt_path, map_location=torch.device('cpu'))
+        data = torch.load(pt_path, map_location=torch.device('cpu'), weights_only=weights_only)
         for name, obj in self._state_objs.items():
             if obj is None:
                 pass
@@ -134,12 +134,12 @@ class CheckpointIO:
         if verbose:
             print0('done')
 
-    def load_latest(self, run_dir, pattern=r'training-state-(\d+).pt', verbose=True):
+    def load_latest(self, run_dir, pattern=r'training-state-(\d+).pt', verbose=True, weights_only=False):
         fnames = [entry.name for entry in os.scandir(run_dir) if entry.is_file() and re.fullmatch(pattern, entry.name)]
         if len(fnames) == 0:
             return None
         pt_path = os.path.join(run_dir, max(fnames, key=lambda x: float(re.fullmatch(pattern, x).group(1))))
-        self.load(pt_path, verbose=verbose)
+        self.load(pt_path, verbose=verbose, weights_only=weights_only)
         return pt_path
 
 #----------------------------------------------------------------------------
