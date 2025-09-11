@@ -451,9 +451,8 @@ def do_train(
                     iter_logs.update({"Average Super-Batch Reference Loss": float(ref_loss.mean())})
                 if guide_interpolation: 
                     iter_logs.update({"Average Super-Batch Guided Learner Loss": float(selection_loss.mean())})
-                indices = selection_function(mini_batch_size, selection_loss, ref_loss, 
-                    N=acid_N, filter_ratio=acid_f,
-                    learnability=acid_diff, inverted=acid_inverted,
+                indices = selection_function(selection_loss, ref_loss, selection_size=mini_batch_size,
+                    N=acid_N, filter_ratio=acid_f, learnability=acid_diff, inverted=acid_inverted,
                     numeric_stability_trick=acid_stability_trick, log=log)
                 loss = selection_loss[indices] # Use indices of the ACID mini-batch
             except ValueError:
@@ -558,7 +557,7 @@ def do_train(
     
     # Evaluate average loss and L2 metric on test data
     if testing:
-        test_results = run_test(net, ema, guide, ref, acid=acid,
+        test_results = run_test(net, ema, guide, ref, acid=selection,
             classes=classes, P_mean=P_mean, P_std=P_std, sigma_max=sigma_max,
             n_samples=n_test_samples, batch_size=test_batch_size, test_outer=test_outer,
             guidance_weight=guidance_weight,
@@ -629,6 +628,9 @@ def do_train(
 def extract_results_from_log(log_path):
 
     results = {}
+    examples_seen = []
+    training_time = []
+    selection_time = []
     super_learner_loss = []
     super_ref_loss = []
     learner_loss = []
@@ -658,7 +660,10 @@ def extract_results_from_log(log_path):
     ema_guided_classification_score = []
     with builtins.open(log_path, "r") as f:
         for line in f:
-            if "Average" in line:
+            if "Training Time" in line: training_time.append(vtext.find_numbers(line)[-1]); continue
+            elif "Selection Time" in line: selection_time.append(vtext.find_numbers(line)[-1]); continue
+            elif "Examples Seen" in line: examples_seen.append(vtext.find_numbers(line)[-1]); continue
+            elif "Average" in line:
                 if "Average Learner Loss" in line: learner_loss.append(vtext.find_numbers(line)[-1]); continue
                 elif "Super-Batch" in line:
                     if "Average Super-Batch Learner Loss" in line: super_learner_loss.append(vtext.find_numbers(line)[-1]); continue
@@ -722,6 +727,10 @@ def extract_results_from_log(log_path):
                     elif "Test Guided EMA Classification Score" in line: results["ema_guided_test_classification_score"] = vtext.find_numbers(line)[-1]; continue
             else: pass
     
+    results["examples_seen"] = examples_seen
+    results["training_time"] = training_time
+    results["selection_time"] = selection_time
+
     results["super_learner_loss"] = super_learner_loss
     results["super_ref_loss"] = super_ref_loss
     results["learner_loss"] = learner_loss
@@ -759,31 +768,41 @@ def plot_loss(loss_dict, fig_path=None):
     figs = []
     if fig_path is not None:
         fig_path_base, fig_extension = os.path.splitext(fig_path)
+    loss_dict["epoch"] = np.arange(len(loss_dict["examples_seen"]))
+    loss_dict["examples_seen"] = np.array(loss_dict["examples_seen"]) / 1e6
+    if len(loss_dict["examples_seen"]) != len(loss_dict["training_time"]):
+        loss_dict["training_time"] = loss_dict["training_time"][::2] #TODO: Remove this patch when problem is fixed
+    keys = ["epoch", "examples_seen", "training_time"]
+    names = ["Epoch", "Examples Seen [millions]", "Time [hs]"]
 
     # Basic plot
     def plot_training_loss():
-        fig, axes = plt.subplots(nrows=2, gridspec_kw=dict(hspace=0))
-        axes[0].plot(loss_dict["learner_loss"], "C0", label="Training Loss", alpha=0.8, linewidth=2)
-        if len(loss_dict["super_ref_loss"])>0: 
-            axes[0].plot(loss_dict["super_ref_loss"], "C3", label="ACID Ref Loss", alpha=1, linewidth=1)
-            axes[0].plot(loss_dict["super_learner_loss"], "k", label="ACID Learner Loss", alpha=1, linewidth=0.5)
-        axes[1].set_xlabel("Epoch")
-        axes[0].set_ylabel("Average Training Loss")
-        axes[0].legend()
-        for ax in axes: ax.grid()
+        fig, axes = plt.subplots(nrows=2, ncols=3, sharex="col", sharey="row", gridspec_kw=dict(hspace=0, wspace=0))
+        fig.set_size_inches([3.2*3, 4.8])
+        for axs, key, name in zip(axes.T, keys, names):
+            axs[0].plot(loss_dict[key], loss_dict["learner_loss"], "C0", label="Training Loss", alpha=0.8, linewidth=2)
+            if len(loss_dict["super_ref_loss"])>0: 
+                axs[0].plot(loss_dict[key], loss_dict["super_ref_loss"], "C3", label="ACID Ref Loss", alpha=1, linewidth=1)
+                axs[0].plot(loss_dict[key], loss_dict["super_learner_loss"], "k", label="ACID Learner Loss", alpha=1, linewidth=0.5)
+            axs[1].set_xlabel(name)
+        axes[0][0].set_ylabel("Average Training Loss")
+        for axs in axes: axs[0].legend()
+        for axs in axes: 
+            for ax in axs: ax.grid()
         return fig, axes
     
     # First, plot validation loss values
     fig_1, axes_1 = plot_training_loss()
     if len(loss_dict["learner_val_loss"])>0:
-        if len(loss_dict["ref_val_loss"])>0:
-            axes_1[1].plot(loss_dict["ref_val_loss"], "C3", label="Ref Val Loss", alpha=1, linewidth=0.5)
-        axes_1[1].plot(loss_dict["learner_val_loss"], "k", label="Learner Val Loss", alpha=1.0, linewidth=0.5)
-        axes_1[1].plot(loss_dict["ema_val_loss"], color="m", label="EMA Val Loss", alpha=0.35, linewidth=3)
-        if len(loss_dict["guide_val_loss"])>0:
-            axes_1[1].plot(loss_dict["guide_val_loss"], color="r", label="Guide Val Loss", alpha=0.25, linewidth=2)
-    axes_1[1].set_ylabel("Average Validation Loss")
-    axes_1[1].legend()
+        for axs, key in zip(axes_1.T, keys):
+            if len(loss_dict["ref_val_loss"])>0:
+                axs[1].plot(loss_dict[key], loss_dict["ref_val_loss"], "C3", label="Ref Val Loss", alpha=1, linewidth=0.5)
+            axs[1].plot(loss_dict[key], loss_dict["learner_val_loss"], "k", label="Learner Val Loss", alpha=1.0, linewidth=0.5)
+            axs[1].plot(loss_dict[key], loss_dict["ema_val_loss"], color="m", label="EMA Val Loss", alpha=0.35, linewidth=3)
+            if len(loss_dict["guide_val_loss"])>0:
+                axs[1].plot(loss_dict[key], loss_dict["guide_val_loss"], color="r", label="Guide Val Loss", alpha=0.25, linewidth=2)
+        axes_1[1][0].set_ylabel("Average Validation Loss")
+        for axs in axes_1: axs[0].legend()
     plt.tight_layout()
     plt.savefig(fig_path_base+"_1"+fig_extension)
     figs.append(fig_1)
@@ -791,16 +810,17 @@ def plot_loss(loss_dict, fig_path=None):
     # Then, plot validation L2 distance values
     fig_2, axes_2 = plot_training_loss()
     if len(loss_dict["learner_val_loss"])>0:
-        axes_2[1].plot(loss_dict["ema_L2_val_metric"], "-.", color="navy", label="EMA L2 Val Metric", alpha=1, linewidth=1)
-        if len(loss_dict["L2_val_metric"])>0:
-            axes_2[1].plot(loss_dict["L2_val_metric"], "-", color="blue", label="Learner L2 Val Metric", alpha=0.35, linewidth=3)
-        if len(loss_dict["ema_guided_L2_val_metric"])>0:
-            axes_2[1].plot(loss_dict["ema_guided_L2_val_metric"], "--", color="deeppink", label="Guided EMA L2 Val Metric", alpha=1, linewidth=1)
-        if len(loss_dict["guided_L2_val_metric"])>0:
-            axes_2[1].plot(loss_dict["guided_L2_val_metric"], "-", color="mediumvioletred", label="Guided Learner L2 Val Metric", 
-                           alpha=0.35, linewidth=3)
-    axes_2[1].set_ylabel("Average Validation L2 Distance")
-    axes_2[1].legend()
+        for axs, key in zip(axes_2.T, keys):
+            axs[1].plot(loss_dict[key], loss_dict["ema_L2_val_metric"], "-.", color="navy", label="EMA L2 Val Metric", alpha=1, linewidth=1)
+            if len(loss_dict["L2_val_metric"])>0:
+                axs[1].plot(loss_dict[key], loss_dict["L2_val_metric"], "-", color="blue", label="Learner L2 Val Metric", alpha=0.35, linewidth=3)
+            if len(loss_dict["ema_guided_L2_val_metric"])>0:
+                axs[1].plot(loss_dict[key], loss_dict["ema_guided_L2_val_metric"], "--", color="deeppink", label="Guided EMA L2 Val Metric", alpha=1, linewidth=1)
+            if len(loss_dict["guided_L2_val_metric"])>0:
+                axs[1].plot(loss_dict[key], loss_dict["guided_L2_val_metric"], "-", color="mediumvioletred", label="Guided Learner L2 Val Metric", 
+                            alpha=0.35, linewidth=3)
+        axes_2[1][0].set_ylabel("Average Validation L2 Distance")
+        for axs in axes_2: axs[0].legend()
     plt.tight_layout()
     plt.savefig(fig_path_base+"_2"+fig_extension)
     figs.append(fig_2)
@@ -808,12 +828,13 @@ def plot_loss(loss_dict, fig_path=None):
     # Also compare validation loss on the outer branches vs the whole distribution
     if len(loss_dict["learner_out_val_loss"])>0:
         fig_3, axes_3 = plot_training_loss()
-        axes_3[1].plot(loss_dict["learner_val_loss"], "k", label="Learner Val Loss", alpha=1.0, linewidth=0.5)
-        axes_3[1].plot(loss_dict["ema_val_loss"], color="m", label="EMA Val Loss", alpha=0.35, linewidth=3)
-        axes_3[1].plot(loss_dict["learner_out_val_loss"], "k", label="Learner Out Val Loss", alpha=1.0, linewidth=0.5, linestyle="dashed")
-        axes_3[1].plot(loss_dict["ema_out_val_loss"], color="orange", label="EMA Out Val Loss", alpha=0.35, linewidth=3)
-        axes_3[1].set_ylabel("Average Validation Loss")
-        axes_3[1].legend(loc="upper right", ncols=2)
+        for axs, key in zip(axes_3.T, keys):
+            axs[1].plot(loss_dict[key], loss_dict["learner_val_loss"], "k", label="Learner Val Loss", alpha=1.0, linewidth=0.5)
+            axs[1].plot(loss_dict[key], loss_dict["ema_val_loss"], color="m", label="EMA Val Loss", alpha=0.35, linewidth=3)
+            axs[1].plot(loss_dict[key], loss_dict["learner_out_val_loss"], "k", label="Learner Out Val Loss", alpha=1.0, linewidth=0.5, linestyle="dashed")
+            axs[1].plot(loss_dict[key], loss_dict["ema_out_val_loss"], color="orange", label="EMA Out Val Loss", alpha=0.35, linewidth=3)
+        axes_3[1][0].set_ylabel("Average Validation Loss")
+        for axs in axes_3: axs[0].legend(loc="upper right", ncols=2)
         plt.tight_layout()
         plt.savefig(fig_path_base+"_3"+fig_extension)
         figs.append(fig_3)
@@ -821,25 +842,27 @@ def plot_loss(loss_dict, fig_path=None):
     # Finally, compare validation L2 metrics on the outer branches vs the whole distribution
     if len(loss_dict["ema_out_L2_val_metric"])>0:
         fig_4, axes_4 = plot_training_loss()
-        axes_4[1].plot(loss_dict["ema_L2_val_metric"], "-", color="navy", label="EMA L2 Val Metric", alpha=1, linewidth=1)
-        axes_4[1].plot(loss_dict["L2_val_metric"], "-", color="blue", label="Learner L2 Val Metric", alpha=0.35, linewidth=3)
-        axes_4[1].plot(loss_dict["ema_out_L2_val_metric"], "-.", color="firebrick", label="EMA Out L2 Val Metric", alpha=1, linewidth=1)
-        axes_4[1].plot(loss_dict["out_L2_val_metric"], "-", color="salmon", label="Learner Out L2 Val Metric", alpha=0.45, linewidth=3)
-        axes_4[1].set_ylabel("Average Validation L2 Distance")
-        axes_4[1].legend(loc="upper right", ncols=2)
+        for axs, key in zip(axes_4.T, keys):
+            axs[1].plot(loss_dict[key], loss_dict["ema_L2_val_metric"], "-", color="navy", label="EMA L2 Val Metric", alpha=1, linewidth=1)
+            axs[1].plot(loss_dict[key], loss_dict["L2_val_metric"], "-", color="blue", label="Learner L2 Val Metric", alpha=0.35, linewidth=3)
+            axs[1].plot(loss_dict[key], loss_dict["ema_out_L2_val_metric"], "-.", color="firebrick", label="EMA Out L2 Val Metric", alpha=1, linewidth=1)
+            axs[1].plot(loss_dict[key], loss_dict["out_L2_val_metric"], "-", color="salmon", label="Learner Out L2 Val Metric", alpha=0.45, linewidth=3)
+        axes_4[1][0].set_ylabel("Average Validation L2 Distance")
+        for axs in axes_4: axs[0].legend(loc="upper right", ncols=2)
         plt.tight_layout()
         plt.savefig(fig_path_base+"_4"+fig_extension)
         figs.append(fig_4)
 
         fig_5, axes_5 = plot_training_loss()
-        axes_5[1].plot(loss_dict["ema_guided_L2_val_metric"], "--", color="deeppink", label="Guided EMA L2 Val Metric", alpha=1, linewidth=1)
-        axes_5[1].plot(loss_dict["guided_L2_val_metric"], "-", color="mediumvioletred", label="Guided Learner L2 Val Metric", 
-                        alpha=0.35, linewidth=3)
-        axes_5[1].plot(loss_dict["ema_guided_out_L2_val_metric"], "--", color="teal", label="Guided EMA Out L2 Val Metric", alpha=1, linewidth=1)
-        axes_5[1].plot(loss_dict["guided_out_L2_val_metric"], "-", color="lightseagreen", label="Guided Learner Out L2 Val Metric", 
-                        alpha=0.45, linewidth=3)
-        axes_5[1].set_ylabel("Average Validation L2 Distance")
-        axes_5[1].legend(loc="upper right")
+        for axs, key in zip(axes_5.T, keys):
+            axs[1].plot(loss_dict[key], loss_dict["ema_guided_L2_val_metric"], "--", color="deeppink", label="Guided EMA L2 Val Metric", alpha=1, linewidth=1)
+            axs[1].plot(loss_dict[key], loss_dict["guided_L2_val_metric"], "-", color="mediumvioletred", label="Guided Learner L2 Val Metric", 
+                            alpha=0.35, linewidth=3)
+            axs[1].plot(loss_dict[key], loss_dict["ema_guided_out_L2_val_metric"], "--", color="teal", label="Guided EMA Out L2 Val Metric", alpha=1, linewidth=1)
+            axs[1].plot(loss_dict[key], loss_dict["guided_out_L2_val_metric"], "-", color="lightseagreen", label="Guided Learner Out L2 Val Metric", 
+                            alpha=0.45, linewidth=3)
+        axes_5[1][0].set_ylabel("Average Validation L2 Distance")
+        for axs in axes_5: axs[0].legend(loc="upper right")
         plt.tight_layout()
         plt.savefig(fig_path_base+"_5"+fig_extension)
         figs.append(fig_5)
@@ -854,9 +877,10 @@ def mandala_score(model, ground_truth_dist, guide=None, guidance_weight=3,
                   grid_resolution=101, 
                   x_centre=GT_ORIGIN[0], y_centre=GT_ORIGIN[1], 
                   x_side=2*1.5, y_side=2*1.5,
-                  logging=False, plotting=False, 
+                  logging=False, plotting=False,
                   full_scale=True, log_scale=False, 
-                  device=torch.device("cuda"), generator=None):
+                  device=torch.device("cuda"), generator=None, 
+                  save_fig=None, **plot_kwargs):
 
     # If no samples provided, generate samples
     if samples is None:
@@ -928,7 +952,8 @@ def mandala_score(model, ground_truth_dist, guide=None, guidance_weight=3,
             x_centre, y_centre, x_side, y_side, 
             n_hits_unique, n_miss_unique, 
             ground_truth_dist,
-            full_scale=full_scale, log_scale=log_scale)
+            full_scale=full_scale, log_scale=log_scale, 
+            save_fig=save_fig, **plot_kwargs)
 
     return unique_score, non_unique_score
 
@@ -940,38 +965,55 @@ def plot_mandala_score(samples, grid,
                        x_centre, y_centre, x_side, y_side, 
                        n_hits_unique, n_miss_unique, 
                        ground_truth_dist,
-                       full_scale=True, log_scale=False):
+                       full_scale=True, log_scale=False,
+                       save_fig=None, show_stats=True, show_titles=True,
+                       vmax=None, full_tree=True, show_points=True):
        
+    # Set up
+    if full_tree:
+        map_coords = grid_coords.swapaxes(0,2).detach().cpu().numpy()
+        map_vals = grid.T
+        kwargs_plot = dict(elems={'gt_uncond_thin', 'gt_outline_thin'},
+                           view_x=x_centre, view_y=y_centre, view_size=x_side/2)
+    else:
+        map_coords = grid_coords.swapaxes(0,2).detach().cpu().numpy()[:,30:,30:]
+        map_vals = grid.T[30:,30:]
+        kwargs_plot = dict(elems={'gt_outline_thin'}, 
+                           view_x=0.4, view_y=0.4, view_size=0.37*x_side)
+    
     # Create figure with square aspect ratio
-    fig, [ax1, ax2, ax3] = plt.subplots(ncols=3, figsize=(10.2, 5), dpi=300, 
-                                        gridspec_kw={'width_ratios': [5, 5, .2]})
+    if show_points:
+        fig, [ax1, ax2, ax3] = plt.subplots(ncols=3, figsize=(10.2, 5), dpi=300, 
+                                            gridspec_kw={'width_ratios': [5, 5, .2]})
+    else:
+        fig, [ax2, ax3] = plt.subplots(ncols=2, figsize=(6.1, 5), dpi=300, 
+                                       gridspec_kw={'width_ratios': [5, .2]})
 
     # 1. Draw fractal with scatter
-    ax1.set_title("Fractal Tree with Scatter")
-    ax1.set_aspect("equal")
+    if show_points:
+        if show_titles: ax1.set_title("Fractal Tree with Scatter")
+        ax1.set_aspect("equal")
 
-    # Draw fractal
-    do_plot(ground_truth_dist, elems={'gt_uncond', 'gt_outline'},
-                view_x=x_centre, view_y=y_centre, view_size=x_side/2, ax=ax1)
+        # Draw fractal
+        do_plot(ground_truth_dist, ax=ax1, **kwargs_plot)
 
-    # Plot scatter points
-    ax1.scatter(*samples.swapaxes(0,1).detach().cpu().numpy(), color='k', alpha=0.1, s=10, zorder=10)
+        # Plot scatter points
+        ax1.scatter(*samples.swapaxes(0,1).detach().cpu().numpy(), 
+                    color='k', alpha=0.1, s=10, zorder=10)
 
     # 2. Hit/Miss Visualization
-    ax2.set_title("Hit/Miss Analysis")
+    if show_titles: ax2.set_title("Hit/Miss Analysis")
     ax2.set_aspect("equal")
 
     if not full_scale:
         grid[grid>1]=2 # Set every n>=2 to 2
     if log_scale:
-        kwargs = dict(norm=LogNorm(vmin=1))
+        kwargs = dict(norm=LogNorm(vmin=1, vmax=vmax))
     else: 
-        kwargs = dict(vmin=0)
+        kwargs = dict(vmin=0, vmax=vmax)
     cmap = LinearSegmentedColormap.from_list('', ['white', *plt.cm.Reds(np.arange(255))])
-    map = ax2.pcolormesh(*grid_coords.swapaxes(0,2).detach().cpu().numpy(), 
-                          grid.T, cmap=cmap, **kwargs)
-    do_plot(ground_truth_dist, elems={'gt_uncond_thin', 'gt_outline_thin'},
-                view_x=x_centre, view_y=y_centre, view_size=x_side/2, ax=ax2)
+    map = ax2.pcolormesh(*map_coords, map_vals, cmap=cmap, **kwargs)
+    do_plot(ground_truth_dist, ax=ax2, **kwargs_plot)
     plt.colorbar(map, ax=ax2, cax=ax3)
 
     # Add thin grid lines
@@ -981,21 +1023,30 @@ def plot_mandala_score(samples, grid,
         ax2.axhline(y=y, color='gray', alpha=0.2, linewidth=0.1)
 
     # Set bounds and remove axis numbers for all plots
-    for ax in [ax1, ax2]:
-        ax.set_xlim(*bounds[0])
-        ax.set_ylim(*bounds[1])
+    if show_points:
+        change_axes = [ax1, ax2]
+    else:
+        change_axes = [ax2]
+    for ax in change_axes:
+        if full_tree:
+            ax.set_xlim(*bounds[0])
+            ax.set_ylim(*bounds[1])
         ax.set_xticklabels([])
         ax.set_yticklabels([])
     plt.tight_layout()
 
     # Add stats only to the last plot
-    stats_text = f"Unique Total: {n_hits_unique+n_miss_unique}\nHits: {n_hits_unique}\nMisses: {n_miss_unique}"\
-        f"\nMandala Score: {n_hits_unique/(n_hits_unique+n_miss_unique):.3f}"
-    ax2.text(0.02, 0.98, stats_text,
-                transform=ax2.transAxes,
-                verticalalignment='top',
-                fontsize=8,
-                bbox=dict(facecolor='white', alpha=0.8, edgecolor='none'))
+    if show_stats:
+        stats_text = f"Unique Total: {n_hits_unique+n_miss_unique}\nHits: {n_hits_unique}\nMisses: {n_miss_unique}"\
+            f"\nMandala Score: {n_hits_unique/(n_hits_unique+n_miss_unique):.3f}"
+        ax2.text(0.02, 0.98, stats_text,
+                    transform=ax2.transAxes,
+                    verticalalignment='top',
+                    fontsize=8,
+                    bbox=dict(facecolor='white', alpha=0.8, edgecolor='none'))
+
+    if save_fig is not None:
+        fig.savefig(save_fig)
 
 #----------------------------------------------------------------------------
 # Run test
@@ -1128,6 +1179,8 @@ def run_test(net, ema=None, guide=None, ref=None, acid=False,
 
         # Create full EMA samples using net for guidance
         gt_test_outputs = do_sample(net=gtd, x_init=test_samples, sigma_max=sigma_max)[-1]
+        if test_outer:
+            gt_out_test_outputs = do_sample(net=outd, x_init=out_test_samples, sigma_max=sigma_max)[-1]
         if test_ema:
             ema_test_outputs = do_sample(net=ema, x_init=test_samples, sigma_max=sigma_max)[-1]
             results["ema_L2_metric"] += float(torch.sqrt(((ema_test_outputs - gt_test_outputs) ** 2).sum(-1)).mean())/n_epochs
@@ -1135,8 +1188,6 @@ def run_test(net, ema=None, guide=None, ref=None, acid=False,
                 guided_test_outputs = do_sample(net=ema, x_init=test_samples, 
                                                 guidance=guidance_weight, gnet=guide, sigma_max=sigma_max)[-1]
                 results["ema_guided_L2_metric"] += float(torch.sqrt(((guided_test_outputs - gt_test_outputs) ** 2).sum(-1)).mean())/n_epochs
-            if test_outer:
-                gt_out_test_outputs = do_sample(net=outd, x_init=out_test_samples, sigma_max=sigma_max)[-1]
                 ema_out_test_outputs = do_sample(net=ema, x_init=out_test_samples, sigma_max=sigma_max)[-1]
                 results["ema_out_L2_metric"] += float(torch.sqrt(((ema_out_test_outputs - gt_out_test_outputs) ** 2).sum(-1)).mean())/n_epochs
                 if test_guide:
@@ -1261,7 +1312,7 @@ def do_test(net_path, ema_path=None, guide_path=None, acid=False,
 
     # Log test loss
     log.info("Average Test Learner Loss = %s", results["learner_loss"])
-    log.info("Average Test EMA Loss = %s", results["ema_loss"])
+    if test_ema: log.info("Average Test EMA Loss = %s", results["ema_loss"])
     try: log.info("Average Test Guide Loss = %s", results["guide_loss"])
     except UnboundLocalError or KeyError: pass
     if acid:
@@ -1270,7 +1321,7 @@ def do_test(net_path, ema_path=None, guide_path=None, acid=False,
 
     # Log test loss on outer branches of the distribution
     log.info("Average Outer Test Learner Loss = %s", results["learner_out_loss"])
-    log.info("Average Outer Test EMA Loss = %s", results["ema_out_loss"])
+    if test_ema: log.info("Average Outer Test EMA Loss = %s", results["ema_out_loss"])
     try: log.info("Average Outer Test Guide Loss = %s", results["guide_out_loss"])
     except UnboundLocalError: pass
     if acid:
@@ -1431,7 +1482,7 @@ def do_plot(
     if 'samples_before_small' in elems: points(samples, alpha=0.5, size=15, color="m")
     if 'trajectories_small' in elems: lines(trajectories.transpose(0, 1), alpha=0.3, color="lightgrey")
     if 'out_gt_uncond' in elems:    contours(alloutd.logp(gridxy), levels=[GT_LOGP_LEVEL, 0], colors=[[0.9,0.9,0.9]], linecolors=[[0.7,0.7,0.7]], linewidth=1.5)
-    if 'out_gt_outline' in elems:   contours(outd.logp(gridxy), levels=[GT_LOGP_LEVEL, 0], colors=[[1.0,0.8,0.6]], linecolors=[[0.8,0.6,0.5]], linewidth=1.5)
+    if 'out_gt_outline' in elems:   contours(outd.logp(gridxy), levels=[GT_LOGP_LEVEL, 0], colors=[[252/255, 146/255, 33/255]], linecolors=[[145/255, 78/255, 7/255]], linewidth=1, alpha=0.5)
     if 'out_gt_after' in elems:     points(out_gt_trajectories[-1], alpha=0.35, size=15, color="b")
     if 'out_gt_trajectories_small' in elems: lines(out_gt_trajectories.transpose(0, 1), alpha=0.4, color="lightsteelblue")
     if 'out_samples' in elems:      points(out_trajectories[-1], size=15, alpha=0.35)
@@ -1540,7 +1591,6 @@ def train(outdir, cls, layers, dim, total_iter, batch_size, val, test, viz,
           guidance, guide_path, interpol, selection, acid, n, filt, diff, invert, late, early, trick,
           seed, verbose, debug, logging, device):
     """Train a 2D toy model with the given parameters."""
-
     if debug: verbosity = 2
     elif verbose: verbosity = 1
     else: verbosity = 0
@@ -1586,10 +1636,13 @@ def train(outdir, cls, layers, dim, total_iter, batch_size, val, test, viz,
     help='Was this trained using ACID batch selection?', metavar='BOOL', type=bool, default=False, show_default=True)
 @click.option('--n-samples', help='Number of samples', metavar='INT', type=int, default=4<<8, show_default=True)
 @click.option('--batch-size', help='Batch size', metavar='INT', type=int, default=4<<8, show_default=True)
+@click.option('--external/--no-external', help='Whether to calculate metrics on external branches or not', 
+               metavar='BOOL', type=bool, default=False, show_default=True)
+@click.option('--mandala/--no-mandala', help='Whether to calculate the mandala and classification scores or not', 
+               metavar='BOOL', type=bool, default=False, show_default=True)
 @click.option('--seed', help='Random seed', metavar='FLOAT', type=int, default=None, show_default=True)
-@click.option('--logging', 
-    help='Local path to logging file', metavar='DIR', type=str, default=None)
-def test(net_path, ema_path, guide_path, acid, n_samples, batch_size, seed, logging):
+@click.option('--logging', help='Local path to logging file', metavar='DIR', type=str, default=None)
+def test(net_path, ema_path, guide_path, acid, n_samples, batch_size, external, mandala, seed, logging):
     """Test a given model on a fresh batch of test data"""
 
     net_path = os.path.join(dirs.MODELS_HOME, net_path)
@@ -1601,7 +1654,8 @@ def test(net_path, ema_path, guide_path, acid, n_samples, batch_size, seed, logg
         log_filepath = os.path.join(dirs.MODELS_HOME, logging)
 
     do_test(net_path, ema_path=ema_path, guide_path=guide_path, acid=acid, 
-            batch_size=batch_size, n_samples=n_samples, seed=seed, log_filename=log_filepath)
+            batch_size=batch_size, n_samples=n_samples, test_outer=external, test_mandala=mandala, 
+            seed=seed, log_filename=log_filepath)
 
 #----------------------------------------------------------------------------
 # 'plot' subcommand.

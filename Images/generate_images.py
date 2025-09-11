@@ -12,6 +12,7 @@ import os
 sys.path.insert(0, dirs.SYSTEM_HOME)
 sys.path.insert(0, os.path.join(dirs.SYSTEM_HOME, "karras"))
 
+import math
 import re
 import warnings
 import click
@@ -20,10 +21,13 @@ import pickle
 import numpy as np
 import torch
 import PIL.Image
+import matplotlib.pyplot as plt
 
 from karras.dnnlib.util import EasyDict, construct_class_by_name, open_url, call_func_by_name
 import karras.torch_utils.distributed as dist
 from karras.training.encoders import PRETRAINED_HOME
+import Images.calculate_metrics as calc
+import ours.visualize as vis
 
 import logs
 
@@ -35,6 +39,17 @@ warnings.filterwarnings('ignore', '1Torch was not compiled with flash attention'
 
 #----------------------------------------------------------------------------
 # Configuration presets.
+
+DEFAULT_SAMPLER = EasyDict(dict(
+    num_steps = 32,         # Number of sampling steps
+    sigma_min = 0.002,      # Lowest noise level
+    sigma_max = 80,         # Highest noise level
+    rho = 7,                # Time step exponent
+    S_churn = 0,            # Stochasticity strength
+    S_min = 0,              # Stoch. min noise level
+    S_max = float("inf"),   # Stoch. max noise level
+    S_noise = 1,            # Stoch. noise inflation
+))
 
 model_root = 'https://nvlabs-fi-cdn.nvidia.com/edm2/posthoc-reconstructions'
 models_dir = os.path.join(dirs.MODELS_HOME, "Images")
@@ -91,10 +106,13 @@ config_presets = {
 # "Elucidating the Design Space of Diffusion-Based Generative Models",
 # extended to support classifier-free guidance.
 
-def edm_sampler(
+def edm_full_sampler(
     net, noise, labels=None, gnet=None,
-    num_steps=32, sigma_min=0.002, sigma_max=80, rho=7, guidance=1,
-    S_churn=0, S_min=0, S_max=float('inf'), S_noise=1,
+    num_steps=DEFAULT_SAMPLER.num_steps, 
+    sigma_min=DEFAULT_SAMPLER.sigma_min, sigma_max=DEFAULT_SAMPLER.sigma_max, 
+    rho=DEFAULT_SAMPLER.rho, guidance=1,
+    S_churn=DEFAULT_SAMPLER.S_churn, S_min=DEFAULT_SAMPLER.S_min, 
+    S_max=DEFAULT_SAMPLER.S_max, S_noise=DEFAULT_SAMPLER.S_noise,
     dtype=torch.float32, randn_like=torch.randn_like,
 ):
     # Guided denoiser.
@@ -112,6 +130,7 @@ def edm_sampler(
 
     # Main sampling loop.
     x_next = noise.to(dtype) * t_steps[0]
+    x_trajectory = [x_next]
     for i, (t_cur, t_next) in enumerate(zip(t_steps[:-1], t_steps[1:])): # 0, ..., N-1
         x_cur = x_next
 
@@ -133,6 +152,21 @@ def edm_sampler(
             d_prime = (x_next - denoise(x_next, t_next)) / t_next
             x_next = x_hat + (t_next - t_hat) * (0.5 * d_cur + 0.5 * d_prime)
 
+        x_trajectory.append(x_next)
+
+    return x_next, x_trajectory
+
+def edm_sampler(
+    net, noise, labels=None, gnet=None,
+    num_steps=32, sigma_min=0.002, sigma_max=80, rho=7, guidance=1,
+    S_churn=0, S_min=0, S_max=float('inf'), S_noise=1,
+    dtype=torch.float32, randn_like=torch.randn_like,
+):
+    
+    x_next, _ = edm_full_sampler(net, noise, labels=labels, gnet=gnet, num_steps=num_steps, 
+                                 sigma_min=sigma_min, sigma_max=sigma_max, rho=rho, guidance=guidance,
+                                 S_churn=S_churn, S_min=S_min, S_max=S_max, S_noise=S_noise,
+                                 dtype=dtype, randn_like=randn_like)
     return x_next
 
 #----------------------------------------------------------------------------
@@ -160,14 +194,15 @@ class StackedRandomGenerator:
 # Returns an iterable that yields
 # EasyDict(images, labels, noise, batch_idx, num_batches, indices, seeds)
 
-def generate_images(
+def get_image_generator(
     net,                                        # Main network. Path, URL, or torch.nn.Module.
     gnet                = None,                 # Guiding network. None = same as main network.
     encoder             = None,                 # Instance of training.encoders.Encoder. None = load from network pickle.
     outdir              = None,                 # Where to save the output images. None = do not save.
     subdirs             = False,                # Create subdirectory for every 1000 seeds?
     seeds               = range(16, 24),        # List of random seeds.
-    class_idx           = None,                 # Class label. None = select randomly.
+    class_idx           = None,                 # Class label. None = use automatic selection.
+    random_class        = True,                 # Automatic selection can be uniformly random or forced exact distribution.
     max_batch_size      = 32,                   # Maximum batch size for the diffusion model.
     encoder_batch_size  = 4,                    # Maximum batch size for the encoder. None = default.
     verbose             = True,                 # Enable status prints?
@@ -178,7 +213,8 @@ def generate_images(
     # Rank 0 goes first.
     if dist.get_rank() != 0:
         torch.distributed.barrier()
-
+    dist.print0("Sampler kwargs", sampler_kwargs)
+    
     # Load main network.
     if isinstance(net, str):
         if verbose:
@@ -229,7 +265,8 @@ def generate_images(
         def __iter__(self):
             # Loop over batches.
             for batch_idx, indices in enumerate(rank_batches):
-                r = EasyDict(images=None, labels=None, noise=None, batch_idx=batch_idx, num_batches=len(rank_batches), indices=indices)
+                r = EasyDict(images=None, labels=None, labels_indices=None, noise=None, 
+                             batch_idx=batch_idx, num_batches=len(rank_batches), indices=indices)
                 r.seeds = [seeds[idx] for idx in indices]
                 if len(r.seeds) > 0:
 
@@ -238,28 +275,127 @@ def generate_images(
                     r.noise = rnd.randn([len(r.seeds), net.img_channels, net.img_resolution, net.img_resolution], device=device)
                     r.labels = None
                     if net.label_dim > 0:
-                        r.labels = torch.eye(net.label_dim, device=device)[rnd.randint(net.label_dim, size=[len(r.seeds)], device=device)]
                         if class_idx is not None:
-                            r.labels[:, :] = 0
+                            r.labels = torch.zeros((net.label_dim,net.label_dim), device=device)
                             r.labels[:, class_idx] = 1
+                            r.labels_indices = np.ones(len(r.seeds), dtype=np.uint32)*class_idx
+                        elif random_class:
+                            r.labels_indices = rnd.randint(net.label_dim, size=[len(r.seeds)], device=device)
+                            r.labels = torch.eye(net.label_dim, device=device)[r.labels_indices]
+                        elif not random_class:
+                            # If the overall seeds is a continuous range of integers, we'll get an equal number of examples per class
+                            r.labels_indices = np.array([i%(net.label_dim-1) for i in r.seeds], dtype=np.uint32)
+                            r.labels = torch.eye(net.label_dim, device=device)[r.labels_indices]
+                            # No images are generated using unconditional generation 
+                            # because we go from 0 to label_dim-1; label_dim is the null class
 
                     # Generate images.
                     latents = call_func_by_name(func_name=sampler_fn, net=net, noise=r.noise,
                         labels=r.labels, gnet=gnet, randn_like=rnd.randn_like, **sampler_kwargs)
-                    r.images = encoder.decode(latents)
+                    if isinstance(latents, torch.Tensor):
+                        r.images = encoder.decode(latents)
+                        r.trajectories = None
+                    else:
+                        r.images = encoder.decode(latents[0])
+                        r.trajectories = torch.stack(latents[1]).swapaxes(0,1)
 
                     # Save images.
                     if outdir is not None:
-                        for seed, image in zip(r.seeds, r.images.permute(0, 2, 3, 1).cpu().numpy()):
+                        for idx, (seed, image, lab) in enumerate(zip(r.seeds, 
+                                                                     r.images.permute(0, 2, 3, 1).cpu().numpy(), 
+                                                                     r.labels_indices)):
                             image_dir = os.path.join(outdir, f'{seed//1000*1000:06d}') if subdirs else outdir
                             os.makedirs(image_dir, exist_ok=True)
-                            PIL.Image.fromarray(image, 'RGB').save(os.path.join(image_dir, f'{seed:06d}.png'))
+                            PIL.Image.fromarray(image, 'RGB').save(os.path.join(image_dir, f'{seed:06d}_{lab:05d}.png'))
+                            if r.trajectories is not None:
+                                trajs = r.trajectories[idx]
+                                fig, axes = plt.subplots(ncols=math.ceil((len(trajs)-1)/4), nrows=4)
+                                for t, (x_t, ax) in enumerate(zip(trajs[:-1], axes.flatten())):
+                                    ax.imshow(encoder.decode(x_t).cpu().detach().numpy().swapaxes(0,1).swapaxes(1,2))
+                                    ax.axis('off')
+                                    ax.set_title(str(t))
+                                plt.suptitle(f"Label {int(lab)}")
+                                plt.tight_layout()
+                                plt.show()
+                                fig_dir = image_dir.replace("gen_images","gen_trajectories")
+                                if fig_dir == image_dir: fig_dir = os.path.join(image_dir,"gen_trajectories")
+                                os.makedirs(fig_dir, exist_ok=True)
+                                plt.savefig(os.path.join(fig_dir, f'{seed:06d}_{lab:05d}.png'))
+                                plt.close(fig)
 
                 # Yield results.
                 torch.distributed.barrier() # keep the ranks in sync
                 yield r
 
     return ImageIterable()
+
+def generate_images(
+    net,                                        # Main network. Path, URL, or torch.nn.Module.
+    gnet                = None,                 # Guiding network. None = same as main network.
+    encoder             = None,                 # Instance of training.encoders.Encoder. None = load from network pickle.
+    outdir              = None,                 # Where to save the output images. None = do not save.
+    subdirs             = False,                # Create subdirectory for every 1000 seeds?
+    seeds               = range(16, 24),        # List of random seeds.
+    class_idx           = None,                 # Class label. None = use automatic selection.
+    random_class        = True,                 # Automatic selection can be uniformly random or forced exact distribution.
+    max_batch_size      = 32,                   # Maximum batch size for the diffusion model.
+    encoder_batch_size  = 4,                    # Maximum batch size for the encoder. None = default.
+    verbose             = True,                 # Enable status prints?
+    device              = torch.device('cuda'), # Which compute device to use.
+    sampler_fn          = edm_sampler,          # Which sampler function to use.
+    **sampler_kwargs,                           # Additional arguments for the sampler function.
+):
+    
+    image_generator = get_image_generator(net=net, gnet=gnet, encoder=encoder, outdir=outdir, subdirs=subdirs, 
+                                          seeds=seeds, class_idx=class_idx, random_class=random_class,
+                                          max_batch_size=max_batch_size, encoder_batch_size=encoder_batch_size,
+                                          verbose=verbose, device=device, sampler_fn=sampler_fn, **sampler_kwargs)
+    for _r in tqdm.tqdm(image_generator, unit='batch', disable=(dist.get_rank() != 0)): pass
+    return _r
+
+def visualize_generated_images(generated_images_path, n_images=200, batch_size=100,
+                               plot_labels=False, save_dir=None, tight_layout=False):
+
+    dataset_kwargs = calc.get_dataset_kwargs("generated", image_path=generated_images_path)
+    dataset_obj = construct_class_by_name(**dataset_kwargs, random_seed=0)
+
+    saving = save_dir is not None
+    if tight_layout: kwargs = dict(bbox_inches="tight")
+    else: kwargs = dict()
+    for start, end in zip(np.arange(0, n_images+batch_size, batch_size)[:-1], 
+                          np.arange(0, n_images+batch_size, batch_size)[1:]):
+        fig, _ = vis.visualize_images(dataset_obj, np.arange(start, end), n_cols=10)
+        if plot_labels:
+            fig_2, _ = vis.visualize_classes(dataset_obj, np.arange(start, end), n_cols=10)
+        if saving:
+            fig.savefig(os.path.join(save_dir, f"imgs-{start:07.0f}-{end:07.0f}.png"), **kwargs)
+            plt.close(fig)
+            if plot_labels:
+                fig_2.savefig(os.path.join(save_dir, f"labs-{start:07.0f}-{end:07.0f}.png"), **kwargs)
+                plt.close(fig_2)
+
+def summarize_generated_images(generated_images_path, plot_labels=False, 
+                               save_dir=None, tight_layout=False, horizontal=True):
+
+    dataset_kwargs = calc.get_dataset_kwargs("generated", image_path=generated_images_path)
+    dataset_obj = construct_class_by_name(**dataset_kwargs, random_seed=0)
+
+    saving = save_dir is not None
+    if tight_layout: kwargs = dict(bbox_inches="tight")
+    else: kwargs = dict()
+
+    selected_indices = [162, 86, 23, 40, 0, 153, 101, 114, 159, 199]
+    if horizontal: vis_kwargs = dict(n_cols=10)
+    else: vis_kwargs = dict(n_cols=1)
+    fig, _ = vis.visualize_images(dataset_obj, selected_indices, space=0.2, **vis_kwargs)
+    if plot_labels:
+        fig_2, _ = vis.visualize_classes(dataset_obj, selected_indices, space=0.2, **vis_kwargs)
+    if saving:
+        fig.savefig(os.path.join(save_dir, f"imgs-summary.png"), **kwargs)
+        plt.close(fig)
+        if plot_labels:
+            fig_2.savefig(os.path.join(save_dir, f"labs-summary.png"), **kwargs)
+            plt.close(fig_2)
 
 #----------------------------------------------------------------------------
 # Parse a comma separated list of numbers or ranges and return a list of ints.
@@ -286,22 +422,25 @@ def parse_int_list(s):
 @click.option('--net',                      help='Main network pickle filename', metavar='PATH|URL',                type=str, default=None)
 @click.option('--gnet',                     help='Guiding network pickle filename', metavar='PATH|URL',             type=str, default=None)
 @click.option('--outdir',                   help='Where to save the output images', metavar='DIR',                  type=str, default=None, show_default=True)
-@click.option('--results/--no-results',     help='Whether to send output to Results or to Data', metavar='BOOL',    type=bool, default=False, show_default=True)
+@click.option('--results/--no-results',     help='Whether to send output to Results or not', metavar='BOOL',        type=bool, default=False, show_default=True)
+@click.option('--data/--no-data',           help='Whether to send output to Data or not', metavar='BOOL',           type=bool, default=False, show_default=False)
 @click.option('--subdirs',                  help='Create subdirectory for every 1000 seeds',                        is_flag=True)
 @click.option('--seeds',                    help='List of random seeds (e.g. 1,2,5-10)', metavar='LIST',            type=parse_int_list, default='16-19', show_default=True)
+@click.option('--random/--no-random', 'random_class', 
+                                            help='Whether to generate images from random classes', metavar='BOOL',  type=bool, default=True, show_default=True)
 @click.option('--class', 'class_idx',       help='Class label  [default: random]', metavar='INT',                   type=click.IntRange(min=0), default=None)
 @click.option('--batch', 'max_batch_size',  help='Maximum batch size', metavar='INT',                               type=click.IntRange(min=1), default=32, show_default=True)
 
-@click.option('--steps', 'num_steps',       help='Number of sampling steps', metavar='INT',                         type=click.IntRange(min=1), default=32, show_default=True)
-@click.option('--sigma-min', "sigma_min",   help='Lowest noise level', metavar='FLOAT',                             type=click.FloatRange(min=0, min_open=True), default=0.002, show_default=True)
-@click.option('--sigma-max', "sigma_max",   help='Highest noise level', metavar='FLOAT',                            type=click.FloatRange(min=0, min_open=True), default=80, show_default=True)
-@click.option('--rho',                      help='Time step exponent', metavar='FLOAT',                             type=click.FloatRange(min=0, min_open=True), default=7, show_default=True)
+@click.option('--steps', 'num_steps',       help='Number of sampling steps', metavar='INT',                         type=click.IntRange(min=1), default=DEFAULT_SAMPLER.num_steps, show_default=True)
+@click.option('--sigma-min', "sigma_min",   help='Lowest noise level', metavar='FLOAT',                             type=click.FloatRange(min=0, min_open=True), default=DEFAULT_SAMPLER.sigma_min, show_default=True)
+@click.option('--sigma-max', "sigma_max",   help='Highest noise level', metavar='FLOAT',                            type=click.FloatRange(min=0, min_open=True), default=DEFAULT_SAMPLER.sigma_max, show_default=True)
+@click.option('--rho',                      help='Time step exponent', metavar='FLOAT',                             type=click.FloatRange(min=0, min_open=True), default=DEFAULT_SAMPLER.rho, show_default=True)
 @click.option('--guide-weight', "guidance_weight",
                                             help='Guidance weight  [default: 1; no guidance]', metavar='FLOAT',     type=float, default=None)
-@click.option('--S-churn', 'S_churn',       help='Stochasticity strength', metavar='FLOAT',                         type=click.FloatRange(min=0), default=0, show_default=True)
-@click.option('--S-min', 'S_min',           help='Stoch. min noise level', metavar='FLOAT',                         type=click.FloatRange(min=0), default=0, show_default=True)
-@click.option('--S-max', 'S_max',           help='Stoch. max noise level', metavar='FLOAT',                         type=click.FloatRange(min=0), default='inf', show_default=True)
-@click.option('--S-noise', 'S_noise',       help='Stoch. noise inflation', metavar='FLOAT',                         type=float, default=1, show_default=True)
+@click.option('--S-churn', 'S_churn',       help='Stochasticity strength', metavar='FLOAT',                         type=click.FloatRange(min=0), default=DEFAULT_SAMPLER.S_churn, show_default=True)
+@click.option('--S-min', 'S_min',           help='Stoch. min noise level', metavar='FLOAT',                         type=click.FloatRange(min=0), default=DEFAULT_SAMPLER.S_min, show_default=True)
+@click.option('--S-max', 'S_max',           help='Stoch. max noise level', metavar='FLOAT',                         type=click.FloatRange(min=0), default=DEFAULT_SAMPLER.S_max, show_default=True)
+@click.option('--S-noise', 'S_noise',       help='Stoch. noise inflation', metavar='FLOAT',                         type=float, default=DEFAULT_SAMPLER.S_noise, show_default=True)
 
 @click.option('--guidance/--no-guidance',   help='Apply guidance, if possible?', metavar='BOOL',                    type=bool, default=True)
 
@@ -332,11 +471,15 @@ def cmdline(preset, **opts):
     # Validate options.
     if opts.net is None:
         raise click.ClickException('Please specify either --preset or --net')
+    if dirs.MODELS_HOME not in opts.net:
+        opts.net = os.path.join(dirs.MODELS_HOME, "Images", opts.net)
     if opts.guidance_weight is None or opts.guidance_weight == 1:
         opts.guidance_weight = 1
         opts.gnet = None
     elif opts.gnet is None:
         raise click.ClickException('Please specify --gnet when using guidance')
+    if opts.gnet is not None and dirs.MODELS_HOME not in opts.gnet:
+        opts.gnet = os.path.join(dirs.MODELS_HOME, "Images", opts.gnet)
     
     # Make changes, if needed
     if opts.guidance_weight != 1 and not opts.guidance:
@@ -350,15 +493,17 @@ def cmdline(preset, **opts):
         opts.outdir = os.path.splitext(opts.net)[0].split( models_dir+os.sep )[-1]
     if opts.results:
         opts.outdir = os.path.join(dirs.RESULTS_HOME, "Images", opts.outdir)
-    else: 
+    elif opts.data: 
         opts.outdir = os.path.join(dirs.DATA_HOME, "generated", opts.outdir)
-    del opts.results
+    else:
+        model_name = os.path.splitext( os.path.split(opts.net)[-1] )[0]
+        model_dir = os.path.dirname( opts.net )
+        opts.outdir = os.path.join(model_dir, "gen_images", model_name)
+    del opts.results, opts.data
 
     # Generate.
     dist.init()
-    image_iter = generate_images(**opts)
-    for _r in tqdm.tqdm(image_iter, unit='batch', disable=(dist.get_rank() != 0)):
-        pass
+    generate_images(**opts)
 
 #----------------------------------------------------------------------------
 
