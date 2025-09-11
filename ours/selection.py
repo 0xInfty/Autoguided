@@ -110,11 +110,9 @@ def get_selection_size(full_size, **selection_kwargs):
         b_over_N = int(full_size * (1 - selection_kwargs.filter_ratio) / selection_kwargs.N) # Size b/N of each mini-batch chunk
         b = b_over_N * selection_kwargs.N # Size of the full mini-batch
         return b
-    elif "random_baseline" in selection_kwargs.func_name:
-        b = int(full_size * (1 - selection_kwargs.filter_ratio))
-        return b    
     else:
-        raise NotImplementedError
+        b = int(full_size * (1 - selection_kwargs.filter_ratio))
+        return b
 
 def infer_selection_params(params):
 
