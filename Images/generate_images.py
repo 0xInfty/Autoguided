@@ -22,6 +22,7 @@ import numpy as np
 import torch
 import PIL.Image
 import matplotlib.pyplot as plt
+import pyvtools.text as vtext
 
 from karras.dnnlib.util import EasyDict, construct_class_by_name, open_url, call_func_by_name
 import karras.torch_utils.distributed as dist
@@ -355,6 +356,7 @@ def generate_images(
 
 def visualize_generated_images(generated_images_path, n_images=200, batch_size=100,
                                plot_labels=False, save_dir=None, tight_layout=False):
+    """Represent all the usual 200 generated images stored (1 per class)"""
 
     dataset_kwargs = calc.get_dataset_kwargs("generated", image_path=generated_images_path)
     dataset_obj = construct_class_by_name(**dataset_kwargs, random_seed=0)
@@ -374,8 +376,9 @@ def visualize_generated_images(generated_images_path, n_images=200, batch_size=1
                 fig_2.savefig(os.path.join(save_dir, f"labs-{start:07.0f}-{end:07.0f}.png"), **kwargs)
                 plt.close(fig_2)
 
-def summarize_generated_images(generated_images_path, plot_labels=False, 
-                               save_dir=None, tight_layout=False, horizontal=True):
+def summarize_generated_images(generated_images_path, selected_indices=[162,86,23,40,0,153,101,114,159,199],
+                               plot_labels=False, save_dir=None, tight_layout=False, horizontal=True):
+    """Represent only some images out of the usual 200 generated images stored (1 per class)"""
 
     dataset_kwargs = calc.get_dataset_kwargs("generated", image_path=generated_images_path)
     dataset_obj = construct_class_by_name(**dataset_kwargs, random_seed=0)
@@ -384,7 +387,6 @@ def summarize_generated_images(generated_images_path, plot_labels=False,
     if tight_layout: kwargs = dict(bbox_inches="tight")
     else: kwargs = dict()
 
-    selected_indices = [162, 86, 23, 40, 0, 153, 101, 114, 159, 199]
     if horizontal: vis_kwargs = dict(n_cols=10)
     else: vis_kwargs = dict(n_cols=1)
     fig, _ = vis.visualize_images(dataset_obj, selected_indices, space=0.2, **vis_kwargs)
@@ -396,6 +398,43 @@ def summarize_generated_images(generated_images_path, plot_labels=False,
         if plot_labels:
             fig_2.savefig(os.path.join(save_dir, f"labs-summary.png"), **kwargs)
             plt.close(fig_2)
+
+def represent_many_generated(folder_paths, guide_path=None, summarized=False):
+    """Run visualization and generation for many different models"""
+
+    dist.init()
+
+    for image_path in folder_paths:
+        print("Working on...", image_path)
+        image_path = os.path.join(dirs.MODELS_HOME, image_path)
+
+        # Generate images, if needed
+        if not os.path.isdir(image_path) or len(os.listdir(image_path)) != 200:
+            print("> Needs generation")
+            numbers = vtext.find_numbers(os.path.split(image_path)[-1])
+            if len(numbers)==2:
+                epoch, ema = numbers
+                guidance_weight = 1
+            else:
+                epoch, ema, guidance_weight = numbers
+                if guidance_weight!=1 and guide_path is None:
+                    print("> Ignored because guide is missing")
+                    continue
+            epoch, ema, guidance_weight = abs(float(epoch)), abs(float(ema)), abs(float(guidance_weight))
+            checkpoint_filename = f"network-snapshot-{epoch:07.0f}-{ema:.3f}.pkl"
+            checkpoint_filepath = os.path.join(os.path.dirname(os.path.dirname(image_path)), checkpoint_filename)
+            generate_images(checkpoint_filepath, gnet=guide_path, outdir=image_path,
+                            guidance=guidance_weight, random_class=False, seeds=range(0,200), 
+                            verbose=True)
+
+        save_path = image_path.replace("gen_images", "gen_visualization")
+        os.makedirs(save_path, exist_ok=True)
+        if summarized:
+            summarize_generated_images(image_path, save_dir=save_path, tight_layout=True)
+        else:
+            visualize_generated_images(image_path, save_dir=save_path, tight_layout=True)
+        plt.close()
+        plt.close()
 
 #----------------------------------------------------------------------------
 # Parse a comma separated list of numbers or ranges and return a list of ints.
