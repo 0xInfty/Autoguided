@@ -175,6 +175,18 @@ A baseline model with no data selection can be trained removing both the `--sele
 torchrun --standalone --nproc_per_node=2 Images/train_edm2.py --outdir="Baseline" --dataset tiny --preset="edm2-tiny-xs" --batch-gpu=128
 ```
 
+### Testing EDM2 models with our suite of metrics
+
+Any EDM2 model can be tested with our suite of metrics. 
+
+We evaluate models with FID and FD-DINOv2 as [Karras et al](https://dl.acm.org/doi/10.5555/3737916.3739595), but we also apply a pre-trained classifier on generated images and calculate top-1 and top-5 accuracy. We use the Swin-L classifier trained by Hyun et al on ["Vision Transformers in 2022: An Update on Tiny ImageNet"](https://arxiv.org/abs/2205.10660).
+
+FID and FD-DINOv2 metrics will require you to first calculate statistics on the dataset. For Tiny ImageNet, run...
+
+```
+python ref --dataset tiny --dest "tiny.pkl"
+```
+
 ## Additional information
 
 ### Authors
@@ -193,12 +205,16 @@ All material, including source code and pre-trained models, is licensed under th
 
 Code adapted from Karras' repository was originally under the same [CC BY-NC-SA 4.0](http://creativecommons.org/licenses/by-nc-sa/4.0/) license. That code was originally marked with the following copyright disclaimer: _"Copyright (c) 2024, NVIDIA CORPORATION & AFFILIATES. All rights reserved"_. The disclaimer has been kept in all those files.
 
-Another part of the code is an implementation described by Evans, Parthasarathy et al in a publication under [CC BY 4.0 license](https://creativecommons.org/licenses/by/4.0/).
+A different part of the code is an implementation of a method described by Evans, Parthasarathy et al in a publication under [CC BY 4.0 license](https://creativecommons.org/licenses/by/4.0/). No open-source code implementation was shared in this case, but our functions have a link to their publication in the docstrings.
+
+We use a pre-trained Tiny ImageNet classifier obtained from Huynh et al's ["TinyImageNet-Transformers"](https://github.com/ehuynh1106/TinyImageNet-Transformers) repository. The original code and models were shared under an [Apache-2.0 license](https://www.apache.org/licenses/LICENSE-2.0). We have kept a link to the repository on functions involving this model.
 
 A history of changes for all code can be extracted using Git's version control tools.
 
 ### Acknowledgments
 
-We thank T. Karras et al for sharing their ["Guiding a diffusion model with a bad version of itself"](https://dl.acm.org/doi/10.5555/3737916.3739595) research and ["EDM2 and Autoguidance"](https://github.com/NVlabs/edm2) code, licensed under CC BY-NC-SA 4.0.
+We thank T. Karras et al for sharing their ["Guiding a diffusion model with a bad version of itself"](https://dl.acm.org/doi/10.5555/3737916.3739595) research and ["EDM2 and Autoguidance"](https://github.com/NVlabs/edm2) code and pre-trained models.
 
 We also thank T. Evans, N. Parthasarathy et al for sharing their ["Data curation via joint example selection further accelerates multimodal learning"](https://dl.acm.org/doi/10.5555/3737916.3742401) research and a detailed description of their JEST method.
+
+Finally, our most special thanks to E. Huynh for sharing their ["Vision Transformers in 2022: An Update on Tiny ImageNet"](https://arxiv.org/abs/2205.10660) research and their ["TinyImageNet-Transformers"](https://github.com/ehuynh1106/TinyImageNet-Transformers) code and pre-trained models.
