@@ -191,13 +191,13 @@ python ref --dataset tiny --dest "tiny.pkl"
 
 ### Authors
 
-[Valeria Pais Malacalza](v.pais-malacalza.1@research.gla.ac.uk) from University of Glasgow, Glasgow, United Kingdom.
+[Valeria Pais Malacalza](mailto:v.pais-malacalza.1@research.gla.ac.uk) from University of Glasgow, Glasgow, United Kingdom.
 
-[Luis Oala](luis.oala@dotphoton.com) associated at the time to Dotphoton, Zug, Switzerland.
+[Luis Oala](mailto:luis.oala@dotphoton.com) associated at the time to Dotphoton, Zug, Switzerland.
 
-[Daniele Faccio](daniele.faccio@glasgow.ac.uk) from University of Glasgow, Glasgow, United Kingdom.
+[Daniele Faccio](mailto:daniele.faccio@glasgow.ac.uk) from University of Glasgow, Glasgow, United Kingdom.
 
-[Marco Aversa](marco.aversa@outlook.com) associated at the time to Dotphoton, Zug, Switzerland.
+[Marco Aversa](mailto:marco.aversa@outlook.com) associated at the time to Dotphoton, Zug, Switzerland.
 
 ### License
 
