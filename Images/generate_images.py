@@ -417,7 +417,11 @@ def parse_int_list(s):
 #----------------------------------------------------------------------------
 # Command line interface.
 
-@click.command()
+@click.group()
+def cmdline():
+    """Generate images using an EDM2 model"""
+
+@cmdline.command()
 @click.option('--preset',                   help='Configuration preset', metavar='STR',                             type=str, default=None)
 @click.option('--net',                      help='Main network pickle filename', metavar='PATH|URL',                type=str, default=None)
 @click.option('--gnet',                     help='Guiding network pickle filename', metavar='PATH|URL',             type=str, default=None)
@@ -444,8 +448,8 @@ def parse_int_list(s):
 
 @click.option('--guidance/--no-guidance',   help='Apply guidance, if possible?', metavar='BOOL',                    type=bool, default=True)
 
-def cmdline(preset, **opts):
-    """Generate random images using the given model.
+def pretrained(preset, **opts):
+    """Generate random images using the given pretrained model.
 
     Examples:
 
@@ -487,6 +491,75 @@ def cmdline(preset, **opts):
         log.info("Guidance deactivated due to --no-guidance flag")
     elif opts.guidance and opts.guidance_weight == 1:
         log.info("Guidance cannot be activated: no guidance weight in configuration preset")
+    opts.guidance = opts.guidance_weight # Rename for `generate_images` to work
+    del opts.guidance_weight
+    if opts.outdir is None:
+        opts.outdir = os.path.splitext(opts.net)[0].split( models_dir+os.sep )[-1]
+    if opts.results:
+        opts.outdir = os.path.join(dirs.RESULTS_HOME, "Images", opts.outdir)
+    elif opts.data: 
+        opts.outdir = os.path.join(dirs.DATA_HOME, "generated", opts.outdir)
+    else:
+        model_name = os.path.splitext( os.path.split(opts.net)[-1] )[0]
+        model_dir = os.path.dirname( opts.net )
+        opts.outdir = os.path.join(model_dir, "gen_images", model_name)
+    del opts.results, opts.data
+
+    # Generate.
+    dist.init()
+    generate_images(**opts)
+
+@cmdline.command()
+@click.option('--net',                      help='Main network pickle filepath', metavar='PATH|URL',                type=str, default=None)
+@click.option('--gnet',                     help='Guiding network pickle filepath', metavar='PATH|URL',             type=str, default=None)
+@click.option('--outdir',                   help='Where to save the output images', metavar='DIR',                  type=str, default=None, show_default=True)
+@click.option('--results/--no-results',     help='Whether to send output to Results or not', metavar='BOOL',        type=bool, default=False, show_default=True)
+@click.option('--data/--no-data',           help='Whether to send output to Data or not', metavar='BOOL',           type=bool, default=False, show_default=False)
+@click.option('--subdirs',                  help='Create subdirectory for every 1000 seeds',                        is_flag=True)
+@click.option('--seeds',                    help='List of random seeds (e.g. 1,2,5-10)', metavar='LIST',            type=parse_int_list, default='0-2000', show_default=True)
+@click.option('--random/--no-random', 'random_class', 
+                                            help='Whether to generate images from random classes', metavar='BOOL',  type=bool, default=False, show_default=True)
+@click.option('--batch', 'max_batch_size',  help='Maximum batch size', metavar='INT',                               type=click.IntRange(min=1), default=32, show_default=True)
+
+@click.option('--steps', 'num_steps',       help='Number of sampling steps', metavar='INT',                         type=click.IntRange(min=1), default=DEFAULT_SAMPLER.num_steps, show_default=True)
+@click.option('--sigma-min', "sigma_min",   help='Lowest noise level', metavar='FLOAT',                             type=click.FloatRange(min=0, min_open=True), default=DEFAULT_SAMPLER.sigma_min, show_default=True)
+@click.option('--sigma-max', "sigma_max",   help='Highest noise level', metavar='FLOAT',                            type=click.FloatRange(min=0, min_open=True), default=DEFAULT_SAMPLER.sigma_max, show_default=True)
+@click.option('--rho',                      help='Time step exponent', metavar='FLOAT',                             type=click.FloatRange(min=0, min_open=True), default=DEFAULT_SAMPLER.rho, show_default=True)
+@click.option('--guide-weight', "guidance_weight",
+                                            help='Guidance weight  [default: 1; no guidance]', metavar='FLOAT',     type=float, default=None)
+@click.option('--S-churn', 'S_churn',       help='Stochasticity strength', metavar='FLOAT',                         type=click.FloatRange(min=0), default=DEFAULT_SAMPLER.S_churn, show_default=True)
+@click.option('--S-min', 'S_min',           help='Stoch. min noise level', metavar='FLOAT',                         type=click.FloatRange(min=0), default=DEFAULT_SAMPLER.S_min, show_default=True)
+@click.option('--S-max', 'S_max',           help='Stoch. max noise level', metavar='FLOAT',                         type=click.FloatRange(min=0), default=DEFAULT_SAMPLER.S_max, show_default=True)
+@click.option('--S-noise', 'S_noise',       help='Stoch. noise inflation', metavar='FLOAT',                         type=float, default=DEFAULT_SAMPLER.S_noise, show_default=True)
+
+@click.option('--guidance/--no-guidance',   help='Apply guidance, if possible?', metavar='BOOL',                    type=bool, default=True)
+
+def checkpoint(**opts):
+    """Generate random images using the given model checkpoint.
+
+    By default, create 2000 images, 10 per each of the 200 classes of Tiny ImageNet.
+    """
+    opts = EasyDict(opts)
+
+    # Validate options.
+    if opts.net is None:
+        raise click.ClickException('Please specify either --preset or --net')
+    if dirs.MODELS_HOME not in opts.net:
+        opts.net = os.path.join(dirs.MODELS_HOME, "Images", opts.net)
+    if opts.guidance_weight is None or opts.guidance_weight == 1:
+        opts.guidance_weight = 1
+        opts.gnet = None
+    elif opts.gnet is None:
+        raise click.ClickException('Please specify --gnet when using guidance')
+    if opts.gnet is not None and dirs.MODELS_HOME not in opts.gnet:
+        opts.gnet = os.path.join(dirs.MODELS_HOME, "Images", opts.gnet)
+    
+    # Make changes, if needed
+    if opts.guidance_weight != 1 and not opts.guidance:
+        opts.guidance_weight = 1
+        log.info("Guidance deactivated due to --no-guidance flag")
+    elif opts.guidance and opts.guidance_weight == 1:
+        log.info("Guidance cannot be activated: specify --guide-weight")
     opts.guidance = opts.guidance_weight # Rename for `generate_images` to work
     del opts.guidance_weight
     if opts.outdir is None:

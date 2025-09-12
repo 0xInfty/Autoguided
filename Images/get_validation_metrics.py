@@ -121,6 +121,14 @@ def load_resnet_101_model(verbose=False):
     return model
 
 def load_wavemix_model(verbose=False):
+    """Tiny ImageNet pre-trained WaveMix model from Jeevan et al, 2022.
+
+    See more
+    --------
+    https://arxiv.org/abs/2203.03689
+    https://arxiv.org/abs/2205.14375
+    https://github.com/pranavphoenix/WaveMix
+    """
 
     model = WaveMix(num_classes = 200,
                     depth = 16,

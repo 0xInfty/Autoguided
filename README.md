@@ -48,7 +48,7 @@ The new entry should look like...
 Following this index...
 - Any datasets and pre-trained models will be stored inside `data_home`, accessible as `dirs.DATA_HOME`
 - Any training model checkpoints will be stored inside `models_home`, accessible as `dirs.MODELS_HOME`
-- Any results will be stored inside `results_home`, , accessible as `dirs.MODELS_HOME`
+- Any results will be stored inside `results_home`, accessible as `dirs.MODELS_HOME`
 
 You can manually open the file and change the `system_name` attribute to create your own nickname, to know which one is your entry. You can also manually modify each of the other path variables.
 
@@ -96,13 +96,13 @@ python ToyExample/toy_example.py train
 A small toy reference model can be trained running...
 
 ```
-python ToyExample/toy_example.py train --dim 32 --total-iter 512 --outdir "ToyExample/Ref"
+python ToyExample/toy_example.py train --dim 32 --total-iter 512 --outdir=ToyExample/Ref
 ```
 
 A larger toy model can be trained using autoguided JEST (AJEST) running...
 
 ```
-python ToyExample/toy_example.py train --acid --guidance --guide-path "ToyExample/Ref/iter0512.pkl"
+python ToyExample/toy_example.py train --acid --guidance --guide-path=ToyExample/Ref/iter0512.pkl
 ```
 
 Alternatively, a toy model can be trained with random data selection running...
@@ -138,7 +138,7 @@ Basic metrics include average loss over different noise levels and L2 distance b
 Pre-trained models can be automatically downloaded and tested to generate ImageNet-like images by running...
 
 ```
-python Images/generate_images.py --preset=edm2-img512-s-autog-dino --outdir="images_test"
+python Images/generate_images.py pretrained --preset=edm2-img512-s-autog-dino --outdir=images_test
 ```
 
 The preset configuration will determine which models and guidance weight to use according to Karras et al's results. In general...
@@ -150,7 +150,7 @@ The preset configuration will determine which models and guidance weight to use 
 An XXS EDM2 model can be trained on Tiny ImageNet to be used as a reference by running a command such as...
 
 ```
-torchrun --standalone --nproc_per_node=2 Images/train_edm2.py --outdir="Ref" --dataset tiny --preset="edm2-tiny-xxs" --batch-gpu=256
+torchrun --standalone --nproc_per_node=2 Images/train_edm2.py --outdir=Ref --dataset tiny --preset=edm2-tiny-xxs --batch-gpu=256
 ```
 
 This particular command is designed to run on 2 GPUs. The total batch size is set to 2048 by default. Setting the maximum batch per GPU to 256 as in this example, there will be 4 accummulation rounds before updating the gradient.
@@ -158,7 +158,7 @@ This particular command is designed to run on 2 GPUs. The total batch size is se
 Once this is done, an XS EDM2 model can be trained on Tiny ImageNet with AJEST by running a command such as...
 
 ```
-torchrun --standalone --nproc_per_node=2 Images/train_edm2.py --outdir="AJEST" --dataset tiny --preset="edm2-tiny-xs" --batch-gpu=128 --acid --guide-path "Ref/network-snapshot-0005000-0.100.pkl"
+torchrun --standalone --nproc_per_node=2 Images/train_edm2.py --outdir=AJEST --dataset tiny --preset="edm2-tiny-xs" --batch-gpu=128 --acid --guide-path "Ref/network-snapshot-0005000-0.100.pkl"
 ```
 
 To implement Early AJEST, the `--early` flag can be used. The way checkpoints are stored, this particular example loads the reference model after 5000 epochs with EMA=0.100.
@@ -166,14 +166,16 @@ To implement Early AJEST, the `--early` flag can be used. The way checkpoints ar
 Alternatively, an XS EDM2 model can be trained on Tiny ImageNet with random data selection by running...
 
 ```
-torchrun --standalone --nproc_per_node=2 Images/train_edm2.py --outdir="Random" --dataset tiny --preset="edm2-tiny-xs" --batch-gpu=128 --selection
+torchrun --standalone --nproc_per_node=2 Images/train_edm2.py --outdir=Random --dataset tiny --preset=edm2-tiny-xs --batch-gpu=128 --selection
 ```
 
 A baseline model with no data selection can be trained removing both the `--selection` and `--acid` flags:
 
 ```
-torchrun --standalone --nproc_per_node=2 Images/train_edm2.py --outdir="Baseline" --dataset tiny --preset="edm2-tiny-xs" --batch-gpu=128
+torchrun --standalone --nproc_per_node=2 Images/train_edm2.py --outdir=Baseline --dataset tiny --preset=edm2-tiny-xs --batch-gpu=128
 ```
+
+Configuration values will be automatically saved into a `training_options.json` file. Training loss and other parameters can be logged to Weights & Biases.
 
 ### Testing EDM2 models with our suite of metrics
 
@@ -184,8 +186,34 @@ We evaluate models with FID and FD-DINOv2 as [Karras et al](https://dl.acm.org/d
 FID and FD-DINOv2 metrics will require you to first calculate statistics on the dataset. For Tiny ImageNet, run...
 
 ```
-python ref --dataset tiny --dest "tiny.pkl"
+python Images/calculate_metrics.py ref --dataset tiny --dest=tiny.pkl
 ```
+
+To generate 2000 images (10 per class) without guidance with an EDM2 model, run a command such as...
+
+```
+python Images/generate_images.py checkpoint --net=relative/path/network-snapshot-0022000-0.100.pkl
+```
+
+To generate images with guidance, specify the guide checkpoint with the `--gnet` flag and the guidance weight with `--guide-weight`.
+
+To calculate metrics on those generated images, run...
+
+```
+python Images/get_validation_metrics.py metrics-generated --path=relative/path/gen_images/network-snapshot-0022000-0.100.pkl
+```
+
+Alternatively, you can calculate entire validation curves for these metrics by running...
+
+```
+python Images/get_validation_metrics.py validation --models-dir=relative/path
+```
+
+You just need to specify the relative path from `dirs.MODELS_HOME` to the directory storing all training checkpoints. For each available checkpoint, this command will generate 2000 images, calculate metrics, and then delete the images to save space. 
+
+To generate images with guidance, specify the guide checkpoint with the `--guide-path` flag and the guidance weight with `--guidance-weight`.
+
+If you wish to save at least one image per class, then set up `--save-nimg=200`. If you do not want to run the code for every available checkpoint, you can use the `--period` flag to specify a period in epochs (period 2000 will execute the code for 2000, 4000, 6000, etc epochs). There is also `--min-epoch` and `-max-epoch` flags to start from a certain epoch and/or stop at a any other given epoch.
 
 ## Additional information
 
@@ -199,6 +227,14 @@ python ref --dataset tiny --dest "tiny.pkl"
 
 [Marco Aversa](mailto:marco.aversa@outlook.com) associated at the time to Dotphoton, Zug, Switzerland.
 
+### Acknowledgments
+
+We thank T. Karras et al for sharing their ["Guiding a diffusion model with a bad version of itself"](https://dl.acm.org/doi/10.5555/3737916.3739595) research and ["EDM2 and Autoguidance"](https://github.com/NVlabs/edm2) code and pre-trained models.
+
+We also thank T. Evans, N. Parthasarathy et al for sharing their ["Data curation via joint example selection further accelerates multimodal learning"](https://dl.acm.org/doi/10.5555/3737916.3742401) research and a detailed description of their JEST method.
+
+Finally, our most special thanks to E. Huynh for sharing their ["Vision Transformers in 2022: An Update on Tiny ImageNet"](https://arxiv.org/abs/2205.10660) research and their ["TinyImageNet-Transformers"](https://github.com/ehuynh1106/TinyImageNet-Transformers) code and pre-trained models.
+
 ### License
 
 All material, including source code and pre-trained models, is licensed under the [Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International License](http://creativecommons.org/licenses/by-nc-sa/4.0/).
@@ -210,11 +246,3 @@ A different part of the code is an implementation of a method described by Evans
 We use a pre-trained Tiny ImageNet classifier obtained from Huynh et al's ["TinyImageNet-Transformers"](https://github.com/ehuynh1106/TinyImageNet-Transformers) repository. The original code and models were shared under an [Apache-2.0 license](https://www.apache.org/licenses/LICENSE-2.0). We have kept a link to the repository on functions involving this model.
 
 A history of changes for all code can be extracted using Git's version control tools.
-
-### Acknowledgments
-
-We thank T. Karras et al for sharing their ["Guiding a diffusion model with a bad version of itself"](https://dl.acm.org/doi/10.5555/3737916.3739595) research and ["EDM2 and Autoguidance"](https://github.com/NVlabs/edm2) code and pre-trained models.
-
-We also thank T. Evans, N. Parthasarathy et al for sharing their ["Data curation via joint example selection further accelerates multimodal learning"](https://dl.acm.org/doi/10.5555/3737916.3742401) research and a detailed description of their JEST method.
-
-Finally, our most special thanks to E. Huynh for sharing their ["Vision Transformers in 2022: An Update on Tiny ImageNet"](https://arxiv.org/abs/2205.10660) research and their ["TinyImageNet-Transformers"](https://github.com/ehuynh1106/TinyImageNet-Transformers) code and pre-trained models.
