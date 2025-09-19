@@ -924,16 +924,17 @@ def mandala_score(model, ground_truth_dist, guide=None, guidance_weight=3,
     if logging: print("Mandala score", unique_score)
 
     # Optional plotting step
+    plotting_args = dict(samples=samples, grid=grid, grid_coords=grid_coords, 
+                         x_edges=x_edges, y_edges=y_edges, bounds=bounds,
+                         x_centre=x_centre, y_centre=y_centre, x_side=x_side, y_side=y_side, 
+                         n_hits_unique=n_hits_unique, n_miss_unique=n_miss_unique, 
+                         ground_truth_dist=ground_truth_dist)
     if plotting:
-        plot_mandala_score(samples, grid, 
-            grid_coords, x_edges, y_edges, bounds,
-            x_centre, y_centre, x_side, y_side, 
-            n_hits_unique, n_miss_unique, 
-            ground_truth_dist,
+        plot_mandala_score(**plotting_args,
             full_scale=full_scale, log_scale=log_scale, 
             save_fig=save_fig, **plot_kwargs)
 
-    return unique_score, non_unique_score
+    return (unique_score, non_unique_score), plotting_args
 
 #----------------------------------------------------------------------------
 # Visualization utils
@@ -1175,13 +1176,13 @@ def run_test(net, ema=None, guide=None, ref=None, acid=False,
             if test_mandala:
                 ema_mandala, ema_classification = mandala_score(ema, gtd, 
                                                                 samples=ema_test_outputs,
-                                                                sigma_max=sigma_max)
+                                                                sigma_max=sigma_max)[0]
                 results["ema_mandala_score"] = ema_mandala
                 results["ema_classification_score"] = ema_classification
                 if test_guide:
                     ema_mandala, ema_classification = mandala_score(
                         ema, gtd, samples=guided_test_outputs, sigma_max=sigma_max, 
-                        guide=guide, guidance_weight=guidance_weight)
+                        guide=guide, guidance_weight=guidance_weight)[0]
                     results["ema_guided_mandala_score"] = ema_mandala
                     results["ema_guided_classification_score"] = ema_classification
 
@@ -1202,13 +1203,13 @@ def run_test(net, ema=None, guide=None, ref=None, acid=False,
         if test_mandala:
             net_mandala, net_classification = mandala_score(net, gtd, 
                                                             samples=test_outputs,
-                                                            sigma_max=sigma_max)
+                                                            sigma_max=sigma_max)[0]
             results["learner_mandala_score"] = net_mandala
             results["learner_classification_score"] = net_classification
             if test_guide:
                 net_mandala, net_classification = mandala_score(
                     net, gtd, samples=guided_test_outputs, sigma_max=sigma_max, 
-                    guide=guide, guidance_weight=guidance_weight)
+                    guide=guide, guidance_weight=guidance_weight)[0]
                 results["learner_guided_mandala_score"] = net_mandala
                 results["learner_guided_classification_score"] = net_classification
 
