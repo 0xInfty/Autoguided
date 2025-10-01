@@ -5,35 +5,22 @@ sys.path.insert(0, dirs.SYSTEM_HOME)
 sys.path.insert(0, os.path.join(dirs.SYSTEM_HOME, "karras"))
 
 import shutil
-import pickle
 import json
 import tqdm
 import click
 import time
 from datetime import datetime
-import math
-import numpy as np
 import torch
-import torchvision as torchv
-import torchvision.transforms as transforms
-import wandb
-import timm
 from pyvtools.text import filter_by_string_must, find_numbers
-from pyvtorch.aux import load_weights_and_check
 
 import karras.torch_utils.distributed as dist
-from karras.dnnlib.util import EasyDict, construct_class_by_name
-from karras.training.encoders import PRETRAINED_HOME, From8bitTo01, From8bitToMinus11, FromNumpyToTorch
-from torchvision.transforms.functional import InterpolationMode
-from karras.torch_utils.misc import InfiniteSampler
-from jeevan.wavemix.classification import WaveMix
-from generate_images import DEFAULT_SAMPLER, generate_images, parse_int_list
+from karras.dnnlib.util import EasyDict
+from generate_images import DEFAULT_SAMPLER, generate_images
 import calculate_metrics as calc
 import get_validation_metrics as valm
 import reconstruct_phema as recp
 
 from ours.dataset import DATASET_OPTIONS
-from ours.utils import get_wandb_id
 
 
 # guidance_weights = [1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2. , 2.1, 2.2, 2.3, 2.4, 2.5]
@@ -199,7 +186,6 @@ def calculate_metrics_for_grid_search(
         
             # Save these results
             results[ema_str][guidance_weight_str] = dict(**these_results)
-            results[ema_str][guidance_weight_str] = dict(test="testingtesting")
             if dist.get_rank()==0:
                 with open(os.path.join(metrics_filepath), 'wt') as f:
                     json.dump(results, f, indent=2)
