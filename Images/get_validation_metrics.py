@@ -25,7 +25,6 @@ from karras.dnnlib.util import EasyDict, construct_class_by_name
 from karras.training.encoders import PRETRAINED_HOME, From8bitTo01, From8bitToMinus11, FromNumpyToTorch
 from torchvision.transforms.functional import InterpolationMode
 from karras.torch_utils.misc import InfiniteSampler
-from jeevan.wavemix.classification import WaveMix
 from generate_images import DEFAULT_SAMPLER, generate_images, parse_int_list
 import calculate_metrics as calc
 from ours.dataset import DATASET_OPTIONS, get_dataset_kwargs
@@ -120,41 +119,11 @@ def load_resnet_101_model(verbose=False):
 
     return model
 
-def load_wavemix_model(verbose=False):
-    """Tiny ImageNet pre-trained WaveMix model from Jeevan et al, 2022.
-
-    See more
-    --------
-    https://arxiv.org/abs/2203.03689
-    https://arxiv.org/abs/2205.14375
-    https://github.com/pranavphoenix/WaveMix
-    """
-
-    model = WaveMix(num_classes = 200,
-                    depth = 16,
-                    mult = 2,
-                    ff_channel = 192,
-                    final_dim = 192,
-                    dropout = 0.5,
-                    level = 3,
-                    initial_conv = 'pachify',
-                    patch_size = 4)
-
-    model_filepath = os.path.join(PRETRAINED_HOME, "tiny_78.76.pth")
-    checkpoint = torch.load(model_filepath)
-
-    model = load_weights_and_check(model, checkpoint, verbose=verbose)
-    model.eval()
-
-    return model
-
 def load_classifier_model(model_name, verbose=True, **kwargs):
     if model_name == "ResNet":
         return load_resnet_101_model(verbose=verbose)
     elif model_name == "Swin":
         return load_swin_l_model(verbose=verbose, **kwargs)
-    elif model_name == "WaveMix":
-        return load_wavemix_model(verbose=verbose)
     else:
         raise ValueError("Unrecognized or unsupported model")
 
@@ -162,7 +131,7 @@ def load_classifier_model(model_name, verbose=True, **kwargs):
 # Utilities to calculate classification metrics
 
 def get_classification_metrics_dir(model, dataset_name="tiny", image_path=None):
-    if model not in ["Swin", "ResNet", "WaveMix"]: raise NotImplementedError("Unknown model")
+    if model not in ["Swin", "ResNet"]: raise NotImplementedError("Unknown model")
     assert dataset_name in ["tiny", "generated"], NotImplementedError("Dataset is not supported")
     if dataset_name=="generated":
         assert image_path is not None, ValueError("Generated dataset requires image path")
@@ -174,8 +143,6 @@ def get_classification_metrics_dir(model, dataset_name="tiny", image_path=None):
             save_dir = os.path.join(dirs.DATA_HOME, "class_metrics", "tiny", "resnet")
         elif model == "Swin":
             save_dir = os.path.join(dirs.DATA_HOME, "class_metrics", "tiny", "swin")
-        elif model == "WaveMix":
-            save_dir = os.path.join(dirs.DATA_HOME, "class_metrics", "tiny", "wavemix")
     return save_dir
 
 def load_last_classification_metrics(model, dataset_name="tiny", image_path=None):
@@ -266,15 +233,12 @@ def get_dataset_transform_kwargs(model_name, dataset_name):
     elif model_name == "Swin":
         transform_kwargs = dict(do_upsample=True, upsample_dim=384, do_normalize=True,
                                 do_01_rescale=True, do_minus11_rescale=False)
-    elif model_name == "WaveMix":
-        transform_kwargs = dict(do_upsample=True, upsample_dim=128, do_normalize=True,
-                                do_01_rescale=True, do_minus11_rescale=False)
     else:
         transform_kwargs = dict(do_upsample=False, upsample_dim=128, do_normalize=False,
                                 do_01_rescale=False, do_minus11_rescale=False)
     
     # According to dataset name too...
-    if dataset_name=="generated" and model_name in ["ResNet", "Swin", "WaveMix"]:
+    if dataset_name=="generated" and model_name in ["ResNet", "Swin"]:
         transform_kwargs.update(dict(convert_to_torch=True))
     else:
         transform_kwargs.update(dict(convert_to_torch=True))
@@ -728,7 +692,7 @@ def calculate_metrics_for_all_checkpoints(
 def cmdline(): pass
 
 @cmdline.command()
-@click.option('--model', help='Model to be used', type=click.Choice(["Swin", "ResNet", "WaveMix"]), required=False, default="ResNet", show_default=True)
+@click.option('--model', help='Model to be used', type=click.Choice(["Swin", "ResNet"]), required=False, default="Swin", show_default=True)
 @click.option('--dataset', 'dataset_name',  help='Dataset to be used', metavar='STR', type=click.Choice(list(DATASET_OPTIONS.keys())), default="tiny", show_default=True)
 @click.option('--data', 'image_path', help='Path to the dataset', metavar='PATH|ZIP', type=str, default=None)
 @click.option('--batch', 'batch_size', help='Batch size', type=int, required=False, default=128, show_default=True)
